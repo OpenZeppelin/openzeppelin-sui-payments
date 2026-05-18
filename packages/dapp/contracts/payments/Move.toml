@@ -1,0 +1,7 @@
+[package]
+name = "openzeppelin_payments"
+edition = "2024"
+
+[environments]
+test-publish = "46b6270d"
+localnet = "305e72d1"

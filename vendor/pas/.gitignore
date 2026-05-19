@@ -1,0 +1,10 @@
+build
+.trace
+.coverage*
+node_modules
+
+.env
+
+dist
+package_summaries
+*.tsbuildinfo

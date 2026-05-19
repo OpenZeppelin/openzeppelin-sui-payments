@@ -1,0 +1,7 @@
+[package]
+name = "loyalty"
+edition = "2024.beta"
+
+[dependencies]
+pas = { local = "../../pas" }
+ptb = { local = "../../ptb" }

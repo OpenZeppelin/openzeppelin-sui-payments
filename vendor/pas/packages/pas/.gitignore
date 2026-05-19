@@ -1,0 +1,6 @@
+build
+.trace
+.coverage*
+node_modules
+
+.env

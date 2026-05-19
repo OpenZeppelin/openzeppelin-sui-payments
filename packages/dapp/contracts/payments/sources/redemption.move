@@ -8,7 +8,7 @@
 ///
 /// `verify(&MerchantCap, hold, code, clock)`:
 ///   - Asserts `hash(code) == hold.code_hash` and not expired.
-///   - Destroys `Hold`, burns `Balance<LOYALTY>` via `MerchantConfig.loyalty_treasury_cap`.
+///   - Destroys `Hold`, burns `Balance<LOYALTY>` via `Merchant.loyalty_treasury_cap`.
 ///
 /// `release(hold, customer_account, clock)` — **permissionless** after expiry:
 ///   - Asserts expired and that the supplied Account belongs to `hold.customer`.

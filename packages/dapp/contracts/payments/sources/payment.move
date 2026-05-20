@@ -1,42 +1,40 @@
-/// Payment orchestration — generic over the PAS stablecoin type `S`.
+/// Payment orchestration — generic over the stablecoin type `S` (a plain Sui `Coin<S>`,
+/// e.g. real USDC or the template's mock).
 ///
 /// `pay<S>` is the single atomic entry that:
-///   1. Resolves the customer's already-approved `Request<SendFunds<Balance<S>>>` via
-///      the stablecoin's `Policy<Balance<S>>`, moving the stablecoin from the
-///      customer's PAS Account into the merchant's payout Account.
-///   2. Mints loyalty into the customer's `Account<LOYALTY>` at the rate stored on
-///      `Merchant`, bounded by `max_mint_per_payment`.
+///   1. Routes the customer's `Coin<S>` to `merchant.payout_address` via standard Sui
+///      transfer.
+///   2. Mints loyalty into the customer's `Account<LOYALTY>` at the merchant's stored
+///      rate, bounded by `max_mint_per_payment`.
 ///   3. Emits `PaymentEvent` — the Sui port of Solana Pay's `reference` pattern.
 ///      Indexer subscribes by `merchant_id` and resolves `order_ref → settled?`.
 ///
 /// Caller PTB shape (constructed by the frontend):
-///   auth    = account::new_auth(&ctx)
-///   request = customer_acct_S.send_balance(&auth, &merchant_acct_S, amount, &ctx)
-///   <stablecoin issuer's approve_transfer(request)>
-///   payment::pay<S>(merchant, request, policy_s, customer_loyalty_account,
-///                   order_ref, &clock, ctx)
+///   coin = <split off exact amount from customer's Coin<S>>
+///   payment::pay<S>(merchant, coin, customer_loyalty_account, order_ref, &clock, ctx)
 ///
-/// If `customer_loyalty_account` does not exist yet (first-time customer), the
-/// frontend prepends a PTB step `account::create_and_share(&mut namespace, customer)`
-/// before this call.
+/// If `customer_loyalty_account` does not exist yet (first-time customer), the frontend
+/// prepends `account::create_and_share(&mut namespace, customer)` to the PTB. The
+/// stablecoin side is a plain Sui Coin transfer — no PAS Account / Policy / approval
+/// machinery is required from the stablecoin issuer.
+///
+/// Design note: the stablecoin uses plain `Coin<S>` rather than a PAS asset because
+/// production stablecoins on Sui (e.g. Circle USDC) are `Coin`-based and we don't want
+/// to gate the template on issuer-side PAS adoption. The loyalty asset stays on PAS for
+/// soulbound enforcement (`loyalty.move`). Forks needing issuer-controlled stablecoin
+/// compliance hooks can add a PAS wrapper back to this function.
 module openzeppelin_payments::payment;
 
 use openzeppelin_payments::loyalty;
 use openzeppelin_payments::merchant::Merchant;
 use pas::account::Account;
-use pas::policy::Policy;
-use pas::request::Request;
-use pas::send_funds::{Self, SendFunds};
-use sui::balance::Balance;
 use sui::clock::Clock;
+use sui::coin::Coin;
 use sui::event;
 
 #[error(code = 0)]
-const EWrongRecipient: vector<u8> =
-    b"Stablecoin payment recipient does not match merchant payout_address";
-#[error(code = 1)]
 const EWrongLoyaltyRecipient: vector<u8> =
-    b"Loyalty account owner does not match stablecoin payer";
+    b"Loyalty account owner does not match payer";
 
 /// Indexer subscribes to this event filtered by `merchant_id`. `order_ref` is the
 /// merchant's opaque order identifier (matches the QR-encoded reference).
@@ -51,38 +49,33 @@ public struct PaymentEvent has copy, drop {
 
 public fun pay<S>(
     merchant: &mut Merchant,
-    request: Request<SendFunds<Balance<S>>>,
-    policy_s: &Policy<Balance<S>>,
+    coin: Coin<S>,
     customer_loyalty_account: &Account,
     order_ref: vector<u8>,
     clock: &Clock,
-    _ctx: &mut TxContext,
+    ctx: &mut TxContext,
 ) {
-    // Snapshot everything we need before any &mut borrow / consuming move.
     let merchant_id = object::id(merchant);
     let payout = merchant.payout_address();
     let (num, den, max) = merchant.mint_params();
 
-    let payment_data = request.data();
-    let customer_addr = payment_data.sender();
-    let recipient_addr = payment_data.recipient();
-    let payment_amount = payment_data.funds().value();
-
-    // INV: stablecoin must be routed to this merchant.
-    assert!(recipient_addr == payout, EWrongRecipient);
+    let customer_addr = ctx.sender();
+    let payment_amount = coin.value();
 
     // INV: loyalty mints to the payer's own loyalty account.
     assert!(customer_loyalty_account.owner() == customer_addr, EWrongLoyaltyRecipient);
 
-    // Resolve send_funds — funds flow from customer's Account<S> into merchant's
-    // payout Account<S>. Consumes the request.
-    send_funds::resolve_balance(request, policy_s);
+    // Route the stablecoin to the merchant. Plain Sui transfer — payout is an
+    // address-owned Coin<S> in the merchant's wallet, which they can drain or merge as
+    // they please.
+    transfer::public_transfer(coin, payout);
 
-    // Compute mint amount in u128 to avoid overflow on payment_amount * num.
+    // u128 intermediate to dodge overflow when payment_amount * num exceeds u64.
     let raw: u128 = (payment_amount as u128) * (num as u128) / (den as u128);
     let mint_amount: u64 = if (raw > (max as u128)) { max } else { (raw as u64) };
 
-    // Mint and deposit (skip the call if zero — saves gas + an unneeded mint event).
+    // Skip the call if zero — saves gas and lets the merchant disable loyalty by
+    // setting num = 0 without breaking payments.
     if (mint_amount > 0) {
         let cap = merchant.loyalty_treasury_cap_mut();
         loyalty::mint_into(cap, customer_loyalty_account, mint_amount);

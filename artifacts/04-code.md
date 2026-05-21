@@ -21,12 +21,11 @@ Five Move modules implementing a closed-loop stablecoin payment + soulbound loya
 | Module | Lines | Status | Purpose |
 |---|---|---|---|
 | `payments::loyalty` | 123 | Draft | LOYALTY OTW + `Loyalty` bundle + `RedeemUnlockApproval` witness + PAS Policy setup + pkg-private `mint_into` |
-| `payments::merchant` | 220 | Draft | `Merchant` shared state + `MerchantCap` + bootstrap (`create_merchant`) + cap-gated mutators + listing CRUD |
+| `payments::merchant` | 283 | Draft | `Merchant` shared state + `MerchantCap` + bootstrap + cap-gated mutators + listing CRUD + **`pay<S>` + `PaymentEvent`** |
 | `payments::listing` | 53 | Draft | Pure data type — `Listing` struct + pkg-private constructors/setters + public accessors |
-| `payments::payment` | 92 | Draft | `pay<S>` — `Coin<S>` route + loyalty mint + `PaymentEvent` |
 | `payments::redemption` | 170 | Draft | `Hold` shared object + `request_redeem` / `verify` / `release` with sha3-256 commit-reveal |
 | `stablecoin_mock` | 40 | Draft | Mock `Coin<STABLECOIN_MOCK>` + permissionless faucet (devnet only) |
-| **total** | **698** | | |
+| **total** | **669** | | |
 
 ## Design Context (merged from skipped `02-design.md`)
 
@@ -40,7 +39,7 @@ Five Move modules implementing a closed-loop stablecoin payment + soulbound loya
 └── packages/dapp/contracts/
     ├── payments/                           # main Move package (depends on vendored PAS)
     │   ├── Move.toml                       (edition "2024", local dep on vendor/pas)
-    │   └── sources/{merchant,listing,payment,loyalty,redemption}.move
+    │   └── sources/{merchant,listing,loyalty,redemption}.move
     └── stablecoin-mock/                    # peer package — plain Sui Coin, no PAS
         ├── Move.toml
         └── sources/stablecoin_mock.move
@@ -52,7 +51,7 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 
 1. **No `access` module / shim.** Sui-native capability pattern: every gated entry takes `&MerchantCap`, validated via `merchant::assert_cap_matches`. Migration to OZ AccessControl when available is a future stage; not designed for now.
 2. **Single shared `Merchant` object** holds *everything* per-merchant: identity, payout, loyalty caps + policy IDs, mint policy params, and listings `Table<u64, Listing>`. No separate `Catalog` (1:1 with mutual ID refs was the alternative considered and rejected).
-3. **Listing CRUD lives in `merchant.move`** (marketplace pattern). `listing.move` defines only the struct + package-private setters + accessors. Circular import would result if CRUD lived in `listing.move`.
+3. **Listing CRUD AND payment live in `merchant.move`** (marketplace pattern). `listing.move` defines only the struct + package-private setters + accessors. `merchant.move` owns all functions that mutate `Merchant`'s state — listings, payout, and `pay<S>`. Avoids circular imports and keeps the merchant-side surface in one file.
 4. **Two-tx onboarding (forced by Sui Move init constraints).** Publish runs `loyalty::init` which creates only the Sui coin + freezes metadata; the deployer's second tx is a PTB calling `loyalty::setup(&mut namespace, treasury_cap)` then `merchant::create_merchant(loyalty, name, …)`. The `Loyalty` bundle is the hot-potato handoff between the two functions in the PTB.
 5. **PAS Namespace is global** (singleton per PAS publish), not per-merchant. So `Merchant` does NOT carry a `loyalty_namespace_id` field. Functions needing namespace take `&mut Namespace` as a separate shared input.
 6. **Mint policy params are immutable** post-`create_merchant`. No runtime mutator. Changing "$1 = X points" under existing customers is a trust regression.
@@ -70,17 +69,17 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 | loyalty | `init(otw, ctx)` | private (auto-called) | Create currency + freeze metadata |
 | loyalty | `setup(namespace, cap, ctx) -> Loyalty` | public | Create Policy, register approvals, bundle outputs |
 | loyalty | `destruct(loyalty) -> (TreasuryCap, PolicyCap, ID)` | pkg | Consumed by `merchant::create_merchant` |
-| loyalty | `mint_into(cap, account, amount)` | pkg | Called by `payment::pay` |
+| loyalty | `mint_into(cap, account, amount)` | pkg | Called by `merchant::pay` |
 | loyalty | `new_redeem_unlock_approval() -> RedeemUnlockApproval` | pkg | Called by `redemption::request_redeem` |
 | merchant | `create_merchant(loyalty, ...) -> MerchantCap` | public | Consume Loyalty, share Merchant |
 | merchant | `name`, `logo_url`, `payout_address`, `loyalty_policy_id`, `mint_params`, `next_listing_id`, `listings_count`, `merchant_id` | public | Read-only getters |
 | merchant | `set_payout_address`, `set_display` | public (cap-gated) | Mutable display + routing |
 | merchant | `add_listing`, `set_listing_price`, `set_listing_name`, `set_listing_active`, `remove_listing`, `borrow_listing`, `contains_listing` | public (cap-gated for writes) | Listing CRUD |
 | merchant | `assert_cap_matches` | public | Assertion helper used by other modules |
+| merchant | `pay<S>(merchant, coin, customer_loyalty_account, order_ref, clock, ctx)` | public | Route `Coin<S>` to payout + mint loyalty + emit `PaymentEvent` |
 | merchant | `loyalty_treasury_cap_mut` | pkg | Borrow cap for mint/burn |
 | listing | `listing_id`, `listing_name`, `listing_price`, `listing_active` | public | Accessors on `Listing` |
 | listing | `new`, `set_price`, `set_name`, `set_active` | pkg | Mutators (only `merchant` calls) |
-| payment | `pay<S>(merchant, coin, customer_loyalty_account, order_ref, clock, ctx)` | public | Route `Coin<S>` to payout + mint loyalty + emit event |
 | redemption | `request_redeem(merchant, request, policy_loyalty, code_hash, ttl_ms, clock, ctx)` | public | Extract balance into Hold |
 | redemption | `verify(merchant, cap, hold, code, clock)` | public (cap-gated) | Burn on preimage match |
 | redemption | `release(hold, customer_loyalty_account, clock)` | public (permissionless after expiry) | Return balance |
@@ -105,7 +104,7 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 ### Events
 
 - `merchant`: none in v1 (deferred — add `MerchantCreated`, `ListingAdded`, etc. when needed).
-- `payment::PaymentEvent { merchant_id, order_ref, customer, amount, loyalty_minted, timestamp_ms }`
+- `merchant::PaymentEvent { merchant_id, order_ref, customer, amount, loyalty_minted, timestamp_ms }`
 - `redemption::RedeemRequested { hold_id, merchant_id, customer, amount, expires_at_ms }`
 - `redemption::RedemptionVerified { hold_id, merchant_id, customer, amount }`
 - `redemption::RedemptionReleased { hold_id, merchant_id, customer, amount }`
@@ -114,9 +113,8 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 
 All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` attribute pattern (vs legacy `const E... : u64 = N;`), matching PAS convention.
 
-- **merchant**: `EWrongMerchantCap (0)`, `EEmptyName (1)`, `EZeroMintDenominator (2)`, `EListingNotFound (3)`
+- **merchant**: `EWrongMerchantCap (0)`, `EEmptyName (1)`, `EZeroMintDenominator (2)`, `EListingNotFound (3)`, `EWrongLoyaltyRecipient (4)`
 - **listing**: `EEmptyName (0)`, `EZeroPrice (1)`
-- **payment**: `EWrongLoyaltyRecipient (0)`
 - **redemption**: `EEmptyCodeHash (0)`, `EZeroTtl (1)`, `EZeroAmount (2)`, `EWrongMerchantForHold (3)`, `EExpired (4)`, `ENotExpired (5)`, `EWrongCode (6)`, `EWrongCustomer (7)`
 
 ## Invariant Enforcement Map
@@ -132,7 +130,7 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 | INV-5 No clawback | `loyalty::setup` | `clawback_allowed = false` + no `clawback_funds` approval |
 | INV-6 Only redemption can unlock loyalty | `loyalty::setup` + `new_redeem_unlock_approval` | Approval witness constructor is `public(package)` |
 | INV-7 External packages cannot mint LOYALTY | `loyalty::mint_into` | `public(package)` only |
-| INV-8 Payment routes to `payout_address` by construction | `payment::pay` | Hard-coded `transfer::public_transfer(coin, payout)` — no caller-controlled recipient field |
+| INV-8 Payment routes to `payout_address` by construction | `merchant::pay` | Hard-coded `transfer::public_transfer(coin, payout)` — no caller-controlled recipient field |
 
 ### Runtime (assert! statements)
 
@@ -144,9 +142,9 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 | INV-12 Listing name non-empty | `listing::new`, `listing::set_name` | `EEmptyName` |
 | INV-13 Listing price non-zero | `listing::new`, `listing::set_price` | `EZeroPrice` |
 | INV-14 Listing must exist before mutating | `merchant::set_listing_*`, `remove_listing`, `borrow_listing` | `EListingNotFound` |
-| INV-15 Loyalty mints to payer's own account | `payment::pay` | `EWrongLoyaltyRecipient` |
-| INV-16 Mint bounded by max | `payment::pay` | (clamp, not assert) |
-| INV-17 No mint overflow | `payment::pay` | u128 intermediate |
+| INV-15 Loyalty mints to payer's own account | `merchant::pay` | `EWrongLoyaltyRecipient` |
+| INV-16 Mint bounded by max | `merchant::pay` | (clamp, not assert) |
+| INV-17 No mint overflow | `merchant::pay` | u128 intermediate |
 | INV-18 Hold code_hash non-empty | `redemption::request_redeem` | `EEmptyCodeHash` |
 | INV-19 Hold ttl > 0 | `redemption::request_redeem` | `EZeroTtl` |
 | INV-20 Hold amount > 0 | `redemption::request_redeem` | `EZeroAmount` |
@@ -161,8 +159,8 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 - **Stablecoin pivot (mid code-draft).** Initial design had `payment::pay<S>` taking a `Request<SendFunds<Balance<S>>>` and treating the stablecoin as PAS-managed. Refactored to plain `Coin<S>` after dev called out that real production stablecoins (USDC on Sui) are Coin-based — the PAS wrapper added onboarding friction (customer needs `Account<S>`, issuer needs `approve_transfer`) without buying real-world value. Loyalty stays on PAS for soulbound enforcement.
 - **Burn API quirk:** `coin::burn_balance` does not exist in the Sui framework rev pinned (`c2428b3`). Used `balance::decrease_supply(coin::supply_mut(cap), funds)` instead. Inline comment in `redemption::verify`.
 - **Move 2024 method-call syntax** used throughout for readability (e.g. `merchant.payout_address()`, `clock.timestamp_ms()`, `id.delete()`). Resolves via first-arg type matching.
-- **u128 intermediate** in `payment::pay`'s mint computation to dodge overflow when `payment_amount * mint_numerator` exceeds u64.
-- **Snapshot-before-consume pattern** in `payment::pay` and `redemption::verify`: read all needed fields *before* any destructure or consuming move.
+- **u128 intermediate** in `merchant::pay`'s mint computation to dodge overflow when `payment_amount * mint_numerator` exceeds u64.
+- **Snapshot-before-consume pattern** in `merchant::pay` and `redemption::verify`: read all needed fields *before* any destructure or consuming move.
 - **`hash::sha3_256` chosen** over Sui-native `blake2b256` for cross-platform compatibility (any client can compute the preimage hash trivially in JS, Python, etc.).
 - **No events on merchant operations** (e.g. `MerchantCreated`, `ListingAdded`) in v1 — only payment/redemption flows emit events. Deferred until a clear indexer requirement emerges.
 - **`stablecoin_mock` uses modern `coin_registry::new_currency_with_otw`** (the legacy `coin::create_currency` is deprecated). Mirrors the loyalty example's pattern.
@@ -188,7 +186,7 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 
 ## Dev Notes
 
-- The design conversation produced renames mid-stream: `MerchantConfig → Merchant`; `LoyaltyBootstrap → Loyalty` (moved from `merchant.move` to `loyalty.move` with a `public(package) destruct` helper); `setup_loyalty → setup`; `Catalog` removed entirely (folded into `Merchant.listings`).
+- The design conversation produced renames mid-stream: `MerchantConfig → Merchant`; `LoyaltyBootstrap → Loyalty` (moved from `merchant.move` to `loyalty.move` with a `public(package) destruct` helper); `setup_loyalty → setup`; `Catalog` removed entirely (folded into `Merchant.listings`); `payment.move` removed entirely (folded `pay<S>` + `PaymentEvent` into `merchant.move`, same reasoning as listing CRUD — functions that mutate `Merchant` live where the state lives).
 - **Mid-code-draft pivot from PAS-stablecoin to plain `Coin<S>`** — dropped `EWrongRecipient` (now enforced by construction, see INV-8), removed the `Account<S>` ownership row, simplified the stablecoin-mock from PAS-issued to a plain Sui Coin with a faucet. Original (PAS-stablecoin) design is documented in this artifact's history for reference.
 - PAS dep was originally a git URL pinned to commit `b64f0c5`. Switched to **vendored** at `vendor/pas/` because PAS doesn't declare a `test-publish` environment and we needed to add it locally (matches OZ AMM convention). `Move.lock` files now committed.
 - The edition mismatch I worried about (`2024` vs `2024.beta`) was a non-issue: the original failure was actually `[addresses]` + `[environments]` conflicting in the same Move.toml. PAS new-style + ours new-style works fine.

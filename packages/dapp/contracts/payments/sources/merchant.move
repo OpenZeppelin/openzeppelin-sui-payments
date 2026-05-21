@@ -17,9 +17,12 @@ module openzeppelin_payments::merchant;
 use std::string::String;
 use openzeppelin_payments::listing::{Self, Listing};
 use openzeppelin_payments::loyalty::{Self, Loyalty, LOYALTY};
+use pas::account::Account;
 use pas::policy::PolicyCap;
 use sui::balance::Balance;
-use sui::coin::TreasuryCap;
+use sui::clock::Clock;
+use sui::coin::{Coin, TreasuryCap};
+use sui::event;
 use sui::table::{Self, Table};
 
 #[error(code = 0)]
@@ -30,6 +33,9 @@ const EEmptyName: vector<u8> = b"Merchant name cannot be empty";
 const EZeroMintDenominator: vector<u8> = b"Mint denominator cannot be zero";
 #[error(code = 3)]
 const EListingNotFound: vector<u8> = b"Listing not found";
+#[error(code = 4)]
+const EWrongLoyaltyRecipient: vector<u8> =
+    b"Loyalty account owner does not match payer";
 
 /// Central shared object holding the merchant's entire on-chain state.
 public struct Merchant has key {
@@ -211,10 +217,67 @@ public fun contains_listing(m: &Merchant, id: u64): bool {
     m.listings.contains(id)
 }
 
-// === Package-private accessors for payment/redemption ===
+// === Package-private accessors for redemption ===
 
-/// Borrow the loyalty TreasuryCap for `payment::pay` (mint) and `redemption::verify`
-/// (burn).
+/// Borrow the loyalty TreasuryCap for `pay` (mint) and `redemption::verify` (burn).
 public(package) fun loyalty_treasury_cap_mut(m: &mut Merchant): &mut TreasuryCap<LOYALTY> {
     &mut m.loyalty_treasury_cap
+}
+
+// === Payment ===
+
+/// Indexer subscribes to this event filtered by `merchant_id`. `order_ref` is the
+/// merchant's opaque order identifier (matches the QR-encoded reference).
+public struct PaymentEvent has copy, drop {
+    merchant_id: ID,
+    order_ref: vector<u8>,
+    customer: address,
+    amount: u64,
+    loyalty_minted: u64,
+    timestamp_ms: u64,
+}
+
+/// Atomic payment: route `Coin<S>` to `merchant.payout_address`, mint loyalty into the
+/// customer's `Account<LOYALTY>`, emit `PaymentEvent`. Generic over the stablecoin Coin
+/// type `S`. Stablecoin transfer is a plain Sui transfer (no PAS) — see the design
+/// note in `04-code.md`. Loyalty mint goes through PAS via `loyalty::mint_into`.
+public fun pay<S>(
+    m: &mut Merchant,
+    coin: Coin<S>,
+    customer_loyalty_account: &Account,
+    order_ref: vector<u8>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let merchant_id = object::id(m);
+    let payout = m.payout_address;
+    let num = m.mint_numerator;
+    let den = m.mint_denominator;
+    let max = m.max_mint_per_payment;
+
+    let customer_addr = ctx.sender();
+    let payment_amount = coin.value();
+
+    // INV: loyalty mints to the payer's own loyalty account.
+    assert!(customer_loyalty_account.owner() == customer_addr, EWrongLoyaltyRecipient);
+
+    // Route the stablecoin to the merchant. Plain Sui transfer.
+    transfer::public_transfer(coin, payout);
+
+    // u128 intermediate to dodge overflow when payment_amount * num exceeds u64.
+    let raw: u128 = (payment_amount as u128) * (num as u128) / (den as u128);
+    let mint_amount: u64 = if (raw > (max as u128)) { max } else { (raw as u64) };
+
+    if (mint_amount > 0) {
+        loyalty::mint_into(&mut m.loyalty_treasury_cap, customer_loyalty_account, mint_amount);
+    };
+
+    event::emit(PaymentEvent {
+        merchant_id,
+        order_ref,
+        customer: customer_addr,
+        amount: payment_amount,
+        loyalty_minted: mint_amount,
+        timestamp_ms: clock.timestamp_ms(),
+    });
 }

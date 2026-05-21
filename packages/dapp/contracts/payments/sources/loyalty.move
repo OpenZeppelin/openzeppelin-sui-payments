@@ -14,7 +14,7 @@
 /// Cross-module hooks (`public(package)`):
 ///   - `destruct(Loyalty) -> (TreasuryCap, PolicyCap, policy_id)` — consumed by
 ///     `merchant::create_merchant`.
-///   - `mint_into(&mut TreasuryCap, &Account, amount)` — called by `payment::pay`.
+///   - `mint_into(&mut TreasuryCap, &Account, amount)` — called by `merchant::pay`.
 ///   - `new_redeem_unlock_approval() -> RedeemUnlockApproval` — called by
 ///     `redemption::request_redeem` to approve the unlock request.
 module openzeppelin_payments::loyalty;
@@ -106,7 +106,7 @@ public(package) fun destruct(
     (treasury_cap, policy_cap, policy_id)
 }
 
-/// Mint into the customer's PAS Account. Called by `payment::pay`. `deposit_balance`
+/// Mint into the customer's PAS Account. Called by `merchant::pay`. `deposit_balance`
 /// is unrestricted in PAS (no Auth needed), so the customer doesn't have to sign for
 /// the loyalty-side leg — only for their stablecoin spend.
 public(package) fun mint_into(

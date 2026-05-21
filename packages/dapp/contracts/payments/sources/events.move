@@ -41,7 +41,7 @@ public struct RedemptionReleased has copy, drop {
     amount: u64,
 }
 
-// === Emit helpers (package-private) ===
+// === Package Functions ===
 
 public(package) fun emit_payment(
     merchant_id: ID,

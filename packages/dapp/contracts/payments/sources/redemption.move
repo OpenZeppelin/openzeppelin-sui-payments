@@ -14,7 +14,6 @@
 /// preimage to `verify`. Move re-hashes and compares.
 module openzeppelin_payments::redemption;
 
-use std::hash;
 use openzeppelin_payments::events;
 use openzeppelin_payments::loyalty::{Self, LOYALTY};
 use openzeppelin_payments::merchant::{Merchant, MerchantCap};
@@ -22,9 +21,12 @@ use pas::account::Account;
 use pas::policy::Policy;
 use pas::request::Request;
 use pas::unlock_funds::{Self, UnlockFunds};
+use std::hash;
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin;
+
+// === Errors ===
 
 #[error(code = 0)]
 const EEmptyCodeHash: vector<u8> = b"code_hash must be non-empty";
@@ -43,6 +45,8 @@ const EWrongCode: vector<u8> = b"Code does not match commitment";
 #[error(code = 7)]
 const EWrongCustomer: vector<u8> = b"Account owner does not match Hold customer";
 
+// === Structs ===
+
 public struct Hold has key {
     id: UID,
     merchant_id: ID,
@@ -52,6 +56,8 @@ public struct Hold has key {
     code_hash: vector<u8>,
     expires_at_ms: u64,
 }
+
+// === Public Functions ===
 
 /// Customer initiates redemption. Approves the unlock with our package-private
 /// witness, resolves it via the loyalty `Policy<Balance<LOYALTY>>`, and stashes the
@@ -91,6 +97,25 @@ public fun request_redeem(
     events::emit_redeem_requested(hold_id, merchant_id, customer, amount, expires_at_ms);
 }
 
+/// Permissionless release after expiry — returns the held balance to the customer's
+/// loyalty Account. Prevents griefing by an inactive merchant.
+public fun release(hold: Hold, customer_loyalty_account: &Account, clock: &Clock) {
+    let hold_id = object::id(&hold);
+    let now = clock.timestamp_ms();
+
+    assert!(now >= hold.expires_at_ms, ENotExpired);
+    assert!(customer_loyalty_account.owner() == hold.customer, EWrongCustomer);
+
+    let Hold { id, merchant_id, customer, funds, .. } = hold;
+    let amount = funds.value();
+    customer_loyalty_account.deposit_balance(funds);
+    id.delete();
+
+    events::emit_redemption_released(hold_id, merchant_id, customer, amount);
+}
+
+// === Admin Functions ===
+
 /// Merchant verifies the preimage and burns the held balance. Consumes the Hold.
 public fun verify(
     merchant: &mut Merchant,
@@ -118,25 +143,4 @@ public fun verify(
     id.delete();
 
     events::emit_redemption_verified(hold_id, merchant_id, customer, amount);
-}
-
-/// Permissionless release after expiry — returns the held balance to the customer's
-/// loyalty Account. Prevents griefing by an inactive merchant.
-public fun release(
-    hold: Hold,
-    customer_loyalty_account: &Account,
-    clock: &Clock,
-) {
-    let hold_id = object::id(&hold);
-    let now = clock.timestamp_ms();
-
-    assert!(now >= hold.expires_at_ms, ENotExpired);
-    assert!(customer_loyalty_account.owner() == hold.customer, EWrongCustomer);
-
-    let Hold { id, merchant_id, customer, funds, .. } = hold;
-    let amount = funds.value();
-    customer_loyalty_account.deposit_balance(funds);
-    id.delete();
-
-    events::emit_redemption_released(hold_id, merchant_id, customer, amount);
 }

@@ -10,6 +10,8 @@ module local_mock_stablecoin::stablecoin_mock;
 use sui::coin::{Self, TreasuryCap};
 use sui::coin_registry;
 
+// === Init ===
+
 /// One-time witness.
 public struct STABLECOIN_MOCK has drop {}
 
@@ -29,6 +31,8 @@ fun init(otw: STABLECOIN_MOCK, ctx: &mut TxContext) {
     transfer::public_freeze_object(metadata);
     transfer::public_share_object(cap);
 }
+
+// === Public Functions ===
 
 /// Permissionless faucet. Mints `amount` mock USD to the caller. Devnet only — there is
 /// nothing stopping a real merchant fork from removing this and using a different

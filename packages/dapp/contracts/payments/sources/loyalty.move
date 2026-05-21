@@ -19,30 +19,17 @@
 ///     `redemption::request_redeem` to approve the unlock request.
 module openzeppelin_payments::loyalty;
 
+use pas::account::Account;
 use pas::namespace::Namespace;
 use pas::policy::{Self, PolicyCap};
-use pas::account::Account;
 use sui::balance::Balance;
 use sui::coin::TreasuryCap;
 use sui::coin_registry;
 
+// === Init ===
+
 /// One-time witness — struct name == module name, uppercased.
 public struct LOYALTY has drop {}
-
-/// Bundle of loyalty-side outputs from `setup`, consumed by
-/// `merchant::create_merchant`. `key`-only — has neither `drop` nor `store`,
-/// so the deployer cannot accidentally drop it or wrap it elsewhere.
-public struct Loyalty has key {
-    id: UID,
-    treasury_cap: TreasuryCap<LOYALTY>,
-    policy_cap: PolicyCap<Balance<LOYALTY>>,
-    policy_id: ID,
-}
-
-/// Approval witness consumed when `redemption` resolves an `unlock_funds` request.
-/// `drop` so adding it to a `Request` (`request.approve(w)`) consumes cleanly.
-/// Constructor is package-private — only modules in this package can produce one.
-public struct RedeemUnlockApproval() has drop;
 
 /// Module init — creates the standard Sui currency and freezes its metadata.
 /// Policy creation happens in `setup` (the second deployer tx) because
@@ -61,6 +48,25 @@ fun init(otw: LOYALTY, ctx: &mut TxContext) {
     transfer::public_freeze_object(metadata);
     transfer::public_transfer(cap, ctx.sender());
 }
+
+// === Structs ===
+
+/// Bundle of loyalty-side outputs from `setup`, consumed by
+/// `merchant::create_merchant`. `key`-only — has neither `drop` nor `store`,
+/// so the deployer cannot accidentally drop it or wrap it elsewhere.
+public struct Loyalty has key {
+    id: UID,
+    treasury_cap: TreasuryCap<LOYALTY>,
+    policy_cap: PolicyCap<Balance<LOYALTY>>,
+    policy_id: ID,
+}
+
+/// Approval witness consumed when `redemption` resolves an `unlock_funds` request.
+/// `drop` so adding it to a `Request` (`request.approve(w)`) consumes cleanly.
+/// Constructor is package-private — only modules in this package can produce one.
+public struct RedeemUnlockApproval() has drop;
+
+// === Public Functions ===
 
 /// Post-publish setup. Creates `Policy<Balance<LOYALTY>>` against the global PAS
 /// Namespace, registers approvals, shares the policy, and bundles the loyalty-side
@@ -95,7 +101,7 @@ public fun setup(
     }
 }
 
-// === Package-private hooks ===
+// === Package Functions ===
 
 /// Unwrap a Loyalty bundle. Only `merchant::create_merchant` calls this.
 public(package) fun destruct(

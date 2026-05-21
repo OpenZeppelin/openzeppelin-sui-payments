@@ -1,4 +1,4 @@
-/// Merchant identity, central state, bootstrap, and listing CRUD.
+/// Merchant identity, central state, bootstrap, listing CRUD, and payment.
 ///
 /// Two-step deployment:
 ///   1. `sui publish` → `loyalty::init` creates the LOYALTY currency. Deployer holds
@@ -9,21 +9,23 @@
 ///                                            num, den, max, ctx)
 ///      and transfers `cap` to the deployer's address.
 ///
-/// Cap-by-reference gating: every merchant-only entry in `payment`, `redemption`, and
-/// the listing CRUD below takes `&MerchantCap`. `assert_cap_matches` verifies the
-/// cap's `merchant_id` field equals `object::id(&Merchant)`.
+/// Cap-by-reference gating: every merchant-only entry (here and in `redemption`) takes
+/// `&MerchantCap`. `assert_cap_matches` verifies the cap's `merchant_id` field equals
+/// `object::id(&Merchant)`.
 module openzeppelin_payments::merchant;
 
-use std::string::String;
 use openzeppelin_payments::events;
 use openzeppelin_payments::listing::{Self, Listing};
 use openzeppelin_payments::loyalty::{Self, Loyalty, LOYALTY};
 use pas::account::Account;
 use pas::policy::PolicyCap;
+use std::string::String;
 use sui::balance::Balance;
 use sui::clock::Clock;
 use sui::coin::{Coin, TreasuryCap};
 use sui::table::{Self, Table};
+
+// === Errors ===
 
 #[error(code = 0)]
 const EWrongMerchantCap: vector<u8> = b"MerchantCap does not match this Merchant";
@@ -34,8 +36,9 @@ const EZeroMintDenominator: vector<u8> = b"Mint denominator cannot be zero";
 #[error(code = 3)]
 const EListingNotFound: vector<u8> = b"Listing not found";
 #[error(code = 4)]
-const EWrongLoyaltyRecipient: vector<u8> =
-    b"Loyalty account owner does not match payer";
+const EWrongLoyaltyRecipient: vector<u8> = b"Loyalty account owner does not match payer";
+
+// === Structs ===
 
 /// Central shared object holding the merchant's entire on-chain state.
 public struct Merchant has key {
@@ -44,8 +47,8 @@ public struct Merchant has key {
     name: String,
     /// Optional logo URL.
     logo_url: Option<String>,
-    /// Address receiving customer stablecoin payments via PAS `send_funds`.
-    /// Mutable so the merchant can rotate keys.
+    /// Address receiving customer stablecoin payments. Mutable so the merchant can
+    /// rotate keys.
     payout_address: address,
     /// Loyalty asset bundle, set at `create_merchant`, immutable thereafter.
     loyalty_treasury_cap: TreasuryCap<LOYALTY>,
@@ -70,7 +73,7 @@ public struct MerchantCap has key, store {
     merchant_id: ID,
 }
 
-// === Bootstrap ===
+// === Public Functions ===
 
 /// Consume the `Loyalty` bundle from `loyalty::setup`, create + share `Merchant`,
 /// and return `MerchantCap` to the caller (typically the deployer).
@@ -113,118 +116,6 @@ public fun create_merchant(
     transfer::share_object(merchant);
     cap
 }
-
-// === Read-only getters ===
-
-public fun name(m: &Merchant): &String { &m.name }
-public fun logo_url(m: &Merchant): &Option<String> { &m.logo_url }
-public fun payout_address(m: &Merchant): address { m.payout_address }
-public fun loyalty_policy_id(m: &Merchant): ID { m.loyalty_policy_id }
-public fun mint_params(m: &Merchant): (u64, u64, u64) {
-    (m.mint_numerator, m.mint_denominator, m.max_mint_per_payment)
-}
-public fun next_listing_id(m: &Merchant): u64 { m.next_listing_id }
-public fun listings_count(m: &Merchant): u64 { m.listings.length() }
-public fun merchant_id(cap: &MerchantCap): ID { cap.merchant_id }
-
-// === Merchant-only mutators (gated by &MerchantCap) ===
-
-public fun set_payout_address(m: &mut Merchant, cap: &MerchantCap, addr: address) {
-    assert_cap_matches(m, cap);
-    m.payout_address = addr;
-}
-
-public fun set_display(
-    m: &mut Merchant,
-    cap: &MerchantCap,
-    name: String,
-    logo: Option<String>,
-) {
-    assert_cap_matches(m, cap);
-    assert!(!name.is_empty(), EEmptyName);
-    m.name = name;
-    m.logo_url = logo;
-}
-
-// === Assertion helper ===
-
-/// Verify the cap matches this Merchant. Called by every merchant-only entry.
-public fun assert_cap_matches(m: &Merchant, cap: &MerchantCap) {
-    assert!(object::id(m) == cap.merchant_id, EWrongMerchantCap);
-}
-
-// === Listing CRUD (lives here because the Table lives here) ===
-
-public fun add_listing(
-    m: &mut Merchant,
-    cap: &MerchantCap,
-    name: String,
-    price_units: u64,
-): u64 {
-    assert_cap_matches(m, cap);
-    let id = m.next_listing_id;
-    m.next_listing_id = m.next_listing_id + 1;
-    let listing = listing::new(id, name, price_units);
-    m.listings.add(id, listing);
-    id
-}
-
-public fun set_listing_price(
-    m: &mut Merchant,
-    cap: &MerchantCap,
-    id: u64,
-    price_units: u64,
-) {
-    assert_cap_matches(m, cap);
-    assert!(m.listings.contains(id), EListingNotFound);
-    listing::set_price(m.listings.borrow_mut(id), price_units);
-}
-
-public fun set_listing_name(
-    m: &mut Merchant,
-    cap: &MerchantCap,
-    id: u64,
-    name: String,
-) {
-    assert_cap_matches(m, cap);
-    assert!(m.listings.contains(id), EListingNotFound);
-    listing::set_name(m.listings.borrow_mut(id), name);
-}
-
-public fun set_listing_active(
-    m: &mut Merchant,
-    cap: &MerchantCap,
-    id: u64,
-    active: bool,
-) {
-    assert_cap_matches(m, cap);
-    assert!(m.listings.contains(id), EListingNotFound);
-    listing::set_active(m.listings.borrow_mut(id), active);
-}
-
-public fun remove_listing(m: &mut Merchant, cap: &MerchantCap, id: u64): Listing {
-    assert_cap_matches(m, cap);
-    assert!(m.listings.contains(id), EListingNotFound);
-    m.listings.remove(id)
-}
-
-public fun borrow_listing(m: &Merchant, id: u64): &Listing {
-    assert!(m.listings.contains(id), EListingNotFound);
-    m.listings.borrow(id)
-}
-
-public fun contains_listing(m: &Merchant, id: u64): bool {
-    m.listings.contains(id)
-}
-
-// === Package-private accessors for redemption ===
-
-/// Borrow the loyalty TreasuryCap for `pay` (mint) and `redemption::verify` (burn).
-public(package) fun loyalty_treasury_cap_mut(m: &mut Merchant): &mut TreasuryCap<LOYALTY> {
-    &mut m.loyalty_treasury_cap
-}
-
-// === Payment ===
 
 /// Atomic payment: route `Coin<S>` to `merchant.payout_address`, mint loyalty into the
 /// customer's `Account<LOYALTY>`, emit `events::PaymentEvent`. Generic over the
@@ -270,4 +161,94 @@ public fun pay<S>(
         mint_amount,
         clock.timestamp_ms(),
     );
+}
+
+// === View Functions ===
+
+public fun name(m: &Merchant): &String { &m.name }
+
+public fun logo_url(m: &Merchant): &Option<String> { &m.logo_url }
+
+public fun payout_address(m: &Merchant): address { m.payout_address }
+
+public fun loyalty_policy_id(m: &Merchant): ID { m.loyalty_policy_id }
+
+public fun mint_params(m: &Merchant): (u64, u64, u64) {
+    (m.mint_numerator, m.mint_denominator, m.max_mint_per_payment)
+}
+
+public fun next_listing_id(m: &Merchant): u64 { m.next_listing_id }
+
+public fun listings_count(m: &Merchant): u64 { m.listings.length() }
+
+public fun merchant_id(cap: &MerchantCap): ID { cap.merchant_id }
+
+public fun borrow_listing(m: &Merchant, id: u64): &Listing {
+    assert!(m.listings.contains(id), EListingNotFound);
+    m.listings.borrow(id)
+}
+
+public fun contains_listing(m: &Merchant, id: u64): bool {
+    m.listings.contains(id)
+}
+
+/// Verify the cap matches this Merchant. Called by every merchant-only entry (here
+/// and in `redemption`).
+public fun assert_cap_matches(m: &Merchant, cap: &MerchantCap) {
+    assert!(object::id(m) == cap.merchant_id, EWrongMerchantCap);
+}
+
+// === Admin Functions ===
+
+public fun set_payout_address(m: &mut Merchant, cap: &MerchantCap, addr: address) {
+    assert_cap_matches(m, cap);
+    m.payout_address = addr;
+}
+
+public fun set_display(m: &mut Merchant, cap: &MerchantCap, name: String, logo: Option<String>) {
+    assert_cap_matches(m, cap);
+    assert!(!name.is_empty(), EEmptyName);
+    m.name = name;
+    m.logo_url = logo;
+}
+
+public fun add_listing(m: &mut Merchant, cap: &MerchantCap, name: String, price_units: u64): u64 {
+    assert_cap_matches(m, cap);
+    let id = m.next_listing_id;
+    m.next_listing_id = m.next_listing_id + 1;
+    let listing = listing::new(id, name, price_units);
+    m.listings.add(id, listing);
+    id
+}
+
+public fun set_listing_price(m: &mut Merchant, cap: &MerchantCap, id: u64, price_units: u64) {
+    assert_cap_matches(m, cap);
+    assert!(m.listings.contains(id), EListingNotFound);
+    listing::set_price(m.listings.borrow_mut(id), price_units);
+}
+
+public fun set_listing_name(m: &mut Merchant, cap: &MerchantCap, id: u64, name: String) {
+    assert_cap_matches(m, cap);
+    assert!(m.listings.contains(id), EListingNotFound);
+    listing::set_name(m.listings.borrow_mut(id), name);
+}
+
+public fun set_listing_active(m: &mut Merchant, cap: &MerchantCap, id: u64, active: bool) {
+    assert_cap_matches(m, cap);
+    assert!(m.listings.contains(id), EListingNotFound);
+    listing::set_active(m.listings.borrow_mut(id), active);
+}
+
+public fun remove_listing(m: &mut Merchant, cap: &MerchantCap, id: u64): Listing {
+    assert_cap_matches(m, cap);
+    assert!(m.listings.contains(id), EListingNotFound);
+    m.listings.remove(id)
+}
+
+// === Package Functions ===
+
+/// Borrow the loyalty TreasuryCap for `redemption::verify` (burn). `pay` mints via the
+/// field directly since it already holds `&mut Merchant`.
+public(package) fun loyalty_treasury_cap_mut(m: &mut Merchant): &mut TreasuryCap<LOYALTY> {
+    &mut m.loyalty_treasury_cap
 }

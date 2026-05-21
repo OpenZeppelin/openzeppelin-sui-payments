@@ -21,11 +21,12 @@ Five Move modules implementing a closed-loop stablecoin payment + soulbound loya
 | Module | Lines | Status | Purpose |
 |---|---|---|---|
 | `payments::loyalty` | 123 | Draft | LOYALTY OTW + `Loyalty` bundle + `RedeemUnlockApproval` witness + PAS Policy setup + pkg-private `mint_into` |
-| `payments::merchant` | 283 | Draft | `Merchant` shared state + `MerchantCap` + bootstrap + cap-gated mutators + listing CRUD + **`pay<S>` + `PaymentEvent`** |
+| `payments::merchant` | 273 | Draft | `Merchant` shared state + `MerchantCap` + bootstrap + cap-gated mutators + listing CRUD + `pay<S>` |
 | `payments::listing` | 53 | Draft | Pure data type — `Listing` struct + pkg-private constructors/setters + public accessors |
-| `payments::redemption` | 170 | Draft | `Hold` shared object + `request_redeem` / `verify` / `release` with sha3-256 commit-reveal |
+| `payments::redemption` | 142 | Draft | `Hold` shared object + `request_redeem` / `verify` / `release` with sha3-256 commit-reveal |
+| `payments::events` | 96 | Draft | All event structs (`PaymentEvent`, `RedeemRequested`, `RedemptionVerified`, `RedemptionReleased`) + pkg-private `emit_*` helpers |
 | `stablecoin_mock` | 40 | Draft | Mock `Coin<STABLECOIN_MOCK>` + permissionless faucet (devnet only) |
-| **total** | **669** | | |
+| **total** | **727** | | |
 
 ## Design Context (merged from skipped `02-design.md`)
 
@@ -39,7 +40,7 @@ Five Move modules implementing a closed-loop stablecoin payment + soulbound loya
 └── packages/dapp/contracts/
     ├── payments/                           # main Move package (depends on vendored PAS)
     │   ├── Move.toml                       (edition "2024", local dep on vendor/pas)
-    │   └── sources/{merchant,listing,loyalty,redemption}.move
+    │   └── sources/{merchant,listing,loyalty,redemption,events}.move
     └── stablecoin-mock/                    # peer package — plain Sui Coin, no PAS
         ├── Move.toml
         └── sources/stablecoin_mock.move
@@ -80,6 +81,8 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 | merchant | `loyalty_treasury_cap_mut` | pkg | Borrow cap for mint/burn |
 | listing | `listing_id`, `listing_name`, `listing_price`, `listing_active` | public | Accessors on `Listing` |
 | listing | `new`, `set_price`, `set_name`, `set_active` | pkg | Mutators (only `merchant` calls) |
+| events | `PaymentEvent`, `RedeemRequested`, `RedemptionVerified`, `RedemptionReleased` | public | Event struct definitions |
+| events | `emit_payment`, `emit_redeem_requested`, `emit_redemption_verified`, `emit_redemption_released` | pkg | Emit helpers (called by `merchant::pay`, `redemption::*`) |
 | redemption | `request_redeem(merchant, request, policy_loyalty, code_hash, ttl_ms, clock, ctx)` | public | Extract balance into Hold |
 | redemption | `verify(merchant, cap, hold, code, clock)` | public (cap-gated) | Burn on preimage match |
 | redemption | `release(hold, customer_loyalty_account, clock)` | public (permissionless after expiry) | Return balance |
@@ -103,11 +106,12 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 
 ### Events
 
-- `merchant`: none in v1 (deferred — add `MerchantCreated`, `ListingAdded`, etc. when needed).
-- `merchant::PaymentEvent { merchant_id, order_ref, customer, amount, loyalty_minted, timestamp_ms }`
-- `redemption::RedeemRequested { hold_id, merchant_id, customer, amount, expires_at_ms }`
-- `redemption::RedemptionVerified { hold_id, merchant_id, customer, amount }`
-- `redemption::RedemptionReleased { hold_id, merchant_id, customer, amount }`
+All events defined in `events.move` (matches OZ AMM convention — centralised event surface, `public(package)` `emit_*` helpers). No merchant-management events in v1 (deferred — add `MerchantCreated`, `ListingAdded`, etc. when needed).
+
+- `events::PaymentEvent { merchant_id, order_ref, customer, amount, loyalty_minted, timestamp_ms }` — emitted by `merchant::pay`
+- `events::RedeemRequested { hold_id, merchant_id, customer, amount, expires_at_ms }` — emitted by `redemption::request_redeem`
+- `events::RedemptionVerified { hold_id, merchant_id, customer, amount }` — emitted by `redemption::verify`
+- `events::RedemptionReleased { hold_id, merchant_id, customer, amount }` — emitted by `redemption::release`
 
 ### Error constants
 
@@ -186,7 +190,8 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 
 ## Dev Notes
 
-- The design conversation produced renames mid-stream: `MerchantConfig → Merchant`; `LoyaltyBootstrap → Loyalty` (moved from `merchant.move` to `loyalty.move` with a `public(package) destruct` helper); `setup_loyalty → setup`; `Catalog` removed entirely (folded into `Merchant.listings`); `payment.move` removed entirely (folded `pay<S>` + `PaymentEvent` into `merchant.move`, same reasoning as listing CRUD — functions that mutate `Merchant` live where the state lives).
+- The design conversation produced renames mid-stream: `MerchantConfig → Merchant`; `LoyaltyBootstrap → Loyalty` (moved from `merchant.move` to `loyalty.move` with a `public(package) destruct` helper); `setup_loyalty → setup`; `Catalog` removed entirely (folded into `Merchant.listings`); `payment.move` removed entirely (folded `pay<S>` into `merchant.move`, same reasoning as listing CRUD — functions that mutate `Merchant` live where the state lives).
+- **Events extracted to dedicated `events.move`** mid-code-draft to match OZ AMM convention. All four event structs (`PaymentEvent`, `RedeemRequested`, `RedemptionVerified`, `RedemptionReleased`) plus `public(package)` `emit_*` helpers live there. Call sites use the helpers rather than constructing structs and calling `event::emit` directly.
 - **Mid-code-draft pivot from PAS-stablecoin to plain `Coin<S>`** — dropped `EWrongRecipient` (now enforced by construction, see INV-8), removed the `Account<S>` ownership row, simplified the stablecoin-mock from PAS-issued to a plain Sui Coin with a faucet. Original (PAS-stablecoin) design is documented in this artifact's history for reference.
 - PAS dep was originally a git URL pinned to commit `b64f0c5`. Switched to **vendored** at `vendor/pas/` because PAS doesn't declare a `test-publish` environment and we needed to add it locally (matches OZ AMM convention). `Move.lock` files now committed.
 - The edition mismatch I worried about (`2024` vs `2024.beta`) was a non-issue: the original failure was actually `[addresses]` + `[environments]` conflicting in the same Move.toml. PAS new-style + ours new-style works fine.

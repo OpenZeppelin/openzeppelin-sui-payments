@@ -15,6 +15,7 @@
 module openzeppelin_payments::redemption;
 
 use std::hash;
+use openzeppelin_payments::events;
 use openzeppelin_payments::loyalty::{Self, LOYALTY};
 use openzeppelin_payments::merchant::{Merchant, MerchantCap};
 use pas::account::Account;
@@ -24,7 +25,6 @@ use pas::unlock_funds::{Self, UnlockFunds};
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin;
-use sui::event;
 
 #[error(code = 0)]
 const EEmptyCodeHash: vector<u8> = b"code_hash must be non-empty";
@@ -51,28 +51,6 @@ public struct Hold has key {
     /// `sha3_256(code)`. Merchant submits preimage at `verify`; Move re-hashes.
     code_hash: vector<u8>,
     expires_at_ms: u64,
-}
-
-public struct RedeemRequested has copy, drop {
-    hold_id: ID,
-    merchant_id: ID,
-    customer: address,
-    amount: u64,
-    expires_at_ms: u64,
-}
-
-public struct RedemptionVerified has copy, drop {
-    hold_id: ID,
-    merchant_id: ID,
-    customer: address,
-    amount: u64,
-}
-
-public struct RedemptionReleased has copy, drop {
-    hold_id: ID,
-    merchant_id: ID,
-    customer: address,
-    amount: u64,
 }
 
 /// Customer initiates redemption. Approves the unlock with our package-private
@@ -110,13 +88,7 @@ public fun request_redeem(
     let hold_id = object::id(&hold);
     transfer::share_object(hold);
 
-    event::emit(RedeemRequested {
-        hold_id,
-        merchant_id,
-        customer,
-        amount,
-        expires_at_ms,
-    });
+    events::emit_redeem_requested(hold_id, merchant_id, customer, amount, expires_at_ms);
 }
 
 /// Merchant verifies the preimage and burns the held balance. Consumes the Hold.
@@ -145,7 +117,7 @@ public fun verify(
     );
     id.delete();
 
-    event::emit(RedemptionVerified { hold_id, merchant_id, customer, amount });
+    events::emit_redemption_verified(hold_id, merchant_id, customer, amount);
 }
 
 /// Permissionless release after expiry — returns the held balance to the customer's
@@ -166,5 +138,5 @@ public fun release(
     customer_loyalty_account.deposit_balance(funds);
     id.delete();
 
-    event::emit(RedemptionReleased { hold_id, merchant_id, customer, amount });
+    events::emit_redemption_released(hold_id, merchant_id, customer, amount);
 }

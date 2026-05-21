@@ -15,6 +15,7 @@
 module openzeppelin_payments::merchant;
 
 use std::string::String;
+use openzeppelin_payments::events;
 use openzeppelin_payments::listing::{Self, Listing};
 use openzeppelin_payments::loyalty::{Self, Loyalty, LOYALTY};
 use pas::account::Account;
@@ -22,7 +23,6 @@ use pas::policy::PolicyCap;
 use sui::balance::Balance;
 use sui::clock::Clock;
 use sui::coin::{Coin, TreasuryCap};
-use sui::event;
 use sui::table::{Self, Table};
 
 #[error(code = 0)]
@@ -226,21 +226,11 @@ public(package) fun loyalty_treasury_cap_mut(m: &mut Merchant): &mut TreasuryCap
 
 // === Payment ===
 
-/// Indexer subscribes to this event filtered by `merchant_id`. `order_ref` is the
-/// merchant's opaque order identifier (matches the QR-encoded reference).
-public struct PaymentEvent has copy, drop {
-    merchant_id: ID,
-    order_ref: vector<u8>,
-    customer: address,
-    amount: u64,
-    loyalty_minted: u64,
-    timestamp_ms: u64,
-}
-
 /// Atomic payment: route `Coin<S>` to `merchant.payout_address`, mint loyalty into the
-/// customer's `Account<LOYALTY>`, emit `PaymentEvent`. Generic over the stablecoin Coin
-/// type `S`. Stablecoin transfer is a plain Sui transfer (no PAS) — see the design
-/// note in `04-code.md`. Loyalty mint goes through PAS via `loyalty::mint_into`.
+/// customer's `Account<LOYALTY>`, emit `events::PaymentEvent`. Generic over the
+/// stablecoin Coin type `S`. Stablecoin transfer is a plain Sui transfer (no PAS) —
+/// see the design note in `04-code.md`. Loyalty mint goes through PAS via
+/// `loyalty::mint_into`.
 public fun pay<S>(
     m: &mut Merchant,
     coin: Coin<S>,
@@ -272,12 +262,12 @@ public fun pay<S>(
         loyalty::mint_into(&mut m.loyalty_treasury_cap, customer_loyalty_account, mint_amount);
     };
 
-    event::emit(PaymentEvent {
+    events::emit_payment(
         merchant_id,
         order_ref,
-        customer: customer_addr,
-        amount: payment_amount,
-        loyalty_minted: mint_amount,
-        timestamp_ms: clock.timestamp_ms(),
-    });
+        customer_addr,
+        payment_amount,
+        mint_amount,
+        clock.timestamp_ms(),
+    );
 }

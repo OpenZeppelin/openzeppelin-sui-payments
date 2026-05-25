@@ -19,8 +19,8 @@ public struct PaymentEvent has copy, drop {
     timestamp_ms: u64,
 }
 
-public struct RedeemRequested has copy, drop {
-    hold_id: ID,
+public struct RedemptionCreated has copy, drop {
+    redemption_id: ID,
     merchant_id: ID,
     customer: address,
     amount: u64,
@@ -28,14 +28,14 @@ public struct RedeemRequested has copy, drop {
 }
 
 public struct RedemptionVerified has copy, drop {
-    hold_id: ID,
+    redemption_id: ID,
     merchant_id: ID,
     customer: address,
     amount: u64,
 }
 
 public struct RedemptionReleased has copy, drop {
-    hold_id: ID,
+    redemption_id: ID,
     merchant_id: ID,
     customer: address,
     amount: u64,
@@ -61,15 +61,15 @@ public(package) fun emit_payment(
     });
 }
 
-public(package) fun emit_redeem_requested(
-    hold_id: ID,
+public(package) fun emit_redemption_created(
+    redemption_id: ID,
     merchant_id: ID,
     customer: address,
     amount: u64,
     expires_at_ms: u64,
 ) {
-    event::emit(RedeemRequested {
-        hold_id,
+    event::emit(RedemptionCreated {
+        redemption_id,
         merchant_id,
         customer,
         amount,
@@ -78,19 +78,19 @@ public(package) fun emit_redeem_requested(
 }
 
 public(package) fun emit_redemption_verified(
-    hold_id: ID,
+    redemption_id: ID,
     merchant_id: ID,
     customer: address,
     amount: u64,
 ) {
-    event::emit(RedemptionVerified { hold_id, merchant_id, customer, amount });
+    event::emit(RedemptionVerified { redemption_id, merchant_id, customer, amount });
 }
 
 public(package) fun emit_redemption_released(
-    hold_id: ID,
+    redemption_id: ID,
     merchant_id: ID,
     customer: address,
     amount: u64,
 ) {
-    event::emit(RedemptionReleased { hold_id, merchant_id, customer, amount });
+    event::emit(RedemptionReleased { redemption_id, merchant_id, customer, amount });
 }

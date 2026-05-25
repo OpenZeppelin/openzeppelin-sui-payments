@@ -16,7 +16,7 @@
 ///     `merchant::create`.
 ///   - `mint_into(&mut TreasuryCap, &Account, amount)` — called by `merchant::pay`.
 ///   - `new_redeem_unlock_approval() -> RedeemUnlockApproval` — called by
-///     `redemption::request_redeem` to approve the unlock request.
+///     `redemption::create` to approve the unlock request.
 module openzeppelin_payments::loyalty;
 
 use pas::account::Account;
@@ -123,7 +123,7 @@ public(package) fun mint_into(
     customer_account.deposit_balance(cap.mint_balance(amount));
 }
 
-/// Witness factory. Only `redemption::request_redeem` calls this.
+/// Witness factory. Only `redemption::create` calls this.
 public(package) fun new_redeem_unlock_approval(): RedeemUnlockApproval {
     RedeemUnlockApproval()
 }

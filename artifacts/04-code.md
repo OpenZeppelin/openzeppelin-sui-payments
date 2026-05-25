@@ -20,13 +20,13 @@ Five Move modules implementing a closed-loop stablecoin payment + soulbound loya
 
 | Module | Lines | Status | Purpose |
 |---|---|---|---|
-| `payments::loyalty` | 123 | Draft | LOYALTY OTW + `Loyalty` bundle + `RedeemUnlockApproval` witness + PAS Policy setup + pkg-private `mint_into` |
-| `payments::merchant` | 273 | Draft | `Merchant` shared state + `MerchantCap` + bootstrap + cap-gated mutators + listing CRUD + `pay<S>` |
-| `payments::listing` | 53 | Draft | Pure data type — `Listing` struct + pkg-private constructors/setters + public accessors |
-| `payments::redemption` | 142 | Draft | `Hold` shared object + `request_redeem` / `verify` / `release` with sha3-256 commit-reveal |
-| `payments::events` | 96 | Draft | All event structs (`PaymentEvent`, `RedeemRequested`, `RedemptionVerified`, `RedemptionReleased`) + pkg-private `emit_*` helpers |
-| `stablecoin_mock` | 40 | Draft | Mock `Coin<STABLECOIN_MOCK>` + permissionless faucet (devnet only) |
-| **total** | **727** | | |
+| `payments::loyalty` | 129 | Draft | LOYALTY OTW + `Loyalty` bundle + `RedeemUnlockApproval` witness + PAS Policy setup + pkg-private `mint_into` |
+| `payments::merchant` | 261 | Draft | `Merchant` shared state + `MerchantCap` + `create`/`share` + cap-gated mutators + listing CRUD + `pay<S>` |
+| `payments::listing` | 60 | Draft | Pure data type — `Listing` struct + pkg-private constructors/setters + public accessors |
+| `payments::redemption` | 164 | Draft | `Redemption` shared object + `create`/`share` / `verify` / `release` with sha3-256 commit-reveal |
+| `payments::events` | 96 | Draft | All event structs (`PaymentEvent`, `RedemptionCreated`, `RedemptionVerified`, `RedemptionReleased`) + pkg-private `emit_*` helpers |
+| `stablecoin_mock` | 44 | Draft | Mock `Coin<STABLECOIN_MOCK>` + permissionless faucet (devnet only) |
+| **total** | **754** | | |
 
 ## Design Context (merged from skipped `02-design.md`)
 
@@ -58,7 +58,7 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 6. **Mint policy params are immutable** post-`create`. No runtime mutator. Changing "$1 = X points" under existing customers is a trust regression.
 7. **PolicyCap is held inside `Merchant`** for future controlled policy migration, but **no runtime adjustment entry is exposed in v1**. Soulbound is permanent.
 8. **Payment verification is events-only** — port of Solana Pay's `reference` pattern. `PaymentEvent { merchant_id, order_ref, customer, amount, loyalty_minted, timestamp_ms }`. Indexer subscribes by `merchant_id`, resolves `order_ref → settled?`. No on-chain `PaymentIntent` object.
-9. **Redemption Hold is a shared object carrying `Balance<LOYALTY>`** extracted from the customer's PAS Account via `unlock_funds::resolve`. Hash-commit-reveal binds an off-chain `code` to `sha3_256(code)`. `release` is permissionless after expiry; balance returns to the original customer's account.
+9. **Redemption is a shared object carrying `Balance<LOYALTY>`** extracted from the customer's PAS Account via `unlock_funds::resolve`. Hash-commit-reveal binds an off-chain `code` to `sha3_256(code)`. `release` is permissionless after expiry; balance returns to the original customer's account.
 10. **Lazy in-payment Account creation** for the customer's loyalty Account — frontend's PTB step 0 calls `account::create_and_share(&mut namespace, customer)` if it doesn't exist. Permissionless in PAS. Contention bounded to first-time customers.
 11. **Loyalty asset is a standard Sui Coin (decimals 0)** wrapped with `Policy<Balance<LOYALTY>>` that registers approvals only for `unlock_funds` — `send_funds` and `clawback_funds` have no approvals → soulbound, no clawback.
 12. **Stablecoin is plain `Coin<S>`, NOT PAS.** Matches production reality (Circle USDC on Sui is Coin-based). Customer's PTB just passes a split-off `Coin<S>` to `payment::pay<S>`; the function routes it to `merchant.payout_address` via `transfer::public_transfer`. No PAS Account, no Policy, no approval witness on the stablecoin side. Forks needing issuer-controlled compliance hooks can add a PAS wrapper back to the payment side; the rest of the template doesn't need to change.
@@ -71,7 +71,7 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 | loyalty | `setup(namespace, cap, ctx) -> Loyalty` | public | Create Policy, register approvals, bundle outputs |
 | loyalty | `destruct(loyalty) -> (TreasuryCap, PolicyCap, ID)` | pkg | Consumed by `merchant::create` |
 | loyalty | `mint_into(cap, account, amount)` | pkg | Called by `merchant::pay` |
-| loyalty | `new_redeem_unlock_approval() -> RedeemUnlockApproval` | pkg | Called by `redemption::request_redeem` |
+| loyalty | `new_redeem_unlock_approval() -> RedeemUnlockApproval` | pkg | Called by `redemption::create` |
 | merchant | `create(loyalty, ...) -> (Merchant, MerchantCap)` | public | Consume Loyalty; return Merchant + cap |
 | merchant | `share(merchant)` | public | Share the Merchant (required — `key`-only, so `share_object` is defining-module-restricted) |
 | merchant | `name`, `logo_url`, `payout_address`, `loyalty_policy_id`, `mint_params`, `next_listing_id`, `listings_count`, `merchant_id` | public | Read-only getters |
@@ -82,11 +82,12 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 | merchant | `loyalty_treasury_cap_mut` | pkg | Borrow cap for mint/burn |
 | listing | `listing_id`, `listing_name`, `listing_price`, `listing_active` | public | Accessors on `Listing` |
 | listing | `new`, `set_price`, `set_name`, `set_active` | pkg | Mutators (only `merchant` calls) |
-| events | `PaymentEvent`, `RedeemRequested`, `RedemptionVerified`, `RedemptionReleased` | public | Event struct definitions |
-| events | `emit_payment`, `emit_redeem_requested`, `emit_redemption_verified`, `emit_redemption_released` | pkg | Emit helpers (called by `merchant::pay`, `redemption::*`) |
-| redemption | `request_redeem(merchant, request, policy_loyalty, code_hash, ttl_ms, clock, ctx)` | public | Extract balance into Hold |
-| redemption | `verify(merchant, cap, hold, code, clock)` | public (cap-gated) | Burn on preimage match |
-| redemption | `release(hold, customer_loyalty_account, clock)` | public (permissionless after expiry) | Return balance |
+| events | `PaymentEvent`, `RedemptionCreated`, `RedemptionVerified`, `RedemptionReleased` | public | Event struct definitions |
+| events | `emit_payment`, `emit_redemption_created`, `emit_redemption_verified`, `emit_redemption_released` | pkg | Emit helpers (called by `merchant::pay`, `redemption::*`) |
+| redemption | `create(merchant, request, policy_loyalty, code_hash, ttl_ms, clock, ctx) -> Redemption` | public | Extract balance into a Redemption |
+| redemption | `share(redemption)` | public | Share the Redemption (`key`-only, defining-module-restricted) |
+| redemption | `verify(merchant, cap, redemption, code, clock)` | public (cap-gated) | Burn on preimage match |
+| redemption | `release(redemption, customer_loyalty_account, clock)` | public (permissionless after expiry) | Return balance |
 | stablecoin_mock | `init(otw, ctx)` | private (auto-called) | Create currency, freeze metadata, share TreasuryCap |
 | stablecoin_mock | `faucet(cap, amount, ctx)` | public | Permissionless dev faucet |
 
@@ -100,7 +101,7 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 | `Policy<Balance<LOYALTY>>` | shared | permanent | loyalty (PAS-typed) |
 | `CoinMetadata<LOYALTY>` | shared + frozen | permanent | loyalty |
 | `Coin<S>` (stablecoin) | owned by sender / payout address | per-payment object | sui::coin |
-| `Hold` | shared | short (minutes) | redemption |
+| `Redemption` | shared | short (minutes) | redemption |
 | `Account<LOYALTY>` (per customer) | shared | per-customer | PAS (created via `account::create_and_share`) |
 | PAS `Namespace` | shared, singleton | permanent | PAS infrastructure |
 | `TreasuryCap<STABLECOIN_MOCK>` | shared | permanent (devnet) | stablecoin-mock |
@@ -110,9 +111,9 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 All events defined in `events.move` (matches OZ AMM convention — centralised event surface, `public(package)` `emit_*` helpers). No merchant-management events in v1 (deferred — add `MerchantCreated`, `ListingAdded`, etc. when needed).
 
 - `events::PaymentEvent { merchant_id, order_ref, customer, amount, loyalty_minted, timestamp_ms }` — emitted by `merchant::pay`
-- `events::RedeemRequested { hold_id, merchant_id, customer, amount, expires_at_ms }` — emitted by `redemption::request_redeem`
-- `events::RedemptionVerified { hold_id, merchant_id, customer, amount }` — emitted by `redemption::verify`
-- `events::RedemptionReleased { hold_id, merchant_id, customer, amount }` — emitted by `redemption::release`
+- `events::RedemptionCreated { redemption_id, merchant_id, customer, amount, expires_at_ms }` — emitted by `redemption::create`
+- `events::RedemptionVerified { redemption_id, merchant_id, customer, amount }` — emitted by `redemption::verify`
+- `events::RedemptionReleased { redemption_id, merchant_id, customer, amount }` — emitted by `redemption::release`
 
 ### Error constants
 
@@ -120,7 +121,7 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 
 - **merchant**: `EWrongMerchantCap (0)`, `EEmptyName (1)`, `EZeroMintDenominator (2)`, `EListingNotFound (3)`, `EWrongLoyaltyRecipient (4)`
 - **listing**: `EEmptyName (0)`, `EZeroPrice (1)`
-- **redemption**: `EEmptyCodeHash (0)`, `EZeroTtl (1)`, `EZeroAmount (2)`, `EWrongMerchantForHold (3)`, `EExpired (4)`, `ENotExpired (5)`, `EWrongCode (6)`, `EWrongCustomer (7)`
+- **redemption**: `EEmptyCodeHash (0)`, `EZeroTtl (1)`, `EZeroAmount (2)`, `EWrongMerchantForRedemption (3)`, `EExpired (4)`, `ENotExpired (5)`, `EWrongCode (6)`, `EWrongCustomer (7)`
 
 ## Invariant Enforcement Map
 
@@ -130,7 +131,7 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 |---|---|---|
 | INV-1 Loyalty bundle must be consumed | `loyalty::Loyalty` | `has key` only — no `drop`, `store`, `copy` |
 | INV-2 MerchantCap is transferable | `merchant::MerchantCap` | `has key, store` |
-| INV-3 Hold cannot be silently dropped | `redemption::Hold` | `has key` only |
+| INV-3 Redemption cannot be silently dropped | `redemption::Redemption` | `has key` only |
 | INV-4 Loyalty is soulbound | `loyalty::setup` | No `send_funds` approval registered |
 | INV-5 No clawback | `loyalty::setup` | `clawback_allowed = false` + no `clawback_funds` approval |
 | INV-6 Only redemption can unlock loyalty | `loyalty::setup` + `new_redeem_unlock_approval` | Approval witness constructor is `public(package)` |
@@ -150,13 +151,13 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 | INV-15 Loyalty mints to payer's own account | `merchant::pay` | `EWrongLoyaltyRecipient` |
 | INV-16 Mint bounded by max | `merchant::pay` | (clamp, not assert) |
 | INV-17 No mint overflow | `merchant::pay` | u128 intermediate |
-| INV-18 Hold code_hash non-empty | `redemption::request_redeem` | `EEmptyCodeHash` |
-| INV-19 Hold ttl > 0 | `redemption::request_redeem` | `EZeroTtl` |
-| INV-20 Hold amount > 0 | `redemption::request_redeem` | `EZeroAmount` |
+| INV-18 Redemption code_hash non-empty | `redemption::create` | `EEmptyCodeHash` |
+| INV-19 Redemption ttl > 0 | `redemption::create` | `EZeroTtl` |
+| INV-20 Redemption amount > 0 | `redemption::create` | `EZeroAmount` |
 | INV-21 Verify before expiry | `redemption::verify` | `EExpired` |
 | INV-22 Release after expiry | `redemption::release` | `ENotExpired` |
 | INV-23 Code preimage matches commitment | `redemption::verify` | `EWrongCode` |
-| INV-24 Verify only on Hold for this merchant | `redemption::verify` | `EWrongMerchantForHold` |
+| INV-24 Verify only on Redemption for this merchant | `redemption::verify` | `EWrongMerchantForRedemption` |
 | INV-25 Release deposits only to original customer | `redemption::release` | `EWrongCustomer` |
 
 ## Implementation Notes
@@ -192,7 +193,7 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 ## Dev Notes
 
 - The design conversation produced renames mid-stream: `MerchantConfig → Merchant`; `LoyaltyBootstrap → Loyalty` (moved from `merchant.move` to `loyalty.move` with a `public(package) destruct` helper); `setup_loyalty → setup`; `Catalog` removed entirely (folded into `Merchant.listings`); `payment.move` removed entirely (folded `pay<S>` into `merchant.move`, same reasoning as listing CRUD — functions that mutate `Merchant` live where the state lives).
-- **Events extracted to dedicated `events.move`** mid-code-draft to match OZ AMM convention. All four event structs (`PaymentEvent`, `RedeemRequested`, `RedemptionVerified`, `RedemptionReleased`) plus `public(package)` `emit_*` helpers live there. Call sites use the helpers rather than constructing structs and calling `event::emit` directly.
+- **Events extracted to dedicated `events.move`** mid-code-draft to match OZ AMM convention. All four event structs (`PaymentEvent`, `RedemptionCreated`, `RedemptionVerified`, `RedemptionReleased`) plus `public(package)` `emit_*` helpers live there. Call sites use the helpers rather than constructing structs and calling `event::emit` directly.
 - **Mid-code-draft pivot from PAS-stablecoin to plain `Coin<S>`** — dropped `EWrongRecipient` (now enforced by construction, see INV-8), removed the `Account<S>` ownership row, simplified the stablecoin-mock from PAS-issued to a plain Sui Coin with a faucet. Original (PAS-stablecoin) design is documented in this artifact's history for reference.
 - PAS dep was originally a git URL pinned to commit `b64f0c5`. Switched to **vendored** at `vendor/pas/` because PAS doesn't declare a `test-publish` environment and we needed to add it locally (matches OZ AMM convention). `Move.lock` files now committed.
 - The edition mismatch I worried about (`2024` vs `2024.beta`) was a non-issue: the original failure was actually `[addresses]` + `[environments]` conflicting in the same Move.toml. PAS new-style + ours new-style works fine.
@@ -201,9 +202,9 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 
 ## Open Questions
 
-1. **Tests** — `/sui-tests` is the next skill. Target coverage: every runtime invariant + happy paths + the three Hold lifecycle outcomes (verify, release, abort-on-bad-code) + the `Coin<S>`-based payment flow (no PAS approval machinery to test on the stablecoin side now).
+1. **Tests** — `/sui-tests` is the next skill. Target coverage: every runtime invariant + happy paths + the three Redemption lifecycle outcomes (verify, release, abort-on-bad-code) + the `Coin<S>`-based payment flow (no PAS approval machinery to test on the stablecoin side now).
 2. **Pre-commit hook to strip `[pinned.test-publish.*]` from `Move.lock`** before commit (OZ AMM does this) — worth adopting before contributors land.
 3. **Mock vs vendored PAS for future updates** — vendoring captures PAS at one commit. When PAS updates upstream we manually re-sync. Acceptable trade-off; documented in the README would help future contributors.
 4. **Add events to merchant operations** if/when the dashboard indexer wants them (`MerchantCreated`, `ListingAdded { id, name, price }`, `MerchantPolicyChanged`, etc.). Defer until concrete need.
-5. **`destroy_zero` defensive check?** If a Hold ends up with a zero balance somehow (shouldn't happen given INV-20), burn / release would behave fine but `balance::decrease_supply(0)` is wasted gas. Probably skip for v1 — INV-20 catches it upstream.
+5. **`destroy_zero` defensive check?** If a Redemption ends up with a zero balance somehow (shouldn't happen given INV-20), burn / release would behave fine but `balance::decrease_supply(0)` is wasted gas. Probably skip for v1 — INV-20 catches it upstream.
 6. **Should `stablecoin_mock::faucet` cap per-call amount?** Currently unbounded — anyone can mint any amount. Fine for devnet; could add a `MAX_PER_FAUCET_CALL` constant if testers spam it.

@@ -1,18 +1,21 @@
 /// Redemption flow — extracts loyalty balance from the customer's PAS Account into a
 /// `Redemption` shared object, then either:
-///   - merchant `verify`s the preimage to the stored hash → balance is burned, OR
+///   - merchant `verify`s it → balance is burned, OR
 ///   - `release` is called (permissionless) after expiry → balance returns to customer.
+///
+/// Authorization model: `verify` is gated solely by `&MerchantCap`. The merchant is
+/// trusted to only verify redemptions whose customers have presented themselves at
+/// the counter. There is no on-chain proof of customer presence — disputes are
+/// handled off-chain. An earlier design used a sha3-256 code commitment, but it
+/// provided no real protection for human-friendly short codes (a 6–9 digit input is
+/// trivially brute-forced from the on-chain hash), so it was dropped in favor of the
+/// simpler honest trust model.
 ///
 /// Lifecycle (customer's PTB):
 ///   auth       = account::new_auth(&ctx)
 ///   request    = customer_loyalty_account.unlock_balance<LOYALTY>(&auth, amount, &ctx)
-///   redemption = redemption::create(merchant, request, policy_loyalty,
-///                                   code_hash, ttl_ms, &clock, ctx)
+///   redemption = redemption::create(merchant, request, policy_loyalty, ttl_ms, &clock, ctx)
 ///   redemption::share(redemption)
-///
-/// Code commit-reveal: `code_hash = sha3_256(code)`. The customer sees the raw `code`
-/// and shows it at the counter; the merchant types it into the POS, which submits the
-/// preimage to `verify`. Move re-hashes and compares.
 module openzeppelin_payments::redemption;
 
 use openzeppelin_payments::events;
@@ -22,29 +25,26 @@ use pas::account::Account;
 use pas::policy::Policy;
 use pas::request::Request;
 use pas::unlock_funds::{Self, UnlockFunds};
-use std::hash;
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin;
 
+// TODO#q: have to flows with Redemption verification: Merchant only + User 
+
 // === Errors ===
 
 #[error(code = 0)]
-const EEmptyCodeHash: vector<u8> = b"code_hash must be non-empty";
-#[error(code = 1)]
 const EZeroTtl: vector<u8> = b"ttl_ms must be greater than zero";
-#[error(code = 2)]
+#[error(code = 1)]
 const EZeroAmount: vector<u8> = b"Redemption amount must be greater than zero";
-#[error(code = 3)]
+#[error(code = 2)]
 const EWrongMerchantForRedemption: vector<u8> =
     b"Redemption was not created for this Merchant";
-#[error(code = 4)]
+#[error(code = 3)]
 const EExpired: vector<u8> = b"Redemption has expired";
-#[error(code = 5)]
+#[error(code = 4)]
 const ENotExpired: vector<u8> = b"Redemption has not yet expired";
-#[error(code = 6)]
-const EWrongCode: vector<u8> = b"Code does not match commitment";
-#[error(code = 7)]
+#[error(code = 5)]
 const EWrongCustomer: vector<u8> = b"Account owner does not match Redemption customer";
 
 // === Structs ===
@@ -54,8 +54,6 @@ public struct Redemption has key {
     merchant_id: ID,
     customer: address,
     funds: Balance<LOYALTY>,
-    /// `sha3_256(code)`. Merchant submits preimage at `verify`; Move re-hashes.
-    code_hash: vector<u8>,
     expires_at_ms: u64,
 }
 
@@ -70,12 +68,10 @@ public fun create(
     merchant: &Merchant,
     mut request: Request<UnlockFunds<Balance<LOYALTY>>>,
     policy_loyalty: &Policy<Balance<LOYALTY>>,
-    code_hash: vector<u8>,
     ttl_ms: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ): Redemption {
-    assert!(code_hash.length() > 0, EEmptyCodeHash);
     assert!(ttl_ms > 0, EZeroTtl);
 
     let merchant_id = object::id(merchant);
@@ -91,7 +87,6 @@ public fun create(
         merchant_id,
         customer,
         funds,
-        code_hash,
         expires_at_ms: clock.timestamp_ms() + ttl_ms,
     };
 
@@ -134,12 +129,13 @@ public fun release(
 
 // === Admin Functions ===
 
-/// Merchant verifies the preimage and burns the held balance. Consumes the Redemption.
+/// Merchant verifies the redemption and burns the held balance. Consumes the Redemption.
+/// Gated solely by `&MerchantCap` — the merchant is trusted to only call this for
+/// customers who have actually presented themselves.
 public fun verify(
     merchant: &mut Merchant,
     cap: &MerchantCap,
     redemption: Redemption,
-    code: vector<u8>,
     clock: &Clock,
 ) {
     merchant.assert_cap_matches(cap);
@@ -150,7 +146,6 @@ public fun verify(
 
     assert!(redemption.merchant_id == merchant_id_now, EWrongMerchantForRedemption);
     assert!(now < redemption.expires_at_ms, EExpired);
-    assert!(hash::sha3_256(code) == redemption.code_hash, EWrongCode);
 
     let Redemption { id, merchant_id, customer, funds, .. } = redemption;
     let amount = funds.value();

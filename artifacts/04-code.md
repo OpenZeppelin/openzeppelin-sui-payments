@@ -53,9 +53,9 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 1. **No `access` module / shim.** Sui-native capability pattern: every gated entry takes `&MerchantCap`, validated via `merchant::assert_cap_matches`. Migration to OZ AccessControl when available is a future stage; not designed for now.
 2. **Single shared `Merchant` object** holds *everything* per-merchant: identity, payout, loyalty caps + policy IDs, mint policy params, and listings `Table<u64, Listing>`. No separate `Catalog` (1:1 with mutual ID refs was the alternative considered and rejected).
 3. **Listing CRUD AND payment live in `merchant.move`** (marketplace pattern). `listing.move` defines only the struct + package-private setters + accessors. `merchant.move` owns all functions that mutate `Merchant`'s state — listings, payout, and `pay<S>`. Avoids circular imports and keeps the merchant-side surface in one file.
-4. **Two-tx onboarding (forced by Sui Move init constraints).** Publish runs `loyalty::init` which creates only the Sui coin + freezes metadata; the deployer's second tx is a PTB calling `loyalty::setup(&mut namespace, treasury_cap)` then `merchant::create_merchant(loyalty, name, …)`. The `Loyalty` bundle is the hot-potato handoff between the two functions in the PTB.
+4. **Two-tx onboarding (forced by Sui Move init constraints).** Publish runs `loyalty::init` which creates only the Sui coin + freezes metadata; the deployer's second tx is a PTB calling `loyalty::setup(&mut namespace, treasury_cap)` then `merchant::create(loyalty, name, …)`. The `Loyalty` bundle is the hot-potato handoff between the two functions in the PTB.
 5. **PAS Namespace is global** (singleton per PAS publish), not per-merchant. So `Merchant` does NOT carry a `loyalty_namespace_id` field. Functions needing namespace take `&mut Namespace` as a separate shared input.
-6. **Mint policy params are immutable** post-`create_merchant`. No runtime mutator. Changing "$1 = X points" under existing customers is a trust regression.
+6. **Mint policy params are immutable** post-`create`. No runtime mutator. Changing "$1 = X points" under existing customers is a trust regression.
 7. **PolicyCap is held inside `Merchant`** for future controlled policy migration, but **no runtime adjustment entry is exposed in v1**. Soulbound is permanent.
 8. **Payment verification is events-only** — port of Solana Pay's `reference` pattern. `PaymentEvent { merchant_id, order_ref, customer, amount, loyalty_minted, timestamp_ms }`. Indexer subscribes by `merchant_id`, resolves `order_ref → settled?`. No on-chain `PaymentIntent` object.
 9. **Redemption Hold is a shared object carrying `Balance<LOYALTY>`** extracted from the customer's PAS Account via `unlock_funds::resolve`. Hash-commit-reveal binds an off-chain `code` to `sha3_256(code)`. `release` is permissionless after expiry; balance returns to the original customer's account.
@@ -69,10 +69,11 @@ Mirrors `openzeppelin-sui-amm`'s layout: `packages/dapp/contracts/<pkg>/` with m
 |---|---|---|---|
 | loyalty | `init(otw, ctx)` | private (auto-called) | Create currency + freeze metadata |
 | loyalty | `setup(namespace, cap, ctx) -> Loyalty` | public | Create Policy, register approvals, bundle outputs |
-| loyalty | `destruct(loyalty) -> (TreasuryCap, PolicyCap, ID)` | pkg | Consumed by `merchant::create_merchant` |
+| loyalty | `destruct(loyalty) -> (TreasuryCap, PolicyCap, ID)` | pkg | Consumed by `merchant::create` |
 | loyalty | `mint_into(cap, account, amount)` | pkg | Called by `merchant::pay` |
 | loyalty | `new_redeem_unlock_approval() -> RedeemUnlockApproval` | pkg | Called by `redemption::request_redeem` |
-| merchant | `create_merchant(loyalty, ...) -> MerchantCap` | public | Consume Loyalty, share Merchant |
+| merchant | `create(loyalty, ...) -> (Merchant, MerchantCap)` | public | Consume Loyalty; return Merchant + cap |
+| merchant | `share(merchant)` | public | Share the Merchant (required — `key`-only, so `share_object` is defining-module-restricted) |
 | merchant | `name`, `logo_url`, `payout_address`, `loyalty_policy_id`, `mint_params`, `next_listing_id`, `listings_count`, `merchant_id` | public | Read-only getters |
 | merchant | `set_payout_address`, `set_display` | public (cap-gated) | Mutable display + routing |
 | merchant | `add_listing`, `set_listing_price`, `set_listing_name`, `set_listing_active`, `remove_listing`, `borrow_listing`, `contains_listing` | public (cap-gated for writes) | Listing CRUD |
@@ -141,8 +142,8 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 | Invariant | Enforcement Location | Error |
 |---|---|---|
 | INV-9 MerchantCap must match Merchant | `merchant::assert_cap_matches` (called by all cap-gated entries) | `EWrongMerchantCap` |
-| INV-10 Merchant name non-empty | `merchant::create_merchant`, `set_display` | `EEmptyName` |
-| INV-11 Mint denominator non-zero | `merchant::create_merchant` | `EZeroMintDenominator` |
+| INV-10 Merchant name non-empty | `merchant::create`, `set_display` | `EEmptyName` |
+| INV-11 Mint denominator non-zero | `merchant::create` | `EZeroMintDenominator` |
 | INV-12 Listing name non-empty | `listing::new`, `listing::set_name` | `EEmptyName` |
 | INV-13 Listing price non-zero | `listing::new`, `listing::set_price` | `EZeroPrice` |
 | INV-14 Listing must exist before mutating | `merchant::set_listing_*`, `remove_listing`, `borrow_listing` | `EListingNotFound` |
@@ -180,7 +181,7 @@ All modules use the new `#[error(code = N)] const E... : vector<u8> = b"...";` a
 - **Real fiat off-ramp** — mock only; real integration is a separate workstream.
 - **PAS-wrapped stablecoin path** — v1 uses plain `Coin<S>` because production stablecoins (Circle USDC on Sui) are Coin-based. Forks needing issuer-controlled compliance hooks can layer PAS on top, but the template doesn't ship that variant.
 - **On-chain replay protection for payments** — `order_ref` reuse is the indexer's responsibility.
-- **Runtime mutation of mint policy params** — write-once at `create_merchant`. Future controlled migration would require a new function.
+- **Runtime mutation of mint policy params** — write-once at `create`. Future controlled migration would require a new function.
 - **Runtime policy adjustment entry** — `PolicyCap` is held inside `Merchant` for future use; no entry exposes it in v1.
 - **`withdraw_balance<S>` helper** — merchant manages their wallet's accumulated `Coin<S>` objects directly (standard Sui — `coin::join`, `transfer::public_transfer`, etc.).
 - **Frontend / TS SDK** — out of scope for this Move-only stage.

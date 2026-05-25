@@ -4,10 +4,10 @@
 ///   1. `sui publish` → `loyalty::init` creates the LOYALTY currency. Deployer holds
 ///      `TreasuryCap<LOYALTY>` and a frozen `CoinMetadata<LOYALTY>`.
 ///   2. Deployer's PTB:
-///        loyalty = loyalty::setup(&mut namespace, treasury_cap, ctx)
-///        cap     = merchant::create_merchant(loyalty, name, logo_url, payout,
-///                                            num, den, max, ctx)
-///      and transfers `cap` to the deployer's address.
+///        loyalty         = loyalty::setup(&mut namespace, treasury_cap, ctx)
+///        (merchant, cap) = merchant::create(loyalty, name, logo_url, payout,
+///                                           num, den, max, ctx)
+///        merchant::share(merchant);  transfer `cap` to the deployer's address.
 ///
 /// Cap-by-reference gating: every merchant-only entry (here and in `redemption`) takes
 /// `&MerchantCap`. `assert_cap_matches` verifies the cap's `merchant_id` field equals
@@ -50,12 +50,12 @@ public struct Merchant has key {
     /// Address receiving customer stablecoin payments. Mutable so the merchant can
     /// rotate keys.
     payout_address: address,
-    /// Loyalty asset bundle, set at `create_merchant`, immutable thereafter.
+    /// Loyalty asset bundle, set at `create`, immutable thereafter.
     loyalty_treasury_cap: TreasuryCap<LOYALTY>,
     loyalty_policy_cap: PolicyCap<Balance<LOYALTY>>,
     loyalty_policy_id: ID,
     /// Mint rate: `loyalty_minted = (payment_units * num) / den`, capped at `max`.
-    /// All three set at `create_merchant`, immutable thereafter — runtime mutation
+    /// All three set at `create`, immutable thereafter — runtime mutation
     /// would change "$1 = X points" under existing customers.
     mint_numerator: u64,
     mint_denominator: u64,
@@ -75,9 +75,10 @@ public struct MerchantCap has key, store {
 
 // === Public Functions ===
 
-/// Consume the `Loyalty` bundle from `loyalty::setup`, create + share `Merchant`,
-/// and return `MerchantCap` to the caller (typically the deployer).
-public fun create_merchant(
+/// Consume the `Loyalty` bundle from `loyalty::setup` and return the `Merchant` and its
+/// `MerchantCap`. The caller controls placement — typically `merchant::share(merchant)`
+/// (and any same-PTB setup like `add_listing`) then transfers the cap to the deployer.
+public fun create(
     loyalty: Loyalty,
     name: String,
     logo_url: Option<String>,
@@ -86,7 +87,7 @@ public fun create_merchant(
     mint_denominator: u64,
     max_mint_per_payment: u64,
     ctx: &mut TxContext,
-): MerchantCap {
+): (Merchant, MerchantCap) {
     assert!(!name.is_empty(), EEmptyName);
     assert!(mint_denominator != 0, EZeroMintDenominator);
 
@@ -113,8 +114,14 @@ public fun create_merchant(
         merchant_id,
     };
 
-    transfer::share_object(merchant);
-    cap
+    (merchant, cap)
+}
+
+/// Share the `Merchant`. Required because `Merchant` is `key`-only (no `store`), so
+/// `transfer::share_object` can only be called from this module — an external caller
+/// can't share it directly. Call after `create` and any same-PTB setup.
+public fun share(m: Merchant) {
+    transfer::share_object(m);
 }
 
 /// Atomic payment: route `Coin<S>` to `merchant.payout_address`, mint loyalty into the

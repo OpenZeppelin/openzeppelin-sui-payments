@@ -9,11 +9,11 @@
 ///      `&mut Namespace` (init's signature is fixed).
 ///   2. Deployer's second tx is a PTB:
 ///        loyalty = loyalty::setup(&mut namespace, treasury_cap, ctx)
-///        cap     = merchant::create_merchant(loyalty, name, ..., ctx)
+///        cap     = merchant::create(loyalty, name, ..., ctx)
 ///
 /// Cross-module hooks (`public(package)`):
 ///   - `destruct(Loyalty) -> (TreasuryCap, PolicyCap, policy_id)` — consumed by
-///     `merchant::create_merchant`.
+///     `merchant::create`.
 ///   - `mint_into(&mut TreasuryCap, &Account, amount)` — called by `merchant::pay`.
 ///   - `new_redeem_unlock_approval() -> RedeemUnlockApproval` — called by
 ///     `redemption::request_redeem` to approve the unlock request.
@@ -52,7 +52,7 @@ fun init(otw: LOYALTY, ctx: &mut TxContext) {
 // === Structs ===
 
 /// Bundle of loyalty-side outputs from `setup`, consumed by
-/// `merchant::create_merchant`. `key`-only — has neither `drop` nor `store`,
+/// `merchant::create`. `key`-only — has neither `drop` nor `store`,
 /// so the deployer cannot accidentally drop it or wrap it elsewhere.
 public struct Loyalty has key {
     id: UID,
@@ -70,7 +70,7 @@ public struct RedeemUnlockApproval() has drop;
 
 /// Post-publish setup. Creates `Policy<Balance<LOYALTY>>` against the global PAS
 /// Namespace, registers approvals, shares the policy, and bundles the loyalty-side
-/// outputs into a `Loyalty` to be consumed by `merchant::create_merchant` in the
+/// outputs into a `Loyalty` to be consumed by `merchant::create` in the
 /// same PTB.
 ///
 /// Approval registration:
@@ -103,7 +103,7 @@ public fun setup(
 
 // === Package Functions ===
 
-/// Unwrap a Loyalty bundle. Only `merchant::create_merchant` calls this.
+/// Unwrap a Loyalty bundle. Only `merchant::create` calls this.
 public(package) fun destruct(
     loyalty: Loyalty,
 ): (TreasuryCap<LOYALTY>, PolicyCap<Balance<LOYALTY>>, ID) {

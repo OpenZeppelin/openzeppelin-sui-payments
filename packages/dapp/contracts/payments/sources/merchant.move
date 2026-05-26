@@ -1,20 +1,3 @@
-/// Merchant identity, central state, bootstrap, listing CRUD, and customer-side
-/// payment settlement (`pay<S>`). `Invoice` creation and lifecycle live in
-/// `invoice.move`; the redemption flow lives in `redemption.move`. This module owns
-/// `Merchant`, `MerchantCap`, and everything that mutates `Merchant`.
-///
-/// Two-step deployment:
-///   1. `sui publish` → `loyalty::init` creates the LOYALTY currency. Deployer holds
-///      `TreasuryCap<LOYALTY>` and a frozen `CoinMetadata<LOYALTY>`.
-///   2. Deployer's PTB:
-///        loyalty         = loyalty::setup(&mut namespace, treasury_cap, ctx)
-///        (merchant, cap) = merchant::create(loyalty, name, logo_url, payout,
-///                                           num, den, max, ctx)
-///        merchant::share(merchant);  transfer `cap` to the deployer's address.
-///
-/// Cap-by-reference gating: every merchant-only entry (here and in `payment` /
-/// `redemption`) takes `&MerchantCap`. `assert_cap_matches` verifies the cap's
-/// `merchant_id` field equals `object::id(&Merchant)`.
 module openzeppelin_payments::merchant;
 
 use openzeppelin_payments::events;

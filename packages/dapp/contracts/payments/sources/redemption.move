@@ -1,24 +1,3 @@
-/// Redemption workflow — merchant issues a `RedemptionVoucher`, customer redeems by
-/// unlocking the specified loyalty amount from their PAS Account, which our policy
-/// approval witness lets us extract and burn. Symmetric to `payment::Invoice`.
-///
-/// Lifecycle:
-///   Merchant POS:
-///     voucher = redemption::create_voucher(m, &cap, amount, ttl_ms, &clock, ctx)
-///     redemption::share_voucher(voucher)
-///     -- QR encodes voucher's object ID --
-///
-///   Customer wallet (after scanning QR):
-///     auth       = account::new_auth(&ctx)
-///     unlock_req = customer_LOY.unlock_balance<LOYALTY>(&auth, voucher.amount, &ctx)
-///     redemption::redeem(m, voucher, unlock_req, policy_loyalty, &clock, ctx)
-///
-///   Cleanup (after expiry, permissionless):
-///     redemption::cancel_voucher(voucher, &clock)
-///
-/// Customer's loyalty balance is never locked between voucher issuance and redemption
-/// — it stays in their Account until they actively settle. If they walk away, the
-/// voucher just expires; nothing was taken from them.
 module openzeppelin_payments::redemption;
 
 use openzeppelin_payments::events;

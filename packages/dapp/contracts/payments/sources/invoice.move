@@ -1,23 +1,3 @@
-/// Invoice — merchant-issued payment intent. This module owns the `Invoice` struct,
-/// its lifecycle helpers (`share`, `cancel`, `destroy`), and read accessors. Invoice
-/// issuance (`merchant::issue_invoice`) and customer-side settlement (`merchant::pay`)
-/// live in `merchant.move` to avoid a module dependency cycle on `Merchant` /
-/// `MerchantCap`.
-///
-/// Lifecycle:
-///   Merchant POS:
-///     invoice = merchant::issue_invoice(m, &cap, amount, order_ref, ttl_ms, &clock, ctx)
-///     invoice::share(invoice)
-///     -- QR encodes invoice's object ID --
-///
-///   Customer wallet (after scanning QR):
-///     auth   = account::new_auth(&ctx)
-///     sf_req = customer_S.send_balance(&auth, &merchant_S, invoice.amount(), &ctx)
-///     stablecoin_pkg::approve_transfer(&mut sf_req)
-///     merchant::pay<S>(m, invoice, sf_req, policy_s, customer_LOY, &clock, ctx)
-///
-///   Cleanup (after expiry, permissionless):
-///     invoice::cancel(invoice, &clock)
 module openzeppelin_payments::invoice;
 
 use sui::clock::Clock;

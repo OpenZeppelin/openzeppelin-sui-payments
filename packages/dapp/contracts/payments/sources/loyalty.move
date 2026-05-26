@@ -1,22 +1,3 @@
-/// Soulbound loyalty asset — a standard Sui Coin wrapped with a PAS
-/// `Policy<Balance<LOYALTY>>` that registers approvals only for `unlock_funds`.
-/// `send_funds` and `clawback_funds` have no approvals registered, so requests for
-/// them can never resolve → soulbound, no clawback.
-///
-/// Two-step deployment:
-///   1. Publish → `init` creates the currency + metadata, transfers `TreasuryCap` to
-///      the deployer. The Policy is NOT created here because `init` can't take
-///      `&mut Namespace` (init's signature is fixed).
-///   2. Deployer's second tx is a PTB:
-///        loyalty = loyalty::setup(&mut namespace, treasury_cap, ctx)
-///        cap     = merchant::create(loyalty, name, ..., ctx)
-///
-/// Cross-module hooks (`public(package)`):
-///   - `destruct(Loyalty) -> (TreasuryCap, PolicyCap, policy_id)` — consumed by
-///     `merchant::create`.
-///   - `mint_into(&mut TreasuryCap, &Account, amount)` — called by `payment::pay`.
-///   - `new_redeem_unlock_approval() -> RedeemUnlockApproval` — called by
-///     `redemption::create` to approve the unlock request.
 module openzeppelin_payments::loyalty;
 
 use pas::account::Account;

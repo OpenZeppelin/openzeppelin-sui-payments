@@ -1,12 +1,3 @@
-/// Listing data type. One menu line: `(id, name, price_units, active)`.
-///
-/// Stored as `Table<u64, Listing>` entries on `Merchant`. CRUD lives in `merchant`
-/// (where the table is) — this module exposes only the struct, a package-private
-/// constructor / setters used by `merchant`, and public accessors used by readers.
-///
-/// Modeled after `openzeppelin-sui-marketplace::oracle-market::listing` — one
-/// listing per purchasable line. Variant-bearing products (e.g. Latte S/M/L) become
-/// three separate listings.
 module openzeppelin_payments::listing;
 
 use std::string::String;

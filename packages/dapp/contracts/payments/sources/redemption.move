@@ -1,27 +1,29 @@
-/// Redemption flow — extracts loyalty balance from the customer's PAS Account into a
-/// `Redemption` shared object, then either:
-///   - merchant `verify`s it → balance is burned, OR
-///   - `release` is called (permissionless) after expiry → balance returns to customer.
+/// Redemption workflow — merchant issues a `RedemptionVoucher`, customer redeems by
+/// unlocking the specified loyalty amount from their PAS Account, which our policy
+/// approval witness lets us extract and burn. Symmetric to `payment::Invoice`.
 ///
-/// Authorization model: `verify` is gated solely by `&MerchantCap`. The merchant is
-/// trusted to only verify redemptions whose customers have presented themselves at
-/// the counter. There is no on-chain proof of customer presence — disputes are
-/// handled off-chain. An earlier design used a sha3-256 code commitment, but it
-/// provided no real protection for human-friendly short codes (a 6–9 digit input is
-/// trivially brute-forced from the on-chain hash), so it was dropped in favor of the
-/// simpler honest trust model.
+/// Lifecycle:
+///   Merchant POS:
+///     voucher = redemption::create_voucher(m, &cap, amount, ttl_ms, &clock, ctx)
+///     redemption::share_voucher(voucher)
+///     -- QR encodes voucher's object ID --
 ///
-/// Lifecycle (customer's PTB):
-///   auth       = account::new_auth(&ctx)
-///   request    = customer_loyalty_account.unlock_balance<LOYALTY>(&auth, amount, &ctx)
-///   redemption = redemption::create(merchant, request, policy_loyalty, ttl_ms, &clock, ctx)
-///   redemption::share(redemption)
+///   Customer wallet (after scanning QR):
+///     auth       = account::new_auth(&ctx)
+///     unlock_req = customer_LOY.unlock_balance<LOYALTY>(&auth, voucher.amount, &ctx)
+///     redemption::redeem(m, voucher, unlock_req, policy_loyalty, &clock, ctx)
+///
+///   Cleanup (after expiry, permissionless):
+///     redemption::cancel_voucher(voucher, &clock)
+///
+/// Customer's loyalty balance is never locked between voucher issuance and redemption
+/// — it stays in their Account until they actively settle. If they walk away, the
+/// voucher just expires; nothing was taken from them.
 module openzeppelin_payments::redemption;
 
 use openzeppelin_payments::events;
 use openzeppelin_payments::loyalty::{Self, LOYALTY};
 use openzeppelin_payments::merchant::{Merchant, MerchantCap};
-use pas::account::Account;
 use pas::policy::Policy;
 use pas::request::Request;
 use pas::unlock_funds::{Self, UnlockFunds};
@@ -29,131 +31,114 @@ use sui::balance::{Self, Balance};
 use sui::clock::Clock;
 use sui::coin;
 
-// TODO#q: have to flows with Redemption verification: Merchant only + User 
-
 // === Errors ===
 
 #[error(code = 0)]
-const EZeroTtl: vector<u8> = b"ttl_ms must be greater than zero";
+const EZeroAmount: vector<u8> = b"Voucher amount must be greater than zero";
 #[error(code = 1)]
-const EZeroAmount: vector<u8> = b"Redemption amount must be greater than zero";
+const EZeroTtl: vector<u8> = b"ttl_ms must be greater than zero";
 #[error(code = 2)]
-const EWrongMerchantForRedemption: vector<u8> =
-    b"Redemption was not created for this Merchant";
+const EWrongMerchantForVoucher: vector<u8> =
+    b"Voucher was not created for this Merchant";
 #[error(code = 3)]
-const EExpired: vector<u8> = b"Redemption has expired";
+const EExpired: vector<u8> = b"Voucher has expired";
 #[error(code = 4)]
-const ENotExpired: vector<u8> = b"Redemption has not yet expired";
+const ENotExpired: vector<u8> = b"Voucher has not yet expired";
 #[error(code = 5)]
-const EWrongCustomer: vector<u8> = b"Account owner does not match Redemption customer";
+const EAmountMismatch: vector<u8> =
+    b"Unlock amount does not match Voucher amount";
 
 // === Structs ===
 
-public struct Redemption has key {
+/// Merchant-issued voucher entitling the holder to redeem `amount` LOYALTY in
+/// exchange for a service. Customer scans the `id` and consumes the voucher via
+/// `redeem`, atomically burning their loyalty.
+public struct RedemptionVoucher has key {
     id: UID,
     merchant_id: ID,
-    customer: address,
-    funds: Balance<LOYALTY>,
+    amount: u64,
     expires_at_ms: u64,
 }
 
 // === Public Functions ===
 
-/// Customer initiates redemption. Approves the unlock with our package-private
-/// witness, resolves it via the loyalty `Policy<Balance<LOYALTY>>`, and stashes the
-/// resulting balance in a fresh `Redemption`. The caller shares it via
-/// `redemption::share` (the object is `key`-only, so `share_object` is restricted to
-/// this module).
-public fun create(
-    merchant: &Merchant,
-    mut request: Request<UnlockFunds<Balance<LOYALTY>>>,
+/// Customer redeems the voucher. Consumes the voucher, approves + resolves the
+/// customer's unlock request (which extracts `amount` LOYALTY from their Account),
+/// burns the balance via the merchant's `TreasuryCap`, and emits `VoucherRedeemed`.
+public fun redeem(
+    m: &mut Merchant,
+    voucher: RedemptionVoucher,
+    mut unlock_req: Request<UnlockFunds<Balance<LOYALTY>>>,
     policy_loyalty: &Policy<Balance<LOYALTY>>,
-    ttl_ms: u64,
     clock: &Clock,
-    ctx: &mut TxContext,
-): Redemption {
-    assert!(ttl_ms > 0, EZeroTtl);
-
-    let merchant_id = object::id(merchant);
-    let customer = request.data().owner();
-    let amount = request.data().funds().value();
-    assert!(amount > 0, EZeroAmount);
-
-    request.approve(loyalty::new_redeem_unlock_approval());
-    let funds: Balance<LOYALTY> = unlock_funds::resolve(request, policy_loyalty);
-
-    let redemption = Redemption {
-        id: object::new(ctx),
-        merchant_id,
-        customer,
-        funds,
-        expires_at_ms: clock.timestamp_ms() + ttl_ms,
-    };
-
-    events::emit_redemption_created(
-        object::id(&redemption),
-        merchant_id,
-        customer,
-        amount,
-        redemption.expires_at_ms,
-    );
-    redemption
-}
-
-/// Share the `Redemption`. Required because it is `key`-only (no `store`), so
-/// `transfer::share_object` can only be called from this module. Call after `create`.
-public fun share(redemption: Redemption) {
-    transfer::share_object(redemption);
-}
-
-/// Permissionless release after expiry — returns the held balance to the customer's
-/// loyalty Account. Prevents griefing by an inactive merchant.
-public fun release(
-    redemption: Redemption,
-    customer_loyalty_account: &Account,
-    clock: &Clock,
+    _ctx: &mut TxContext,
 ) {
-    let redemption_id = object::id(&redemption);
     let now = clock.timestamp_ms();
+    let voucher_id = object::id(&voucher);
+    let merchant_id = object::id(m);
 
-    assert!(now >= redemption.expires_at_ms, ENotExpired);
-    assert!(customer_loyalty_account.owner() == redemption.customer, EWrongCustomer);
+    // Voucher validity
+    assert!(voucher.merchant_id == merchant_id, EWrongMerchantForVoucher);
+    assert!(now < voucher.expires_at_ms, EExpired);
 
-    let Redemption { id, merchant_id, customer, funds, .. } = redemption;
-    let amount = funds.value();
-    customer_loyalty_account.deposit_balance(funds);
+    // Unlock-request integrity
+    let customer = unlock_req.data().owner();
+    let unlock_amount = unlock_req.data().funds().value();
+    assert!(unlock_amount == voucher.amount, EAmountMismatch);
+
+    // Snapshot before consume
+    let amount = voucher.amount;
+
+    // Approve unlock with our package-private witness, resolve via policy → raw Balance
+    unlock_req.approve(loyalty::new_redeem_unlock_approval());
+    let funds: Balance<LOYALTY> = unlock_funds::resolve(unlock_req, policy_loyalty);
+
+    // Burn
+    balance::decrease_supply(
+        coin::supply_mut(m.loyalty_treasury_cap_mut()),
+        funds,
+    );
+
+    // Destroy voucher
+    let RedemptionVoucher { id, .. } = voucher;
     id.delete();
 
-    events::emit_redemption_released(redemption_id, merchant_id, customer, amount);
+    events::emit_voucher_redeemed(voucher_id, merchant_id, customer, amount, now);
+}
+
+/// Share the voucher.
+public fun share_voucher(voucher: RedemptionVoucher) {
+    transfer::share_object(voucher);
+}
+
+/// Permissionless cleanup of an expired voucher. No balance is held by the voucher
+/// (customer balance stays in their Account until settlement), so this is just
+/// object destruction.
+public fun cancel_voucher(voucher: RedemptionVoucher, clock: &Clock) {
+    assert!(clock.timestamp_ms() >= voucher.expires_at_ms, ENotExpired);
+    let RedemptionVoucher { id, .. } = voucher;
+    id.delete();
 }
 
 // === Admin Functions ===
 
-/// Merchant verifies the redemption and burns the held balance. Consumes the Redemption.
-/// Gated solely by `&MerchantCap` — the merchant is trusted to only call this for
-/// customers who have actually presented themselves.
-public fun verify(
-    merchant: &mut Merchant,
+/// Merchant creates a redemption voucher.
+public fun create_voucher(
+    m: &Merchant,
     cap: &MerchantCap,
-    redemption: Redemption,
+    amount: u64,
+    ttl_ms: u64,
     clock: &Clock,
-) {
-    merchant.assert_cap_matches(cap);
+    ctx: &mut TxContext,
+): RedemptionVoucher {
+    m.assert_cap_matches(cap);
+    assert!(amount > 0, EZeroAmount);
+    assert!(ttl_ms > 0, EZeroTtl);
 
-    let merchant_id_now = object::id(merchant);
-    let redemption_id = object::id(&redemption);
-    let now = clock.timestamp_ms();
-
-    assert!(redemption.merchant_id == merchant_id_now, EWrongMerchantForRedemption);
-    assert!(now < redemption.expires_at_ms, EExpired);
-
-    let Redemption { id, merchant_id, customer, funds, .. } = redemption;
-    let amount = funds.value();
-    balance::decrease_supply(
-        coin::supply_mut(merchant.loyalty_treasury_cap_mut()),
-        funds,
-    );
-    id.delete();
-
-    events::emit_redemption_verified(redemption_id, merchant_id, customer, amount);
+    RedemptionVoucher {
+        id: object::new(ctx),
+        merchant_id: object::id(m),
+        amount,
+        expires_at_ms: clock.timestamp_ms() + ttl_ms,
+    }
 }

@@ -1,4 +1,7 @@
-/// Merchant identity, central state, bootstrap, listing CRUD, and payment.
+/// Merchant identity, central state, bootstrap, listing CRUD, and customer-side
+/// payment settlement (`pay<S>`). `Invoice` creation and lifecycle live in
+/// `invoice.move`; the redemption flow lives in `redemption.move`. This module owns
+/// `Merchant`, `MerchantCap`, and everything that mutates `Merchant`.
 ///
 /// Two-step deployment:
 ///   1. `sui publish` → `loyalty::init` creates the LOYALTY currency. Deployer holds
@@ -9,20 +12,23 @@
 ///                                           num, den, max, ctx)
 ///        merchant::share(merchant);  transfer `cap` to the deployer's address.
 ///
-/// Cap-by-reference gating: every merchant-only entry (here and in `redemption`) takes
-/// `&MerchantCap`. `assert_cap_matches` verifies the cap's `merchant_id` field equals
-/// `object::id(&Merchant)`.
+/// Cap-by-reference gating: every merchant-only entry (here and in `payment` /
+/// `redemption`) takes `&MerchantCap`. `assert_cap_matches` verifies the cap's
+/// `merchant_id` field equals `object::id(&Merchant)`.
 module openzeppelin_payments::merchant;
 
 use openzeppelin_payments::events;
+use openzeppelin_payments::invoice::{Self, Invoice};
 use openzeppelin_payments::listing::{Self, Listing};
 use openzeppelin_payments::loyalty::{Self, Loyalty, LOYALTY};
 use pas::account::Account;
-use pas::policy::PolicyCap;
+use pas::policy::{Policy, PolicyCap};
+use pas::request::Request;
+use pas::send_funds::{Self, SendFunds};
 use std::string::String;
 use sui::balance::Balance;
 use sui::clock::Clock;
-use sui::coin::{Coin, TreasuryCap};
+use sui::coin::TreasuryCap;
 use sui::table::{Self, Table};
 
 // === Errors ===
@@ -36,7 +42,23 @@ const EZeroMintDenominator: vector<u8> = b"Mint denominator cannot be zero";
 #[error(code = 3)]
 const EListingNotFound: vector<u8> = b"Listing not found";
 #[error(code = 4)]
-const EWrongLoyaltyRecipient: vector<u8> = b"Loyalty account owner does not match payer";
+const EWrongMerchantForInvoice: vector<u8> =
+    b"Invoice was not created for this Merchant";
+#[error(code = 5)]
+const EInvoiceExpired: vector<u8> = b"Invoice has expired";
+#[error(code = 6)]
+const EAmountMismatch: vector<u8> =
+    b"Send amount does not match Invoice amount";
+#[error(code = 7)]
+const EWrongRecipient: vector<u8> =
+    b"Send recipient does not match Invoice payout_address";
+#[error(code = 8)]
+const EWrongLoyaltyRecipient: vector<u8> =
+    b"Loyalty account owner does not match payer";
+#[error(code = 9)]
+const EInvoiceZeroAmount: vector<u8> = b"Invoice amount must be greater than zero";
+#[error(code = 10)]
+const EInvoiceZeroTtl: vector<u8> = b"Invoice ttl_ms must be greater than zero";
 
 // === Structs ===
 
@@ -124,49 +146,64 @@ public fun share(m: Merchant) {
     transfer::share_object(m);
 }
 
-/// Atomic payment: route `Coin<S>` to `merchant.payout_address`, mint loyalty into the
-/// customer's `Account<LOYALTY>`, emit `events::PaymentEvent`. Generic over the
-/// stablecoin Coin type `S`. Stablecoin transfer is a plain Sui transfer (no PAS) —
-/// see the design note in `04-code.md`. Loyalty mint goes through PAS via
-/// `loyalty::mint_into`.
+/// Customer settles an `Invoice`. Resolves the customer's already-approved stablecoin
+/// `send_funds` request (transfers `Balance<S>` from customer's PAS Account to the
+/// merchant's), mints loyalty rewards into the customer's PAS `Account<LOYALTY>`,
+/// destroys the Invoice, and emits `InvoicePaid`.
 public fun pay<S>(
     m: &mut Merchant,
-    coin: Coin<S>,
+    invoice: Invoice,
+    send_request: Request<SendFunds<Balance<S>>>,
+    policy_s: &Policy<Balance<S>>,
     customer_loyalty_account: &Account,
-    order_ref: vector<u8>,
     clock: &Clock,
-    ctx: &mut TxContext,
+    _ctx: &mut TxContext,
 ) {
+    let now = clock.timestamp_ms();
+    let invoice_id = object::id(&invoice);
     let merchant_id = object::id(m);
-    let payout = m.payout_address;
+
+    // Invoice validity
+    assert!(invoice.merchant_id() == merchant_id, EWrongMerchantForInvoice);
+    assert!(now < invoice.expires_at_ms(), EInvoiceExpired);
+
+    // Send-request integrity
+    let data = send_request.data();
+    let sender = data.sender();
+    assert!(data.recipient() == invoice.payout_address(), EWrongRecipient);
+    assert!(data.funds().value() == invoice.amount(), EAmountMismatch);
+
+    // Loyalty mints to the payer's own account
+    assert!(customer_loyalty_account.owner() == sender, EWrongLoyaltyRecipient);
+
+    // Snapshot before consuming the invoice
+    let payment_amount = invoice.amount();
+    let order_ref = *invoice.order_ref();
     let num = m.mint_numerator;
     let den = m.mint_denominator;
     let max = m.max_mint_per_payment;
 
-    let customer_addr = ctx.sender();
-    let payment_amount = coin.value();
+    // Resolve send_funds — transfers stablecoin into the merchant's PAS Account
+    send_funds::resolve_balance(send_request, policy_s);
 
-    // INV: loyalty mints to the payer's own loyalty account.
-    assert!(customer_loyalty_account.owner() == customer_addr, EWrongLoyaltyRecipient);
-
-    // Route the stablecoin to the merchant. Plain Sui transfer.
-    transfer::public_transfer(coin, payout);
-
-    // u128 intermediate to dodge overflow when payment_amount * num exceeds u64.
+    // Compute and mint loyalty
     let raw: u128 = (payment_amount as u128) * (num as u128) / (den as u128);
     let mint_amount: u64 = if (raw > (max as u128)) { max } else { (raw as u64) };
-
     if (mint_amount > 0) {
         loyalty::mint_into(&mut m.loyalty_treasury_cap, customer_loyalty_account, mint_amount);
     };
 
-    events::emit_payment(
+    // Destroy invoice
+    invoice::destroy(invoice);
+
+    events::emit_invoice_paid(
+        invoice_id,
         merchant_id,
         order_ref,
-        customer_addr,
+        sender,
         payment_amount,
         mint_amount,
-        clock.timestamp_ms(),
+        now,
     );
 }
 
@@ -206,6 +243,31 @@ public fun assert_cap_matches(m: &Merchant, cap: &MerchantCap) {
 }
 
 // === Admin Functions ===
+
+/// Merchant issues an invoice. Returns it for the caller to share via `invoice::share`
+/// (and surface the ID to the customer through a QR).
+public fun issue_invoice(
+    m: &Merchant,
+    cap: &MerchantCap,
+    amount: u64,
+    order_ref: vector<u8>,
+    ttl_ms: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Invoice {
+    assert_cap_matches(m, cap);
+    assert!(amount > 0, EInvoiceZeroAmount);
+    assert!(ttl_ms > 0, EInvoiceZeroTtl);
+
+    invoice::new(
+        object::id(m),
+        m.payout_address,
+        amount,
+        order_ref,
+        clock.timestamp_ms() + ttl_ms,
+        ctx,
+    )
+}
 
 public fun set_payout_address(m: &mut Merchant, cap: &MerchantCap, addr: address) {
     assert_cap_matches(m, cap);

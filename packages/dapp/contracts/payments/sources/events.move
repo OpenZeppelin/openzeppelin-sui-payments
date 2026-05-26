@@ -2,15 +2,17 @@
 ///
 /// Modeled after `openzeppelin-sui-amm::events`: event structs in one place, plus
 /// package-private `emit_*` helpers. Call sites use the helpers rather than
-/// constructing the struct and calling `event::emit` directly — keeps the event
-/// surface, field order, and naming in one file.
+/// constructing the struct and calling `event::emit` directly.
 module openzeppelin_payments::events;
 
 use sui::event;
 
 // === Events ===
 
-public struct PaymentEvent has copy, drop {
+/// Emitted when a customer settles an `Invoice`. Indexer subscribes filtered by
+/// `merchant_id` and resolves `invoice_id`/`order_ref` → settled.
+public struct InvoicePaid has copy, drop {
+    invoice_id: ID,
     merchant_id: ID,
     order_ref: vector<u8>,
     customer: address,
@@ -19,31 +21,20 @@ public struct PaymentEvent has copy, drop {
     timestamp_ms: u64,
 }
 
-public struct RedemptionCreated has copy, drop {
-    redemption_id: ID,
+/// Emitted when a customer redeems a `RedemptionVoucher`. Indexer subscribes filtered
+/// by `merchant_id` and resolves `voucher_id` → redeemed.
+public struct VoucherRedeemed has copy, drop {
+    voucher_id: ID,
     merchant_id: ID,
     customer: address,
     amount: u64,
-    expires_at_ms: u64,
-}
-
-public struct RedemptionVerified has copy, drop {
-    redemption_id: ID,
-    merchant_id: ID,
-    customer: address,
-    amount: u64,
-}
-
-public struct RedemptionReleased has copy, drop {
-    redemption_id: ID,
-    merchant_id: ID,
-    customer: address,
-    amount: u64,
+    timestamp_ms: u64,
 }
 
 // === Package Functions ===
 
-public(package) fun emit_payment(
+public(package) fun emit_invoice_paid(
+    invoice_id: ID,
     merchant_id: ID,
     order_ref: vector<u8>,
     customer: address,
@@ -51,7 +42,8 @@ public(package) fun emit_payment(
     loyalty_minted: u64,
     timestamp_ms: u64,
 ) {
-    event::emit(PaymentEvent {
+    event::emit(InvoicePaid {
+        invoice_id,
         merchant_id,
         order_ref,
         customer,
@@ -61,36 +53,18 @@ public(package) fun emit_payment(
     });
 }
 
-public(package) fun emit_redemption_created(
-    redemption_id: ID,
+public(package) fun emit_voucher_redeemed(
+    voucher_id: ID,
     merchant_id: ID,
     customer: address,
     amount: u64,
-    expires_at_ms: u64,
+    timestamp_ms: u64,
 ) {
-    event::emit(RedemptionCreated {
-        redemption_id,
+    event::emit(VoucherRedeemed {
+        voucher_id,
         merchant_id,
         customer,
         amount,
-        expires_at_ms,
+        timestamp_ms,
     });
-}
-
-public(package) fun emit_redemption_verified(
-    redemption_id: ID,
-    merchant_id: ID,
-    customer: address,
-    amount: u64,
-) {
-    event::emit(RedemptionVerified { redemption_id, merchant_id, customer, amount });
-}
-
-public(package) fun emit_redemption_released(
-    redemption_id: ID,
-    merchant_id: ID,
-    customer: address,
-    amount: u64,
-) {
-    event::emit(RedemptionReleased { redemption_id, merchant_id, customer, amount });
 }

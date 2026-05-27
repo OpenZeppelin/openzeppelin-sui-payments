@@ -1,8 +1,3 @@
-/// Centralised event definitions for the payments package.
-///
-/// Modeled after `openzeppelin-sui-amm::events`: event structs in one place, plus
-/// package-private `emit_*` helpers. Call sites use the helpers rather than
-/// constructing the struct and calling `event::emit` directly.
 module openzeppelin_payments::events;
 
 use sui::event;

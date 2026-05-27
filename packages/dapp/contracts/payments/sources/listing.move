@@ -11,8 +11,10 @@ const EZeroPrice: vector<u8> = b"Listing price must be greater than zero";
 
 // === Structs ===
 
+// TODO#q: add multiple custom attributes per catalogue item
+
 public struct Listing has drop, store {
-    id: u64,
+    id: ID,
     name: String,
     price_units: u64,
     active: bool,
@@ -20,7 +22,7 @@ public struct Listing has drop, store {
 
 // === View Functions ===
 
-public fun listing_id(l: &Listing): u64 { l.id }
+public fun listing_id(l: &Listing): ID { l.id }
 
 public fun listing_name(l: &Listing): &String { &l.name }
 
@@ -30,9 +32,13 @@ public fun listing_active(l: &Listing): bool { l.active }
 
 // === Package Functions ===
 
-public(package) fun new(id: u64, name: String, price_units: u64): Listing {
+/// Construct a Listing with a freshly-generated `ID` (via
+/// `tx_context::fresh_object_address`). The ID is used both as the Table key on
+/// `Merchant.listings` and stored on the listing itself for convenience.
+public(package) fun new(name: String, price_units: u64, ctx: &mut TxContext): Listing {
     assert!(!name.is_empty(), EEmptyName);
     assert!(price_units > 0, EZeroPrice);
+    let id = object::id_from_address(ctx.fresh_object_address());
     Listing { id, name, price_units, active: true }
 }
 

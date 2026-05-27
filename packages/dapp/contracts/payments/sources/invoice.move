@@ -5,6 +5,10 @@ use sui::clock::Clock;
 // === Errors ===
 
 #[error(code = 0)]
+const EZeroAmount: vector<u8> = b"Invoice amount must be greater than zero";
+#[error(code = 1)]
+const EZeroTtl: vector<u8> = b"Invoice ttl_ms must be greater than zero";
+#[error(code = 2)]
 const ENotExpired: vector<u8> = b"Invoice has not yet expired";
 
 // === Structs ===
@@ -48,22 +52,26 @@ public fun expires_at_ms(i: &Invoice): u64 { i.expires_at_ms }
 // === Package Functions ===
 
 /// Construct an Invoice. Only `merchant::issue_invoice` calls this — the cap check
-/// and amount/ttl validation happen there.
+/// happens there; field-level invariants (`amount > 0`, `ttl_ms > 0`) are enforced
+/// here so any future construction path inherits the same guarantees.
 public(package) fun new(
     merchant_id: ID,
     payout_address: address,
     amount: u64,
     order_ref: vector<u8>,
-    expires_at_ms: u64,
+    ttl_ms: u64,
+    clock: &Clock,
     ctx: &mut TxContext,
 ): Invoice {
+    assert!(amount > 0, EZeroAmount);
+    assert!(ttl_ms > 0, EZeroTtl);
     Invoice {
         id: object::new(ctx),
         merchant_id,
         payout_address,
         amount,
         order_ref,
-        expires_at_ms,
+        expires_at_ms: clock.timestamp_ms() + ttl_ms,
     }
 }
 

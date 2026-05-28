@@ -22,13 +22,13 @@ public struct Listing has drop, store {
 
 // === View Functions ===
 
-public fun listing_id(l: &Listing): ID { l.id }
+public fun listing_id(self: &Listing): ID { self.id }
 
-public fun listing_name(l: &Listing): &String { &l.name }
+public fun listing_name(self: &Listing): &String { &self.name }
 
-public fun listing_price(l: &Listing): u64 { l.price_units }
+public fun listing_price(self: &Listing): u64 { self.price_units }
 
-public fun listing_active(l: &Listing): bool { l.active }
+public fun listing_active(self: &Listing): bool { self.active }
 
 // === Package Functions ===
 
@@ -38,20 +38,23 @@ public fun listing_active(l: &Listing): bool { l.active }
 public(package) fun new(name: String, price_units: u64, ctx: &mut TxContext): Listing {
     assert!(!name.is_empty(), EEmptyName);
     assert!(price_units > 0, EZeroPrice);
+
     let id = object::id_from_address(ctx.fresh_object_address());
     Listing { id, name, price_units, active: true }
 }
 
-public(package) fun set_price(l: &mut Listing, price_units: u64) {
+public(package) fun set_price(self: &mut Listing, price_units: u64) {
     assert!(price_units > 0, EZeroPrice);
-    l.price_units = price_units;
+
+    self.price_units = price_units;
 }
 
-public(package) fun set_name(l: &mut Listing, name: String) {
+public(package) fun set_name(self: &mut Listing, name: String) {
     assert!(!name.is_empty(), EEmptyName);
-    l.name = name;
+    
+    self.name = name;
 }
 
-public(package) fun set_active(l: &mut Listing, active: bool) {
-    l.active = active;
+public(package) fun set_active(self: &mut Listing, active: bool) {
+    self.active = active;
 }

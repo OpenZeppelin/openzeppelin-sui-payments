@@ -92,8 +92,8 @@ public fun share(invoice: Invoice) {
 /// merchant's), mints loyalty rewards into the customer's PAS `Account<LOYALTY>`,
 /// destroys the Invoice, and emits `InvoicePaid`.
 public fun pay<S>(
-    m: &mut Merchant,
     invoice: Invoice,
+    merchant: &mut Merchant,
     send_request: Request<SendFunds<Balance<S>>>,
     policy_s: &Policy<Balance<S>>,
     customer_loyalty_account: &Account,
@@ -102,7 +102,7 @@ public fun pay<S>(
 ) {
     let now = clock.timestamp_ms();
     let invoice_id = object::id(&invoice);
-    let merchant_id = object::id(m);
+    let merchant_id = object::id(merchant);
 
     // Invoice validity
     assert!(invoice.merchant_id == merchant_id, EWrongMerchantForInvoice);
@@ -118,7 +118,7 @@ public fun pay<S>(
     assert!(customer_loyalty_account.owner() == sender, EWrongLoyaltyRecipient);
 
     // Snapshot mint params (immutable read) and consume the invoice
-    let (num, den, max) = merchant::mint_params(m);
+    let (num, den, max) = merchant::mint_params(merchant);
     let Invoice { id, amount: payment_amount, order_ref, .. } = invoice;
     id.delete();
 
@@ -130,7 +130,7 @@ public fun pay<S>(
     let mint_amount: u64 = if (raw > (max as u128)) { max } else { (raw as u64) };
     if (mint_amount > 0) {
         loyalty::mint_into(
-            merchant::loyalty_treasury_cap_mut(m),
+            merchant::loyalty_treasury_cap_mut(merchant),
             customer_loyalty_account,
             mint_amount,
         );
@@ -158,8 +158,8 @@ public fun cancel(invoice: Invoice, clock: &Clock) {
 
 // === View Functions ===
 
-public fun merchant_id(i: &Invoice): ID { i.merchant_id }
-public fun payout_address(i: &Invoice): address { i.payout_address }
-public fun amount(i: &Invoice): u64 { i.amount }
-public fun order_ref(i: &Invoice): &vector<u8> { &i.order_ref }
-public fun expires_at_ms(i: &Invoice): u64 { i.expires_at_ms }
+public fun merchant_id(self: &Invoice): ID { self.merchant_id }
+public fun payout_address(self: &Invoice): address { self.payout_address }
+public fun amount(self: &Invoice): u64 { self.amount }
+public fun order_ref(self: &Invoice): &vector<u8> { &self.order_ref }
+public fun expires_at_ms(self: &Invoice): u64 { self.expires_at_ms }

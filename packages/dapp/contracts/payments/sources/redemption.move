@@ -84,8 +84,8 @@ public fun share(voucher: Voucher) {
 /// `amount` LOYALTY from their PAS Account), burns the balance via the merchant's
 /// `TreasuryCap`, destroys the voucher, and emits `VoucherRedeemed`.
 public fun redeem(
-    m: &mut Merchant,
     voucher: Voucher,
+    merchant: &mut Merchant,
     mut unlock_req: Request<UnlockFunds<Balance<LOYALTY>>>,
     policy_loyalty: &Policy<Balance<LOYALTY>>,
     clock: &Clock,
@@ -93,7 +93,7 @@ public fun redeem(
 ) {
     let now = clock.timestamp_ms();
     let voucher_id = object::id(&voucher);
-    let merchant_id = object::id(m);
+    let merchant_id = object::id(merchant);
 
     // Voucher validity
     assert!(voucher.merchant_id == merchant_id, EWrongMerchantForVoucher);
@@ -114,7 +114,7 @@ public fun redeem(
 
     // Burn
     balance::decrease_supply(
-        coin::supply_mut(merchant::loyalty_treasury_cap_mut(m)),
+        coin::supply_mut(merchant::loyalty_treasury_cap_mut(merchant)),
         funds,
     );
 
@@ -131,6 +131,6 @@ public fun cancel(voucher: Voucher, clock: &Clock) {
 
 // === View Functions ===
 
-public fun merchant_id(v: &Voucher): ID { v.merchant_id }
-public fun amount(v: &Voucher): u64 { v.amount }
-public fun expires_at_ms(v: &Voucher): u64 { v.expires_at_ms }
+public fun merchant_id(self: &Voucher): ID { self.merchant_id }
+public fun amount(self: &Voucher): u64 { self.amount }
+public fun expires_at_ms(self: &Voucher): u64 { self.expires_at_ms }

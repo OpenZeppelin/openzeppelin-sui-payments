@@ -8,7 +8,7 @@
 ///   1. `sui publish` → `loyalty::init` creates the LOYALTY currency. Deployer holds
 ///      `TreasuryCap<LOYALTY>` and a frozen `CoinMetadata<LOYALTY>`.
 ///   2. Deployer's PTB:
-///        loyalty         = loyalty::setup(&mut namespace, treasury_cap, ctx)
+///        loyalty         = loyalty::create(&mut namespace, treasury_cap, ctx)
 ///        (merchant, cap) = merchant::create(loyalty, name, logo_url, payout,
 ///                                           num, den, max, ctx)
 ///        merchant::share(merchant);  transfer `cap` to the deployer's address.
@@ -121,44 +121,39 @@ public fun share(m: Merchant) {
 
 // === View Functions ===
 
-public fun name(m: &Merchant): &String { &m.name }
+public fun name(self: &Merchant): &String { &self.name }
 
-public fun logo_url(m: &Merchant): &Option<String> { &m.logo_url }
+public fun logo_url(self: &Merchant): &Option<String> { &self.logo_url }
 
-public fun payout_address(m: &Merchant): address { m.payout_address }
+public fun payout_address(self: &Merchant): address { self.payout_address }
 
-public fun loyalty_policy_id(m: &Merchant): ID { m.loyalty_policy_id }
+public fun loyalty_policy_id(self: &Merchant): ID { self.loyalty_policy_id }
 
-public fun mint_params(m: &Merchant): (u64, u64, u64) {
-    (m.mint_numerator, m.mint_denominator, m.max_mint_per_payment)
+public fun mint_params(self: &Merchant): (u64, u64, u64) {
+    (self.mint_numerator, self.mint_denominator, self.max_mint_per_payment)
 }
 
-public fun listings_count(m: &Merchant): u64 { m.listings.length() }
+public fun listing(self: &Merchant, id: ID): &Listing {
+    assert!(self.listings.contains(id), EListingNotFound);
 
-public fun borrow_listing(m: &Merchant, id: ID): &Listing {
-    assert!(m.listings.contains(id), EListingNotFound);
-    m.listings.borrow(id)
-}
-
-public fun contains_listing(m: &Merchant, id: ID): bool {
-    m.listings.contains(id)
+    self.listings.borrow(id)
 }
 
 // === Admin Functions ===
 
-public fun set_payout_address(m: &mut Merchant, _cap: &MerchantCap, addr: address) {
-    m.payout_address = addr;
+public fun set_payout_address(self: &mut Merchant, _cap: &MerchantCap, addr: address) {
+    self.payout_address = addr;
 }
 
-public fun set_display(m: &mut Merchant, _cap: &MerchantCap, name: String, logo: Option<String>) {
+public fun set_display(self: &mut Merchant, _cap: &MerchantCap, name: String, logo: Option<String>) {
     assert!(!name.is_empty(), EEmptyName);
-    m.name = name;
-    m.logo_url = logo;
+    self.name = name;
+    self.logo_url = logo;
 }
 
 // TODO#q: can we pass Listing object as an argument?
 public fun add_listing(
-    m: &mut Merchant,
+    self: &mut Merchant,
     _cap: &MerchantCap,
     name: String,
     price_units: u64,
@@ -166,28 +161,28 @@ public fun add_listing(
 ): ID {
     let listing = listing::new(name, price_units, ctx);
     let id = listing.listing_id();
-    m.listings.add(id, listing);
+    self.listings.add(id, listing);
     id
 }
 
-public fun set_listing_price(m: &mut Merchant, _cap: &MerchantCap, id: ID, price_units: u64) {
-    assert!(m.listings.contains(id), EListingNotFound);
-    listing::set_price(m.listings.borrow_mut(id), price_units);
+public fun set_listing_price(self: &mut Merchant, _cap: &MerchantCap, id: ID, price_units: u64) {
+    assert!(self.listings.contains(id), EListingNotFound);
+    listing::set_price(self.listings.borrow_mut(id), price_units);
 }
 
-public fun set_listing_name(m: &mut Merchant, _cap: &MerchantCap, id: ID, name: String) {
-    assert!(m.listings.contains(id), EListingNotFound);
-    listing::set_name(m.listings.borrow_mut(id), name);
+public fun set_listing_name(self: &mut Merchant, _cap: &MerchantCap, id: ID, name: String) {
+    assert!(self.listings.contains(id), EListingNotFound);
+    listing::set_name(self.listings.borrow_mut(id), name);
 }
 
-public fun set_listing_active(m: &mut Merchant, _cap: &MerchantCap, id: ID, active: bool) {
-    assert!(m.listings.contains(id), EListingNotFound);
-    listing::set_active(m.listings.borrow_mut(id), active);
+public fun set_listing_active(self: &mut Merchant, _cap: &MerchantCap, id: ID, active: bool) {
+    assert!(self.listings.contains(id), EListingNotFound);
+    listing::set_active(self.listings.borrow_mut(id), active);
 }
 
-public fun remove_listing(m: &mut Merchant, _cap: &MerchantCap, id: ID): Listing {
-    assert!(m.listings.contains(id), EListingNotFound);
-    m.listings.remove(id)
+public fun remove_listing(self: &mut Merchant, _cap: &MerchantCap, id: ID): Listing {
+    assert!(self.listings.contains(id), EListingNotFound);
+    self.listings.remove(id)
 }
 
 // === Package Functions ===

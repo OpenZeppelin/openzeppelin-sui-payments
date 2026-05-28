@@ -19,6 +19,7 @@
 /// control — no merchant-binding field or cap-id assert needed.
 module openzeppelin_payments::merchant;
 
+use openzeppelin_payments::events;
 use openzeppelin_payments::listing::{Listing, Variant};
 use openzeppelin_payments::loyalty::{Self, Loyalty, LOYALTY};
 use pas::policy::PolicyCap;
@@ -159,7 +160,11 @@ public fun set_display(
 /// Aborts if the same Listing ID is already present (Table::add semantics).
 public fun add_listing(self: &mut Merchant, _cap: &MerchantCap, listing: Listing): ID {
     let id = listing.id();
+    let merchant_id = object::id(self);
     self.listings.add(id, listing);
+
+    events::emit_listing_added(merchant_id, id);
+    
     id
 }
 
@@ -168,7 +173,25 @@ public fun add_listing(self: &mut Merchant, _cap: &MerchantCap, listing: Listing
 public fun remove_listing(self: &mut Merchant, _cap: &MerchantCap, id: ID) {
     assert!(self.listings.contains(id), EListingNotFound);
 
+    let merchant_id = object::id(self);
     self.listings.remove(id);
+
+    events::emit_listing_removed(merchant_id, id);
+}
+
+/// Toggle a listing's `active` flag. Aborts if the listing does not exist.
+public fun set_listing_activity(
+    self: &mut Merchant,
+    _cap: &MerchantCap,
+    listing_id: ID,
+    active: bool,
+) {
+    assert!(self.listings.contains(listing_id), EListingNotFound);
+
+    let merchant_id = object::id(self);
+    self.listings.borrow_mut(listing_id).set_active(active);
+
+    events::emit_listing_status_changed(merchant_id, listing_id, active);
 }
 
 /// Insert a variant into an existing listing and return its ID. Aborts if the
@@ -181,7 +204,12 @@ public fun add_listing_variant(
 ): ID {
     assert!(self.listings.contains(listing_id), EListingNotFound);
 
-    self.listings.borrow_mut(listing_id).add_variant(variant)
+    let merchant_id = object::id(self);
+    let id = self.listings.borrow_mut(listing_id).add_variant(variant);
+
+    events::emit_variant_added(merchant_id, listing_id, id);
+
+    id
 }
 
 /// Remove a variant by ID from an existing listing. Aborts if the listing
@@ -193,8 +221,9 @@ public fun remove_listing_variant(
     variant_id: ID,
 ) {
     assert!(self.listings.contains(listing_id), EListingNotFound);
-
+    let merchant_id = object::id(self);
     self.listings.borrow_mut(listing_id).remove_variant(variant_id);
+    events::emit_variant_removed(merchant_id, listing_id, variant_id);
 }
 
 // === Package Functions ===

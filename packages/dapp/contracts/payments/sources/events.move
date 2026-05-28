@@ -2,6 +2,9 @@ module openzeppelin_payments::events;
 
 use sui::event;
 
+// TODO#q: remove merchant_id from events (the only one merchant available)
+// TODO#q: add module docs
+
 // === Events ===
 
 /// Emitted when a customer settles an `Invoice`. Indexer subscribes filtered by
@@ -24,6 +27,39 @@ public struct VoucherRedeemed has copy, drop {
     customer: address,
     amount: u64,
     timestamp_ms: u64,
+}
+
+/// Emitted when a merchant adds a `Listing`.
+public struct ListingAdded has copy, drop {
+    merchant_id: ID,
+    listing_id: ID,
+}
+
+/// Emitted when a merchant removes a `Listing`.
+public struct ListingRemoved has copy, drop {
+    merchant_id: ID,
+    listing_id: ID,
+}
+
+/// Emitted when a merchant toggles a listing's `active` flag.
+public struct ListingStatusChanged has copy, drop {
+    merchant_id: ID,
+    listing_id: ID,
+    active: bool,
+}
+
+/// Emitted when a merchant adds a `Variant` to a listing.
+public struct VariantAdded has copy, drop {
+    merchant_id: ID,
+    listing_id: ID,
+    variant_id: ID,
+}
+
+/// Emitted when a merchant removes a `Variant` from a listing.
+public struct VariantRemoved has copy, drop {
+    merchant_id: ID,
+    listing_id: ID,
+    variant_id: ID,
 }
 
 // === Package Functions ===
@@ -62,4 +98,28 @@ public(package) fun emit_voucher_redeemed(
         amount,
         timestamp_ms,
     });
+}
+
+public(package) fun emit_listing_added(merchant_id: ID, listing_id: ID) {
+    event::emit(ListingAdded { merchant_id, listing_id });
+}
+
+public(package) fun emit_listing_removed(merchant_id: ID, listing_id: ID) {
+    event::emit(ListingRemoved { merchant_id, listing_id });
+}
+
+public(package) fun emit_listing_status_changed(
+    merchant_id: ID,
+    listing_id: ID,
+    active: bool,
+) {
+    event::emit(ListingStatusChanged { merchant_id, listing_id, active });
+}
+
+public(package) fun emit_variant_added(merchant_id: ID, listing_id: ID, variant_id: ID) {
+    event::emit(VariantAdded { merchant_id, listing_id, variant_id });
+}
+
+public(package) fun emit_variant_removed(merchant_id: ID, listing_id: ID, variant_id: ID) {
+    event::emit(VariantRemoved { merchant_id, listing_id, variant_id });
 }

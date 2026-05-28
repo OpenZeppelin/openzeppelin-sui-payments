@@ -18,6 +18,8 @@ const EEmptyName: vector<u8> = b"Listing name cannot be empty";
 const EZeroPrice: vector<u8> = b"Listing price must be greater than zero";
 #[error(code = 2)]
 const EVariantNotFound: vector<u8> = b"Variant not found";
+#[error(code = 3)]
+const EActiveStateUnchanged: vector<u8> = b"Listing already has the requested active state";
 
 // === Structs ===
 
@@ -74,7 +76,7 @@ public fun loyalty_price(self: &Variant): &Option<u64> { &self.loyalty_price }
 /// `tx_context::fresh_object_address`) and no variants. Variants are added
 /// post-construction via `add_variant`. The ID is used both as the Table key
 /// on `Merchant.listings` and stored on the listing itself for convenience.
-public(package) fun new(name: String, ctx: &mut TxContext): Listing {
+public fun new(name: String, ctx: &mut TxContext): Listing {
     assert!(!name.is_empty(), EEmptyName);
 
     let id = object::id_from_address(ctx.fresh_object_address());
@@ -103,15 +105,18 @@ public(package) fun set_name(self: &mut Listing, name: String) {
     self.name = name;
 }
 
-/// Toggle whether this listing is purchasable.
+/// Toggle whether this listing is purchasable. Aborts if `active` matches the
+/// current state (no-op guard).
 public(package) fun set_active(self: &mut Listing, active: bool) {
+    assert!(self.active != active, EActiveStateUnchanged);
+
     self.active = active;
 }
 
 /// Construct a `Variant` with a freshly-generated `ID` stored inside it (used
 /// as the key when inserted into a Listing via `add_variant`). `name` must be
 /// non-empty; `price` must be > 0; `loyalty_price`, if Some, must also be > 0.
-public(package) fun new_variant(
+public fun new_variant(
     name: String,
     price: u64,
     loyalty_price: Option<u64>,

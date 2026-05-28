@@ -76,6 +76,7 @@ public fun new(
     clock: &Clock,
     ctx: &mut TxContext,
 ): Voucher {
+    // TODO#q: hide ttl inside Voucher
     assert!(ttl_ms > 0, EZeroTtl);
 
     let customer = unlock_req.data().owner();

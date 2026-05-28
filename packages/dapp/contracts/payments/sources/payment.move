@@ -79,6 +79,8 @@ public fun new(
     }
 }
 
+// TODO#q: we should be able to let user know which items are purchased (their price), what is total and how many points will be earned
+
 /// Share the `Invoice`. Required because it is `key`-only (no `store`), so
 /// `transfer::share_object` is restricted to this module.
 public fun share(invoice: Invoice) {

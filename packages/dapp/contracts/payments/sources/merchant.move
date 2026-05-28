@@ -19,7 +19,7 @@
 /// control — no merchant-binding field or cap-id assert needed.
 module openzeppelin_payments::merchant;
 
-use openzeppelin_payments::listing::{Self, Listing};
+use openzeppelin_payments::listing::{Listing, Variant};
 use openzeppelin_payments::loyalty::{Self, Loyalty, LOYALTY};
 use pas::policy::PolicyCap;
 use std::string::String;
@@ -59,8 +59,7 @@ public struct Merchant has key {
     mint_denominator: u64,
     max_mint_per_payment: u64,
     /// Listing CRUD lives below; this is the storage. Keys are freshly-generated
-    /// `ID`s (via `tx_context::fresh_object_address`) — stable across all listings
-    /// past and future, with no monotonic counter to maintain.
+    /// `ID`s (via `tx_context::fresh_object_address`).
     listings: Table<ID, Listing>,
 }
 
@@ -145,44 +144,57 @@ public fun set_payout_address(self: &mut Merchant, _cap: &MerchantCap, addr: add
     self.payout_address = addr;
 }
 
-public fun set_display(self: &mut Merchant, _cap: &MerchantCap, name: String, logo: Option<String>) {
+public fun set_display(
+    self: &mut Merchant,
+    _cap: &MerchantCap,
+    name: String,
+    logo: Option<String>,
+) {
     assert!(!name.is_empty(), EEmptyName);
     self.name = name;
     self.logo_url = logo;
 }
 
-// TODO#q: can we pass Listing object as an argument?
-public fun add_listing(
-    self: &mut Merchant,
-    _cap: &MerchantCap,
-    name: String,
-    price_units: u64,
-    ctx: &mut TxContext,
-): ID {
-    let listing = listing::new(name, price_units, ctx);
-    let id = listing.listing_id();
+/// Take ownership of a caller-built `Listing` and store it under its own ID.
+/// Aborts if the same Listing ID is already present (Table::add semantics).
+public fun add_listing(self: &mut Merchant, _cap: &MerchantCap, listing: Listing): ID {
+    let id = listing.id();
     self.listings.add(id, listing);
     id
 }
 
-public fun set_listing_price(self: &mut Merchant, _cap: &MerchantCap, id: ID, price_units: u64) {
+/// Pull a `Listing` out of the merchant. Caller owns it after this and may
+/// mutate it, drop it, or re-add it via `add_listing`.
+public fun remove_listing(self: &mut Merchant, _cap: &MerchantCap, id: ID) {
     assert!(self.listings.contains(id), EListingNotFound);
-    listing::set_price(self.listings.borrow_mut(id), price_units);
+
+    self.listings.remove(id);
 }
 
-public fun set_listing_name(self: &mut Merchant, _cap: &MerchantCap, id: ID, name: String) {
-    assert!(self.listings.contains(id), EListingNotFound);
-    listing::set_name(self.listings.borrow_mut(id), name);
+/// Insert a variant into an existing listing and return its ID. Aborts if the
+/// listing does not exist, or if the variant's `id` already exists on that listing.
+public fun add_listing_variant(
+    self: &mut Merchant,
+    _cap: &MerchantCap,
+    listing_id: ID,
+    variant: Variant,
+): ID {
+    assert!(self.listings.contains(listing_id), EListingNotFound);
+
+    self.listings.borrow_mut(listing_id).add_variant(variant)
 }
 
-public fun set_listing_active(self: &mut Merchant, _cap: &MerchantCap, id: ID, active: bool) {
-    assert!(self.listings.contains(id), EListingNotFound);
-    listing::set_active(self.listings.borrow_mut(id), active);
-}
+/// Remove a variant by ID from an existing listing. Aborts if the listing
+/// or the variant does not exist.
+public fun remove_listing_variant(
+    self: &mut Merchant,
+    _cap: &MerchantCap,
+    listing_id: ID,
+    variant_id: ID,
+) {
+    assert!(self.listings.contains(listing_id), EListingNotFound);
 
-public fun remove_listing(self: &mut Merchant, _cap: &MerchantCap, id: ID): Listing {
-    assert!(self.listings.contains(id), EListingNotFound);
-    self.listings.remove(id)
+    self.listings.borrow_mut(listing_id).remove_variant(variant_id);
 }
 
 // === Package Functions ===

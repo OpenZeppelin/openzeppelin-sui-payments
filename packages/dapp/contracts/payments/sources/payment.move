@@ -2,7 +2,7 @@
 ///
 /// Merchant POS issues an `Invoice` via `invoice::new(merchant, &cap, items, ...)`
 /// (cap-gated). Each invoice carries a vector of `Item` line entries
-/// (listing_id, variant_id, quantity, unit_price) and an `amount` total computed
+/// (variant_id, quantity, unit_price) and an `amount` total computed
 /// from them at issuance. Merchant calls `invoice::share(invoice)` and surfaces
 /// the object ID through a QR. Customer scans and calls `invoice::pay<S>(...)`,
 /// which resolves the customer's already-approved PAS `send_funds` request

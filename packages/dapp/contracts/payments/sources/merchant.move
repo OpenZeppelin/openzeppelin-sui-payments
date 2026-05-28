@@ -38,6 +38,8 @@ const EZeroMintDenominator: vector<u8> = b"Mint denominator cannot be zero";
 const EListingNotFound: vector<u8> = b"Listing not found";
 #[error(code = 3)]
 const EZeroQuantity: vector<u8> = b"Item quantity must be greater than zero";
+#[error(code = 4)]
+const EVariantNotFound: vector<u8> = b"Variant not found in catalog";
 
 // === Structs ===
 
@@ -64,6 +66,11 @@ public struct Merchant has key {
     /// Listing CRUD lives below; this is the storage. Keys are freshly-generated
     /// `ID`s (via `tx_context::fresh_object_address`).
     listings: Table<ID, Listing>,
+    /// Reverse index: `variant_id -> listing_id`. Lets checkout look up a variant
+    /// from a single ID without the customer having to carry both IDs. Maintained
+    /// in lockstep with `Listing.variants` by `add_listing`/`remove_listing` and
+    /// `add_listing_variant`/`remove_listing_variant`.
+    variant_index: Table<ID, ID>,
 }
 
 // TODO#q: create capabilities for catalog CRUD, redemption verifications and balance withdrawal.
@@ -82,7 +89,6 @@ public struct MerchantCap has key, store {
 /// reused across both flows. Snapshot pricing decouples the order from later
 /// mutations of the underlying `Variant`.
 public struct Item has copy, drop, store {
-    listing_id: ID,
     variant_id: ID,
     quantity: u64,
     unit_price: u64,
@@ -120,6 +126,7 @@ public fun create(
         mint_denominator,
         max_mint_per_payment,
         listings: table::new(ctx),
+        variant_index: table::new(ctx),
     };
     let cap = MerchantCap { id: object::new(ctx) };
 
@@ -153,8 +160,6 @@ public fun listing(self: &Merchant, id: ID): &Listing {
     self.listings.borrow(id)
 }
 
-public fun listing_id(self: &Item): ID { self.listing_id }
-
 public fun variant_id(self: &Item): ID { self.variant_id }
 
 public fun quantity(self: &Item): u64 { self.quantity }
@@ -179,24 +184,34 @@ public fun set_display(
 }
 
 /// Take ownership of a caller-built `Listing` and store it under its own ID.
-/// Aborts if the same Listing ID is already present (Table::add semantics).
+/// Every variant already on the listing is registered in `variant_index` so
+/// checkout can resolve it from the variant ID alone. Aborts if the listing
+/// ID or any of its variant IDs already exist on the merchant.
 public fun add_listing(self: &mut Merchant, _cap: &MerchantCap, listing: Listing): ID {
     let id = listing.id();
     let merchant_id = object::id(self);
-    self.listings.add(id, listing);
 
+    listing.variants().keys().do!(|vid| {
+        self.variant_index.add(vid, id);
+    });
+
+    self.listings.add(id, listing);
     events::emit_listing_added(merchant_id, id);
-    
+
     id
 }
 
-/// Pull a `Listing` out of the merchant. Caller owns it after this and may
-/// mutate it, drop it, or re-add it via `add_listing`.
+/// Pull a `Listing` out of the merchant. Every variant on the removed listing
+/// is also dropped from `variant_index`.
 public fun remove_listing(self: &mut Merchant, _cap: &MerchantCap, id: ID) {
     assert!(self.listings.contains(id), EListingNotFound);
 
     let merchant_id = object::id(self);
-    self.listings.remove(id);
+    let removed = self.listings.remove(id);
+
+    removed.variants().keys().do!(|vid| {
+        let _: ID = self.variant_index.remove(vid);
+    });
 
     events::emit_listing_removed(merchant_id, id);
 }
@@ -216,8 +231,9 @@ public fun set_listing_activity(
     events::emit_listing_status_changed(merchant_id, listing_id, active);
 }
 
-/// Insert a variant into an existing listing and return its ID. Aborts if the
-/// listing does not exist, or if the variant's `id` already exists on that listing.
+/// Insert a variant into an existing listing and return its ID. The new variant
+/// is also registered in `variant_index`. Aborts if the listing does not exist
+/// or if the variant's `id` already exists.
 public fun add_listing_variant(
     self: &mut Merchant,
     _cap: &MerchantCap,
@@ -228,14 +244,15 @@ public fun add_listing_variant(
 
     let merchant_id = object::id(self);
     let id = self.listings.borrow_mut(listing_id).add_variant(variant);
+    self.variant_index.add(id, listing_id);
 
     events::emit_variant_added(merchant_id, listing_id, id);
 
     id
 }
 
-/// Remove a variant by ID from an existing listing. Aborts if the listing
-/// or the variant does not exist.
+/// Remove a variant by ID from an existing listing. Also dropped from
+/// `variant_index`. Aborts if the listing or the variant does not exist.
 public fun remove_listing_variant(
     self: &mut Merchant,
     _cap: &MerchantCap,
@@ -243,8 +260,11 @@ public fun remove_listing_variant(
     variant_id: ID,
 ) {
     assert!(self.listings.contains(listing_id), EListingNotFound);
+
     let merchant_id = object::id(self);
     self.listings.borrow_mut(listing_id).remove_variant(variant_id);
+    let _: ID = self.variant_index.remove(variant_id);
+
     events::emit_variant_removed(merchant_id, listing_id, variant_id);
 }
 
@@ -256,18 +276,15 @@ public(package) fun loyalty_treasury_cap_mut(m: &mut Merchant): &mut TreasuryCap
     &mut m.loyalty_treasury_cap
 }
 
-/// Build an order line by snapshotting the variant's current stablecoin price
-/// from the merchant's catalog. `quantity` must be > 0. Aborts if the listing
-/// or variant does not exist.
-public(package) fun new_item(
-    merchant: &Merchant,
-    listing_id: ID,
-    variant_id: ID,
-    quantity: u64,
-): Item {
+/// Build an order line by snapshotting the variant's current stablecoin price.
+/// The listing is resolved from `variant_index` so callers only need the
+/// variant ID. `quantity` must be > 0. Aborts if the variant is not registered.
+public(package) fun new_item(merchant: &Merchant, variant_id: ID, quantity: u64): Item {
     assert!(quantity > 0, EZeroQuantity);
+    assert!(merchant.variant_index.contains(variant_id), EVariantNotFound);
 
+    let listing_id = *merchant.variant_index.borrow(variant_id);
     let unit_price = merchant.listing(listing_id).variant(&variant_id).price();
 
-    Item { listing_id, variant_id, quantity, unit_price }
+    Item { variant_id, quantity, unit_price }
 }

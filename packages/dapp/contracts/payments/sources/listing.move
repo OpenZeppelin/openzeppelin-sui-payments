@@ -23,8 +23,6 @@ const EActiveStateUnchanged: vector<u8> = b"Listing already has the requested ac
 
 // === Structs ===
 
-// TODO#q: flatten with groups?
-
 /// A menu entry. Holds zero-or-more priced variants and an `active` toggle.
 public struct Listing has drop, store {
     id: ID,

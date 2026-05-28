@@ -58,7 +58,7 @@ public struct RedeemUnlockApproval() has drop;
 ///   - `unlock_funds`    requires `RedeemUnlockApproval` (gates redemption)
 ///   - `send_funds`      NOT registered → soulbound (transfers can never resolve)
 ///   - `clawback_funds`  NOT registered + `clawback_allowed = false`
-public fun setup(
+public fun create(
     namespace: &mut Namespace,
     treasury_cap: TreasuryCap<LOYALTY>,
     ctx: &mut TxContext,

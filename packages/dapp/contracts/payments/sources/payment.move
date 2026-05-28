@@ -29,26 +29,25 @@ const EZeroTtl: vector<u8> = b"Invoice ttl_ms must be greater than zero";
 #[error(code = 2)]
 const ENotExpired: vector<u8> = b"Invoice has not yet expired";
 #[error(code = 3)]
-const EWrongMerchantForInvoice: vector<u8> =
-    b"Invoice was not created for this Merchant";
-#[error(code = 4)]
 const EInvoiceExpired: vector<u8> = b"Invoice has expired";
-#[error(code = 5)]
+#[error(code = 4)]
 const EAmountMismatch: vector<u8> =
     b"Send amount does not match Invoice amount";
-#[error(code = 6)]
+#[error(code = 5)]
 const EWrongRecipient: vector<u8> =
     b"Send recipient does not match Invoice payout_address";
-#[error(code = 7)]
+#[error(code = 6)]
 const EWrongLoyaltyRecipient: vector<u8> =
     b"Loyalty account owner does not match payer";
 
 // === Structs ===
 
 /// Merchant-issued invoice. Customer scans `id` from a QR and settles via `pay`.
+/// 
+/// NOTE: No `merchant_id` field: the package's single-Merchant invariant means there's
+/// only one Merchant any Invoice could be against.
 public struct Invoice has key {
     id: UID,
-    merchant_id: ID,
     payout_address: address,
     amount: u64,
     order_ref: vector<u8>,
@@ -73,7 +72,6 @@ public fun new(
 
     Invoice {
         id: object::new(ctx),
-        merchant_id: object::id(merchant),
         payout_address: merchant::payout_address(merchant),
         amount,
         order_ref,
@@ -86,6 +84,8 @@ public fun new(
 public fun share(invoice: Invoice) {
     transfer::share_object(invoice);
 }
+
+// TODO#q: return receipt
 
 /// Customer settles the invoice. Resolves the customer's already-approved stablecoin
 /// `send_funds` request (transfers `Balance<S>` from customer's PAS Account to the
@@ -105,7 +105,6 @@ public fun pay<S>(
     let merchant_id = object::id(merchant);
 
     // Invoice validity
-    assert!(invoice.merchant_id == merchant_id, EWrongMerchantForInvoice);
     assert!(now < invoice.expires_at_ms, EInvoiceExpired);
 
     // Send-request integrity
@@ -158,7 +157,6 @@ public fun cancel(invoice: Invoice, clock: &Clock) {
 
 // === View Functions ===
 
-public fun merchant_id(self: &Invoice): ID { self.merchant_id }
 public fun payout_address(self: &Invoice): address { self.payout_address }
 public fun amount(self: &Invoice): u64 { self.amount }
 public fun order_ref(self: &Invoice): &vector<u8> { &self.order_ref }

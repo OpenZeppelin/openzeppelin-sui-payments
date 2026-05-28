@@ -41,23 +41,21 @@ const EZeroTtl: vector<u8> = b"Voucher ttl_ms must be greater than zero";
 #[error(code = 2)]
 const ENotExpired: vector<u8> = b"Voucher has not yet expired";
 #[error(code = 3)]
-const EWrongMerchantForVoucher: vector<u8> =
-    b"Voucher was not created for this Merchant";
-#[error(code = 4)]
 const EVoucherExpired: vector<u8> = b"Voucher has expired";
-#[error(code = 5)]
+#[error(code = 4)]
 const EWrongCustomer: vector<u8> =
     b"Account owner does not match Voucher customer";
 
 // === Structs ===
 
-/// Customer-issued voucher with locked `Balance<LOYALTY>`. The merchant whose ID is
-/// in `merchant_id` can `redeem` the voucher to burn the locked balance. After
-/// `expires_at_ms`, anyone can `cancel` to return the locked balance to the customer
-/// (identified by `customer`).
+/// Customer-issued voucher with locked `Balance<LOYALTY>`. The package's single
+/// Merchant can `redeem` to burn the locked balance. After `expires_at_ms`, anyone
+/// can `cancel` to return the locked balance to the customer (identified by `customer`).
+/// 
+/// NOTE: No `merchant_id` field: the package's single-Merchant invariant means there's
+/// only one Merchant any Voucher could be against.
 public struct Voucher has key {
     id: UID,
-    merchant_id: ID,
     customer: address,
     funds: Balance<LOYALTY>,
     expires_at_ms: u64,
@@ -72,7 +70,6 @@ public struct Voucher has key {
 /// merchant's loyalty `Policy` with our package-private `RedeemUnlockApproval`
 /// witness, and stashes the resulting `Balance<LOYALTY>` inside the Voucher.
 public fun new(
-    merchant: &Merchant,
     mut unlock_req: Request<UnlockFunds<Balance<LOYALTY>>>,
     policy_loyalty: &Policy<Balance<LOYALTY>>,
     ttl_ms: u64,
@@ -90,7 +87,6 @@ public fun new(
 
     Voucher {
         id: object::new(ctx),
-        merchant_id: object::id(merchant),
         customer,
         funds,
         expires_at_ms: clock.timestamp_ms() + ttl_ms,
@@ -115,7 +111,6 @@ public fun redeem(
     let merchant_id = object::id(merchant);
     let now = clock.timestamp_ms();
 
-    assert!(voucher.merchant_id == merchant_id, EWrongMerchantForVoucher);
     assert!(now < voucher.expires_at_ms, EVoucherExpired);
 
     let Voucher { id, customer, funds, .. } = voucher;
@@ -148,7 +143,6 @@ public fun cancel(
 
 // === View Functions ===
 
-public fun merchant_id(self: &Voucher): ID { self.merchant_id }
 public fun customer(self: &Voucher): address { self.customer }
 public fun amount(self: &Voucher): u64 { self.funds.value() }
 public fun expires_at_ms(self: &Voucher): u64 { self.expires_at_ms }

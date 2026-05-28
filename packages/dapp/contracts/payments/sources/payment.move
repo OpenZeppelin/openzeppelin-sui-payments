@@ -23,25 +23,23 @@ use sui::clock::Clock;
 // === Errors ===
 
 #[error(code = 0)]
-const EWrongMerchantCap: vector<u8> = b"MerchantCap does not match this Merchant";
-#[error(code = 1)]
 const EZeroAmount: vector<u8> = b"Invoice amount must be greater than zero";
-#[error(code = 2)]
+#[error(code = 1)]
 const EZeroTtl: vector<u8> = b"Invoice ttl_ms must be greater than zero";
-#[error(code = 3)]
+#[error(code = 2)]
 const ENotExpired: vector<u8> = b"Invoice has not yet expired";
-#[error(code = 4)]
+#[error(code = 3)]
 const EWrongMerchantForInvoice: vector<u8> =
     b"Invoice was not created for this Merchant";
-#[error(code = 5)]
+#[error(code = 4)]
 const EInvoiceExpired: vector<u8> = b"Invoice has expired";
-#[error(code = 6)]
+#[error(code = 5)]
 const EAmountMismatch: vector<u8> =
     b"Send amount does not match Invoice amount";
-#[error(code = 7)]
+#[error(code = 6)]
 const EWrongRecipient: vector<u8> =
     b"Send recipient does not match Invoice payout_address";
-#[error(code = 8)]
+#[error(code = 7)]
 const EWrongLoyaltyRecipient: vector<u8> =
     b"Loyalty account owner does not match payer";
 
@@ -62,22 +60,21 @@ public struct Invoice has key {
 /// Merchant issues an Invoice. Cap check + amount/ttl validation happen here.
 /// Returns the `Invoice` for the caller to `share` and surface as a QR.
 public fun new(
-    m: &Merchant,
-    cap: &MerchantCap,
+    merchant: &Merchant,
+    _: &MerchantCap,
     amount: u64,
     order_ref: vector<u8>,
     ttl_ms: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ): Invoice {
-    assert!(object::id(m) == merchant::merchant_id(cap), EWrongMerchantCap);
     assert!(amount > 0, EZeroAmount);
     assert!(ttl_ms > 0, EZeroTtl);
 
     Invoice {
         id: object::new(ctx),
-        merchant_id: object::id(m),
-        payout_address: merchant::payout_address(m),
+        merchant_id: object::id(merchant),
+        payout_address: merchant::payout_address(merchant),
         amount,
         order_ref,
         expires_at_ms: clock.timestamp_ms() + ttl_ms,

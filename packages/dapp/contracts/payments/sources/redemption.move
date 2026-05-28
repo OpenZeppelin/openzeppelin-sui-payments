@@ -26,19 +26,17 @@ use sui::coin;
 // === Errors ===
 
 #[error(code = 0)]
-const EWrongMerchantCap: vector<u8> = b"MerchantCap does not match this Merchant";
-#[error(code = 1)]
 const EZeroAmount: vector<u8> = b"Voucher amount must be greater than zero";
-#[error(code = 2)]
+#[error(code = 1)]
 const EZeroTtl: vector<u8> = b"Voucher ttl_ms must be greater than zero";
-#[error(code = 3)]
+#[error(code = 2)]
 const ENotExpired: vector<u8> = b"Voucher has not yet expired";
-#[error(code = 4)]
+#[error(code = 3)]
 const EWrongMerchantForVoucher: vector<u8> =
     b"Voucher was not created for this Merchant";
-#[error(code = 5)]
+#[error(code = 4)]
 const EVoucherExpired: vector<u8> = b"Voucher has expired";
-#[error(code = 6)]
+#[error(code = 5)]
 const EAmountMismatch: vector<u8> =
     b"Unlock amount does not match Voucher amount";
 
@@ -58,20 +56,19 @@ public struct Voucher has key {
 
 /// Merchant issues a voucher. Cap check + amount/ttl validation happen here.
 public fun new(
-    m: &Merchant,
-    cap: &MerchantCap,
+    merchant: &Merchant,
+    _: &MerchantCap,
     amount: u64,
     ttl_ms: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ): Voucher {
-    assert!(object::id(m) == merchant::merchant_id(cap), EWrongMerchantCap);
     assert!(amount > 0, EZeroAmount);
     assert!(ttl_ms > 0, EZeroTtl);
 
     Voucher {
         id: object::new(ctx),
-        merchant_id: object::id(m),
+        merchant_id: object::id(merchant),
         amount,
         expires_at_ms: clock.timestamp_ms() + ttl_ms,
     }

@@ -13,9 +13,10 @@
 ///                                           num, den, max, ctx)
 ///        merchant::share(merchant);  transfer `cap` to the deployer's address.
 ///
-/// Cap-by-reference gating: every merchant-only entry (here and in `invoice` /
-/// `redemption`) asserts `object::id(m) == cap.merchant_id` with `EWrongMerchantCap`
-/// (each module declares its own copy of the const).
+/// Cap-by-reference gating: every merchant-only entry takes `__cap: &MerchantCap`.
+/// The package's OTW + Loyalty-hot-potato bootstrap guarantees exactly one
+/// `MerchantCap` exists per published package, so possession alone is the access
+/// control — no merchant-binding field or cap-id assert needed.
 module openzeppelin_payments::merchant;
 
 use openzeppelin_payments::listing::{Self, Listing};
@@ -29,12 +30,10 @@ use sui::table::{Self, Table};
 // === Errors ===
 
 #[error(code = 0)]
-const EWrongMerchantCap: vector<u8> = b"MerchantCap does not match this Merchant";
-#[error(code = 1)]
 const EEmptyName: vector<u8> = b"Merchant name cannot be empty";
-#[error(code = 2)]
+#[error(code = 1)]
 const EZeroMintDenominator: vector<u8> = b"Mint denominator cannot be zero";
-#[error(code = 3)]
+#[error(code = 2)]
 const EListingNotFound: vector<u8> = b"Listing not found";
 
 // === Structs ===
@@ -67,15 +66,15 @@ public struct Merchant has key {
 
 // TODO#q: create capabilities for catalog CRUD, redemption verifications and balance withdrawal.
 
-/// Owned capability. `key, store` so it can be transferred between addresses.
+/// Owned capability. `key, store` so it can be transferred between addresses. The
+/// package's OTW + Loyalty-hot-potato bootstrap guarantees exactly one `MerchantCap`
+/// exists per published package, so possession alone is the access control — no
+/// merchant-binding field needed.
 public struct MerchantCap has key, store {
     id: UID,
-    merchant_id: ID,
 }
 
 // === Public Functions ===
-
-// TODO#q: no need to create multiple Merchants
 
 /// Consume the `Loyalty` bundle from `loyalty::setup` and return the `Merchant` and its
 /// `MerchantCap`. The caller controls placement — typically `merchant::share(merchant)`
@@ -108,12 +107,7 @@ public fun create(
         max_mint_per_payment,
         listings: table::new(ctx),
     };
-    let merchant_id = object::id(&merchant);
-
-    let cap = MerchantCap {
-        id: object::new(ctx),
-        merchant_id,
-    };
+    let cap = MerchantCap { id: object::new(ctx) };
 
     (merchant, cap)
 }
@@ -141,8 +135,6 @@ public fun mint_params(m: &Merchant): (u64, u64, u64) {
 
 public fun listings_count(m: &Merchant): u64 { m.listings.length() }
 
-public fun merchant_id(cap: &MerchantCap): ID { cap.merchant_id }
-
 public fun borrow_listing(m: &Merchant, id: ID): &Listing {
     assert!(m.listings.contains(id), EListingNotFound);
     m.listings.borrow(id)
@@ -154,13 +146,11 @@ public fun contains_listing(m: &Merchant, id: ID): bool {
 
 // === Admin Functions ===
 
-public fun set_payout_address(m: &mut Merchant, cap: &MerchantCap, addr: address) {
-    assert!(object::id(m) == cap.merchant_id, EWrongMerchantCap);
+public fun set_payout_address(m: &mut Merchant, _cap: &MerchantCap, addr: address) {
     m.payout_address = addr;
 }
 
-public fun set_display(m: &mut Merchant, cap: &MerchantCap, name: String, logo: Option<String>) {
-    assert!(object::id(m) == cap.merchant_id, EWrongMerchantCap);
+public fun set_display(m: &mut Merchant, _cap: &MerchantCap, name: String, logo: Option<String>) {
     assert!(!name.is_empty(), EEmptyName);
     m.name = name;
     m.logo_url = logo;
@@ -169,38 +159,33 @@ public fun set_display(m: &mut Merchant, cap: &MerchantCap, name: String, logo: 
 // TODO#q: can we pass Listing object as an argument?
 public fun add_listing(
     m: &mut Merchant,
-    cap: &MerchantCap,
+    _cap: &MerchantCap,
     name: String,
     price_units: u64,
     ctx: &mut TxContext,
 ): ID {
-    assert!(object::id(m) == cap.merchant_id, EWrongMerchantCap);
     let listing = listing::new(name, price_units, ctx);
     let id = listing.listing_id();
     m.listings.add(id, listing);
     id
 }
 
-public fun set_listing_price(m: &mut Merchant, cap: &MerchantCap, id: ID, price_units: u64) {
-    assert!(object::id(m) == cap.merchant_id, EWrongMerchantCap);
+public fun set_listing_price(m: &mut Merchant, _cap: &MerchantCap, id: ID, price_units: u64) {
     assert!(m.listings.contains(id), EListingNotFound);
     listing::set_price(m.listings.borrow_mut(id), price_units);
 }
 
-public fun set_listing_name(m: &mut Merchant, cap: &MerchantCap, id: ID, name: String) {
-    assert!(object::id(m) == cap.merchant_id, EWrongMerchantCap);
+public fun set_listing_name(m: &mut Merchant, _cap: &MerchantCap, id: ID, name: String) {
     assert!(m.listings.contains(id), EListingNotFound);
     listing::set_name(m.listings.borrow_mut(id), name);
 }
 
-public fun set_listing_active(m: &mut Merchant, cap: &MerchantCap, id: ID, active: bool) {
-    assert!(object::id(m) == cap.merchant_id, EWrongMerchantCap);
+public fun set_listing_active(m: &mut Merchant, _cap: &MerchantCap, id: ID, active: bool) {
     assert!(m.listings.contains(id), EListingNotFound);
     listing::set_active(m.listings.borrow_mut(id), active);
 }
 
-public fun remove_listing(m: &mut Merchant, cap: &MerchantCap, id: ID): Listing {
-    assert!(object::id(m) == cap.merchant_id, EWrongMerchantCap);
+public fun remove_listing(m: &mut Merchant, _cap: &MerchantCap, id: ID): Listing {
     assert!(m.listings.contains(id), EListingNotFound);
     m.listings.remove(id)
 }

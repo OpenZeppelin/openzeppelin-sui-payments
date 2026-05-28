@@ -16,7 +16,7 @@ public struct InvoicePaid has copy, drop {
     timestamp_ms: u64,
 }
 
-/// Emitted when a customer redeems a `RedemptionVoucher`. Indexer subscribes filtered
+/// Emitted when a customer redeems a `Voucher`. Indexer subscribes filtered
 /// by `merchant_id` and resolves `voucher_id` → redeemed.
 public struct VoucherRedeemed has copy, drop {
     voucher_id: ID,

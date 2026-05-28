@@ -36,6 +36,8 @@ const EEmptyName: vector<u8> = b"Merchant name cannot be empty";
 const EZeroMintDenominator: vector<u8> = b"Mint denominator cannot be zero";
 #[error(code = 2)]
 const EListingNotFound: vector<u8> = b"Listing not found";
+#[error(code = 3)]
+const EZeroQuantity: vector<u8> = b"Item quantity must be greater than zero";
 
 // === Structs ===
 
@@ -72,6 +74,18 @@ public struct Merchant has key {
 /// merchant-binding field needed.
 public struct MerchantCap has key, store {
     id: UID,
+}
+
+/// One line on an `Invoice` (or a `Voucher`) — a quantity of a specific listing
+/// variant at a snapshotted unit price. The price is in stablecoin units for
+/// invoices and `LOYALTY` units for vouchers; the type is the same so it can be
+/// reused across both flows. Snapshot pricing decouples the order from later
+/// mutations of the underlying `Variant`.
+public struct Item has copy, drop, store {
+    listing_id: ID,
+    variant_id: ID,
+    quantity: u64,
+    unit_price: u64,
 }
 
 // === Public Functions ===
@@ -138,6 +152,14 @@ public fun listing(self: &Merchant, id: ID): &Listing {
 
     self.listings.borrow(id)
 }
+
+public fun listing_id(self: &Item): ID { self.listing_id }
+
+public fun variant_id(self: &Item): ID { self.variant_id }
+
+public fun quantity(self: &Item): u64 { self.quantity }
+
+public fun unit_price(self: &Item): u64 { self.unit_price }
 
 // === Admin Functions ===
 
@@ -232,4 +254,20 @@ public fun remove_listing_variant(
 /// and `redemption::redeem` (burn redeemed loyalty).
 public(package) fun loyalty_treasury_cap_mut(m: &mut Merchant): &mut TreasuryCap<LOYALTY> {
     &mut m.loyalty_treasury_cap
+}
+
+/// Build an order line by snapshotting the variant's current stablecoin price
+/// from the merchant's catalog. `quantity` must be > 0. Aborts if the listing
+/// or variant does not exist.
+public(package) fun new_item(
+    merchant: &Merchant,
+    listing_id: ID,
+    variant_id: ID,
+    quantity: u64,
+): Item {
+    assert!(quantity > 0, EZeroQuantity);
+
+    let unit_price = merchant.listing(listing_id).variant(&variant_id).price();
+
+    Item { listing_id, variant_id, quantity, unit_price }
 }

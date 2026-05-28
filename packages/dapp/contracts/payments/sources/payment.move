@@ -1,18 +1,20 @@
 /// Invoice — merchant-issued payment intent + customer-side settlement.
 ///
-/// Merchant POS issues an `Invoice` via `invoice::new(m, &cap, ...)` (cap-gated), then
-/// `invoice::share(invoice)` and surfaces the object ID through a QR. Customer scans
-/// and calls `invoice::pay<S>(...)`, which resolves the customer's already-approved
-/// PAS `send_funds` request (transfers stablecoin into the merchant's PAS Account),
-/// mints loyalty rewards into the customer's PAS Account, destroys the Invoice, and
-/// emits `InvoicePaid`.
+/// Merchant POS issues an `Invoice` via `invoice::new(merchant, &cap, items, ...)`
+/// (cap-gated). Each invoice carries a vector of `Item` line entries
+/// (listing_id, variant_id, quantity, unit_price) and an `amount` total computed
+/// from them at issuance. Merchant calls `invoice::share(invoice)` and surfaces
+/// the object ID through a QR. Customer scans and calls `invoice::pay<S>(...)`,
+/// which resolves the customer's already-approved PAS `send_funds` request
+/// (transfers stablecoin into the merchant's PAS Account), mints loyalty rewards
+/// into the customer's PAS Account, destroys the Invoice, and emits `InvoicePaid`.
 ///
 /// Cleanup: `invoice::cancel(invoice, &clock)` (permissionless after expiry).
 module openzeppelin_payments::invoice;
 
 use openzeppelin_payments::events;
 use openzeppelin_payments::loyalty;
-use openzeppelin_payments::merchant::{Self, Merchant, MerchantCap};
+use openzeppelin_payments::merchant::{Self, Merchant, MerchantCap, Item};
 use pas::account::Account;
 use pas::policy::Policy;
 use pas::request::Request;
@@ -31,24 +33,26 @@ const ENotExpired: vector<u8> = b"Invoice has not yet expired";
 #[error(code = 3)]
 const EInvoiceExpired: vector<u8> = b"Invoice has expired";
 #[error(code = 4)]
-const EAmountMismatch: vector<u8> =
-    b"Send amount does not match Invoice amount";
+const EAmountMismatch: vector<u8> = b"Send amount does not match Invoice amount";
 #[error(code = 5)]
-const EWrongRecipient: vector<u8> =
-    b"Send recipient does not match Invoice payout_address";
+const EWrongRecipient: vector<u8> = b"Send recipient does not match Invoice payout_address";
 #[error(code = 6)]
-const EWrongLoyaltyRecipient: vector<u8> =
-    b"Loyalty account owner does not match payer";
+const EWrongLoyaltyRecipient: vector<u8> = b"Loyalty account owner does not match payer";
+#[error(code = 7)]
+const ENoItems: vector<u8> = b"Invoice must include at least one item";
+#[error(code = 8)]
+const EAmountOverflow: vector<u8> = b"Invoice amount exceeds u64 range";
 
 // === Structs ===
 
 /// Merchant-issued invoice. Customer scans `id` from a QR and settles via `pay`.
-/// 
+///
 /// NOTE: No `merchant_id` field: the package's single-Merchant invariant means there's
 /// only one Merchant any Invoice could be against.
 public struct Invoice has key {
     id: UID,
     payout_address: address,
+    items: vector<Item>,
     amount: u64,
     order_ref: vector<u8>,
     expires_at_ms: u64,
@@ -56,30 +60,32 @@ public struct Invoice has key {
 
 // === Public Functions ===
 
-/// Merchant issues an Invoice. Cap check + amount/ttl validation happen here.
-/// Returns the `Invoice` for the caller to `share` and surface as a QR.
+/// Merchant issues an Invoice from a list of `Item`s. The total `amount` is computed
+/// from the items at issuance; at least one item is required and total must be > 0.
 public fun new(
     merchant: &Merchant,
     _: &MerchantCap,
-    amount: u64,
+    items: vector<Item>,
     order_ref: vector<u8>,
     ttl_ms: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ): Invoice {
-    assert!(amount > 0, EZeroAmount);
+    assert!(!items.is_empty(), ENoItems);
     assert!(ttl_ms > 0, EZeroTtl);
+
+    let amount = compute_total(&items);
+    assert!(amount > 0, EZeroAmount);
 
     Invoice {
         id: object::new(ctx),
         payout_address: merchant::payout_address(merchant),
+        items,
         amount,
         order_ref,
         expires_at_ms: clock.timestamp_ms() + ttl_ms,
     }
 }
-
-// TODO#q: we should be able to let user know which items are purchased (their price), what is total and how many points will be earned
 
 /// Share the `Invoice`. Required because it is `key`-only (no `store`), so
 /// `transfer::share_object` is restricted to this module.
@@ -160,6 +166,24 @@ public fun cancel(invoice: Invoice, clock: &Clock) {
 // === View Functions ===
 
 public fun payout_address(self: &Invoice): address { self.payout_address }
+
+public fun items(self: &Invoice): &vector<Item> { &self.items }
+
 public fun amount(self: &Invoice): u64 { self.amount }
+
 public fun order_ref(self: &Invoice): &vector<u8> { &self.order_ref }
+
 public fun expires_at_ms(self: &Invoice): u64 { self.expires_at_ms }
+
+// === Private Functions ===
+
+/// Sum `item.quantity * item.unit_price` across all items using a u128 accumulator,
+/// asserting the final total fits in u64 (otherwise aborts with `EAmountOverflow`).
+fun compute_total(items: &vector<Item>): u64 {
+    let mut total: u128 = 0;
+    items.do_ref!(|item| {
+        total = total + (item.quantity() as u128) * (item.unit_price() as u128);
+    });
+
+    total.try_as_u64().destroy_or!(abort EAmountOverflow)
+}

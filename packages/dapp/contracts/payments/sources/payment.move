@@ -1,9 +1,10 @@
 /// Invoice — merchant-issued payment intent + customer-side settlement.
 ///
-/// Merchant POS issues an `Invoice` via `invoice::new(merchant, &cap, items, ...)`
-/// (cap-gated). Each invoice carries a vector of `Item` line entries
-/// (variant_id, quantity, unit_price) and an `amount` total computed
-/// from them at issuance. Merchant calls `invoice::share(invoice)` and surfaces
+/// Merchant POS issues an `Invoice` via
+/// `invoice::new(merchant, &cap, listing_variant_ids, quantities, ...)` (cap-gated).
+/// `Item` line entries are derived inside `new` by snapshotting each variant's
+/// current price; the resulting `amount` total is the sum of `quantity * unit_price`.
+/// Merchant calls `invoice::share(invoice)` and surfaces
 /// the object ID through a QR. Customer scans and calls `invoice::pay<S>(...)`,
 /// which resolves the customer's already-approved PAS `send_funds` request
 /// (transfers stablecoin into the merchant's PAS Account), mints loyalty rewards
@@ -41,7 +42,7 @@ const EWrongLoyaltyRecipient: vector<u8> = b"Loyalty account owner does not matc
 #[error(code = 7)]
 const ENoItems: vector<u8> = b"Invoice must include at least one item";
 #[error(code = 8)]
-const EAmountOverflow: vector<u8> = b"Invoice amount exceeds u64 range";
+const ELengthMismatch: vector<u8> = b"listing_variant_ids and quantities must have the same length";
 
 // === Structs ===
 
@@ -60,21 +61,32 @@ public struct Invoice has key {
 
 // === Public Functions ===
 
-/// Merchant issues an Invoice from a list of `Item`s. The total `amount` is computed
-/// from the items at issuance; at least one item is required and total must be > 0.
+/// Merchant issues an Invoice from parallel `listing_variant_ids` + `quantities`
+/// vectors; each pair is resolved into an `Item` by snapshotting the variant's
+/// current price from the merchant's catalog. The total `amount` is computed
+/// from those items. Aborts if the vectors are empty (`ENoItems`), if their
+/// lengths differ (`ELengthMismatch`), if `ttl_ms` is 0 (`EZeroTtl`), if the
+/// computed total is 0 (`EZeroAmount`), or if any variant ID is not registered
+/// in the merchant's catalog.
 public fun new(
     merchant: &Merchant,
     _: &MerchantCap,
-    items: vector<Item>,
+    listing_variant_ids: vector<ID>,
+    quantities: vector<u64>,
     order_ref: vector<u8>,
     ttl_ms: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ): Invoice {
-    assert!(!items.is_empty(), ENoItems);
+    assert!(!listing_variant_ids.is_empty(), ENoItems);
+    assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
     assert!(ttl_ms > 0, EZeroTtl);
 
-    let amount = compute_total(&items);
+    let items = listing_variant_ids.zip_map!(quantities, |vid, qty| {
+        merchant.new_item(vid, qty)
+    });
+
+    let amount = merchant::compute_total(&items);
     assert!(amount > 0, EZeroAmount);
 
     Invoice {
@@ -174,16 +186,3 @@ public fun amount(self: &Invoice): u64 { self.amount }
 public fun order_ref(self: &Invoice): &vector<u8> { &self.order_ref }
 
 public fun expires_at_ms(self: &Invoice): u64 { self.expires_at_ms }
-
-// === Private Functions ===
-
-/// Sum `item.quantity * item.unit_price` across all items using a u128 accumulator,
-/// asserting the final total fits in u64 (otherwise aborts with `EAmountOverflow`).
-fun compute_total(items: &vector<Item>): u64 {
-    let mut total: u128 = 0;
-    items.do_ref!(|item| {
-        total = total + (item.quantity() as u128) * (item.unit_price() as u128);
-    });
-
-    total.try_as_u64().destroy_or!(abort EAmountOverflow)
-}

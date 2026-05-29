@@ -23,7 +23,7 @@ module openzeppelin_payments::redemption;
 
 use openzeppelin_payments::events;
 use openzeppelin_payments::loyalty::{Self, LOYALTY};
-use openzeppelin_payments::merchant::{Self, Merchant, MerchantCap};
+use openzeppelin_payments::merchant::{Self, Merchant, MerchantCap, Item};
 use pas::account::Account;
 use pas::policy::Policy;
 use pas::request::Request;
@@ -43,20 +43,22 @@ const ENotExpired: vector<u8> = b"Voucher has not yet expired";
 #[error(code = 3)]
 const EVoucherExpired: vector<u8> = b"Voucher has expired";
 #[error(code = 4)]
-const EWrongCustomer: vector<u8> =
-    b"Account owner does not match Voucher customer";
+const EWrongCustomer: vector<u8> = b"Account owner does not match Voucher customer";
+#[error(code = 5)]
+const EInvalidAmount: vector<u8> = b"Voucher amount must be equal to total redeemed amount";
 
 // === Structs ===
 
 /// Customer-issued voucher with locked `Balance<LOYALTY>`. The package's single
 /// Merchant can `redeem` to burn the locked balance. After `expires_at_ms`, anyone
 /// can `cancel` to return the locked balance to the customer (identified by `customer`).
-/// 
+///
 /// NOTE: No `merchant_id` field: the package's single-Merchant invariant means there's
 /// only one Merchant any Voucher could be against.
 public struct Voucher has key {
     id: UID,
     customer: address,
+    items: vector<Item>,
     funds: Balance<LOYALTY>,
     expires_at_ms: u64,
 }
@@ -70,8 +72,11 @@ public struct Voucher has key {
 /// merchant's loyalty `Policy` with our package-private `RedeemUnlockApproval`
 /// witness, and stashes the resulting `Balance<LOYALTY>` inside the Voucher.
 public fun new(
+    merchant: &Merchant,
     mut unlock_req: Request<UnlockFunds<Balance<LOYALTY>>>,
     policy_loyalty: &Policy<Balance<LOYALTY>>,
+    listing_variant_ids: vector<ID>,
+    quantities: vector<u64>,
     ttl_ms: u64,
     clock: &Clock,
     ctx: &mut TxContext,
@@ -83,12 +88,18 @@ public fun new(
     let amount = unlock_req.data().funds().value();
     assert!(amount > 0, EZeroAmount);
 
+    let items = listing_variant_ids.zip_map!(quantities, |vid, qty| {
+        merchant.new_item(vid, qty)
+    });
+    assert!(amount == merchant::compute_total(&items), EInvalidAmount);
+
     unlock_req.approve(loyalty::new_redeem_unlock_approval());
     let funds: Balance<LOYALTY> = unlock_funds::resolve(unlock_req, policy_loyalty);
 
     Voucher {
         id: object::new(ctx),
         customer,
+        items,
         funds,
         expires_at_ms: clock.timestamp_ms() + ttl_ms,
     }
@@ -102,12 +113,7 @@ public fun share(voucher: Voucher) {
 
 /// Merchant redeems the voucher: burns the locked `Balance<LOYALTY>` via the
 /// merchant's `TreasuryCap<LOYALTY>`, destroys the voucher, emits `VoucherRedeemed`.
-public fun redeem(
-    voucher: Voucher,
-    _cap: &MerchantCap,
-    merchant: &mut Merchant,
-    clock: &Clock,
-) {
+public fun redeem(voucher: Voucher, _cap: &MerchantCap, merchant: &mut Merchant, clock: &Clock) {
     let voucher_id = object::id(&voucher);
     let merchant_id = object::id(merchant);
     let now = clock.timestamp_ms();
@@ -129,11 +135,7 @@ public fun redeem(
 /// Permissionless cleanup after expiry — deposits the locked balance back into the
 /// customer's PAS Account. Prevents griefing by an inactive merchant (whose refusal
 /// to redeem would otherwise strand the customer's loyalty until expiry).
-public fun cancel(
-    voucher: Voucher,
-    customer_loyalty_account: &Account,
-    clock: &Clock,
-) {
+public fun cancel(voucher: Voucher, customer_loyalty_account: &Account, clock: &Clock) {
     assert!(clock.timestamp_ms() >= voucher.expires_at_ms, ENotExpired);
     assert!(customer_loyalty_account.owner() == voucher.customer, EWrongCustomer);
 
@@ -145,5 +147,7 @@ public fun cancel(
 // === View Functions ===
 
 public fun customer(self: &Voucher): address { self.customer }
+
 public fun amount(self: &Voucher): u64 { self.funds.value() }
+
 public fun expires_at_ms(self: &Voucher): u64 { self.expires_at_ms }

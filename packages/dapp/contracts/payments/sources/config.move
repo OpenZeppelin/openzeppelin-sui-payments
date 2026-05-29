@@ -65,6 +65,15 @@ public fun new(
     }
 }
 
+/// Compute the loyalty amount earned on a `payment_amount` under this config:
+///
+///     `loyalty = min(payment_amount * mint_numerator / mint_denominator, max_mint_per_payment)`
+public fun compute_loyalty(self: &Config, payment_amount: u64): u64 {
+    payment_amount
+        .mul_div(self.mint_numerator, self.mint_denominator)
+        .min(self.max_mint_per_payment)
+}
+
 // === View Functions ===
 
 /// Numerator of the mint ratio.
@@ -81,12 +90,3 @@ public fun invoice_ttl_ms(self: &Config): u64 { self.invoice_ttl_ms }
 
 /// Lifetime (ms) applied to customer-issued vouchers.
 public fun voucher_ttl_ms(self: &Config): u64 { self.voucher_ttl_ms }
-
-/// Compute the loyalty amount earned on a `payment_amount` under this config:
-///
-///     `loyalty = min(payment_amount * mint_numerator / mint_denominator, max_mint_per_payment)`
-public fun compute_loyalty(self: &Config, payment_amount: u64): u64 {
-    payment_amount
-        .mul_div(self.mint_numerator, self.mint_denominator)
-        .min(self.max_mint_per_payment)
-}

@@ -40,6 +40,38 @@ public struct Variant has drop, store {
     loyalty_price: Option<u64>,
 }
 
+// === Public Functions ===
+
+/// Construct a Listing with a freshly-generated `ID` (via
+/// `tx_context::fresh_object_address`) and no variants. Variants are added
+/// post-construction via `add_variant`. The ID is used both as the Table key
+/// on `Merchant.listings` and stored on the listing itself for convenience.
+public fun new(name: String, ctx: &mut TxContext): Listing {
+    assert!(!name.is_empty(), EEmptyName);
+
+    let id = object::id_from_address(ctx.fresh_object_address());
+    Listing { id, name, variants: vec_map::empty(), active: true }
+}
+
+/// Construct a `Variant` with a freshly-generated `ID` stored inside it (used
+/// as the key when inserted into a Listing via `add_variant`). `name` must be
+/// non-empty; `price` must be > 0; `loyalty_price`, if Some, must also be > 0.
+public fun new_variant(
+    name: String,
+    price: u64,
+    loyalty_price: Option<u64>,
+    ctx: &mut TxContext,
+): Variant {
+    assert!(!name.is_empty(), EEmptyName);
+    assert!(price > 0, EZeroPrice);
+    if (loyalty_price.is_some()) {
+        assert!(*loyalty_price.borrow() > 0, EZeroPrice);
+    };
+
+    let id = object::id_from_address(ctx.fresh_object_address());
+    Variant { id, name, price, loyalty_price }
+}
+
 // === View Functions ===
 
 /// The Listing's stable ID. Matches its key in `Merchant.listings`.
@@ -72,17 +104,6 @@ public fun loyalty_price(self: &Variant): &Option<u64> { &self.loyalty_price }
 
 // === Package Functions ===
 
-/// Construct a Listing with a freshly-generated `ID` (via
-/// `tx_context::fresh_object_address`) and no variants. Variants are added
-/// post-construction via `add_variant`. The ID is used both as the Table key
-/// on `Merchant.listings` and stored on the listing itself for convenience.
-public fun new(name: String, ctx: &mut TxContext): Listing {
-    assert!(!name.is_empty(), EEmptyName);
-
-    let id = object::id_from_address(ctx.fresh_object_address());
-    Listing { id, name, variants: vec_map::empty(), active: true }
-}
-
 /// Insert a variant and return its ID. Aborts if the variant's `id` already
 /// exists in this listing.
 public(package) fun add_variant(self: &mut Listing, variant: Variant): ID {
@@ -111,23 +132,4 @@ public(package) fun set_active(self: &mut Listing, active: bool) {
     assert!(self.active != active, EActiveStateUnchanged);
 
     self.active = active;
-}
-
-/// Construct a `Variant` with a freshly-generated `ID` stored inside it (used
-/// as the key when inserted into a Listing via `add_variant`). `name` must be
-/// non-empty; `price` must be > 0; `loyalty_price`, if Some, must also be > 0.
-public fun new_variant(
-    name: String,
-    price: u64,
-    loyalty_price: Option<u64>,
-    ctx: &mut TxContext,
-): Variant {
-    assert!(!name.is_empty(), EEmptyName);
-    assert!(price > 0, EZeroPrice);
-    if (loyalty_price.is_some()) {
-        assert!(*loyalty_price.borrow() > 0, EZeroPrice);
-    };
-
-    let id = object::id_from_address(ctx.fresh_object_address());
-    Variant { id, name, price, loyalty_price }
 }

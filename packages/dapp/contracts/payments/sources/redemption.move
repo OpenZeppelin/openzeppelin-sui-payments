@@ -10,7 +10,7 @@
 /// Customer wallet flow:
 ///   auth       = account::new_auth(&ctx)
 ///   unlock_req = customer_LOY.unlock_balance<LOYALTY>(&auth, amount, &ctx)
-///   voucher    = redemption::new(merchant, unlock_req, policy_loyalty, ttl_ms, &clock, ctx)
+///   voucher    = redemption::new(merchant, unlock_req, policy_loyalty, ids, qtys, &clock, ctx)
 ///   redemption::share(voucher)
 ///
 /// Merchant POS flow (after scanning the customer's QR):
@@ -37,14 +37,12 @@ use sui::coin;
 #[error(code = 0)]
 const EZeroAmount: vector<u8> = b"Voucher amount must be greater than zero";
 #[error(code = 1)]
-const EZeroTtl: vector<u8> = b"Voucher ttl_ms must be greater than zero";
-#[error(code = 2)]
 const ENotExpired: vector<u8> = b"Voucher has not yet expired";
-#[error(code = 3)]
+#[error(code = 2)]
 const EVoucherExpired: vector<u8> = b"Voucher has expired";
-#[error(code = 4)]
+#[error(code = 3)]
 const EWrongCustomer: vector<u8> = b"Account owner does not match Voucher customer";
-#[error(code = 5)]
+#[error(code = 4)]
 const EInvalidAmount: vector<u8> = b"Voucher amount must be equal to total redeemed amount";
 
 // === Structs ===
@@ -65,25 +63,20 @@ public struct Voucher has key {
 
 // === Public Functions ===
 
-// TODO#q: restrict input fields to be configurable by merchant (not selected by user)
-
 /// Customer creates a voucher. Extracts the LOYALTY balance via the unlock request
 /// (which the customer built using their PAS `Auth`), resolves it through the
 /// merchant's loyalty `Policy` with our package-private `RedeemUnlockApproval`
 /// witness, and stashes the resulting `Balance<LOYALTY>` inside the Voucher.
+/// `expires_at_ms` is derived from the merchant's `Config.voucher_ttl_ms`.
 public fun new(
     merchant: &Merchant,
     mut unlock_req: Request<UnlockFunds<Balance<LOYALTY>>>,
     policy_loyalty: &Policy<Balance<LOYALTY>>,
     listing_variant_ids: vector<ID>,
     quantities: vector<u64>,
-    ttl_ms: u64,
     clock: &Clock,
     ctx: &mut TxContext,
 ): Voucher {
-    // TODO#q: hide ttl inside Voucher
-    assert!(ttl_ms > 0, EZeroTtl);
-
     let customer = unlock_req.data().owner();
     let amount = unlock_req.data().funds().value();
     assert!(amount > 0, EZeroAmount);
@@ -101,7 +94,7 @@ public fun new(
         customer,
         items,
         funds,
-        expires_at_ms: clock.timestamp_ms() + ttl_ms,
+        expires_at_ms: clock.timestamp_ms() + merchant.config().voucher_ttl_ms(),
     }
 }
 

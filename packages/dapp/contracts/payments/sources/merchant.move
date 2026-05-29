@@ -9,8 +9,8 @@
 ///      `TreasuryCap<LOYALTY>` and a frozen `CoinMetadata<LOYALTY>`.
 ///   2. Deployer's PTB:
 ///        loyalty         = loyalty::create(&mut namespace, treasury_cap, ctx)
-///        (merchant, cap) = merchant::create(loyalty, name, logo_url, payout,
-///                                           num, den, max, ctx)
+///        config          = config::new(num, den, max, invoice_ttl_ms, voucher_ttl_ms)
+///        (merchant, cap) = merchant::create(loyalty, name, logo_url, payout, config, ctx)
 ///        merchant::share(merchant);  transfer `cap` to the deployer's address.
 ///
 /// Cap-by-reference gating: every merchant-only entry takes `__cap: &MerchantCap`.
@@ -19,6 +19,7 @@
 /// control — no merchant-binding field or cap-id assert needed.
 module openzeppelin_payments::merchant;
 
+use openzeppelin_payments::config::Config;
 use openzeppelin_payments::events;
 use openzeppelin_payments::listing::{Listing, Variant};
 use openzeppelin_payments::loyalty::{Self, Loyalty, LOYALTY};
@@ -33,20 +34,19 @@ use sui::table::{Self, Table};
 #[error(code = 0)]
 const EEmptyName: vector<u8> = b"Merchant name cannot be empty";
 #[error(code = 1)]
-const EZeroMintDenominator: vector<u8> = b"Mint denominator cannot be zero";
-#[error(code = 2)]
 const EListingNotFound: vector<u8> = b"Listing not found";
-#[error(code = 3)]
+#[error(code = 2)]
 const EZeroQuantity: vector<u8> = b"Item quantity must be greater than zero";
-#[error(code = 4)]
+#[error(code = 3)]
 const EVariantNotFound: vector<u8> = b"Variant not found in catalog";
-#[error(code = 5)]
+#[error(code = 4)]
 const EAmountOverflow: vector<u8> = b"Amount exceeds u64 range";
+#[error(code = 5)]
+const EConfigUnchanged: vector<u8> = b"Config matches the current value";
 
 // === Structs ===
 
 // TODO#q: group loyalty like structs together
-// TODO#q: mint_* move to configuration object
 
 /// Central shared object holding the merchant's entire on-chain state.
 public struct Merchant has key {
@@ -62,12 +62,11 @@ public struct Merchant has key {
     loyalty_treasury_cap: TreasuryCap<LOYALTY>,
     loyalty_policy_cap: PolicyCap<Balance<LOYALTY>>,
     loyalty_policy_id: ID,
-    /// Mint rate: `loyalty_minted = (payment_units * num) / den`, capped at `max`.
-    /// All three set at `create`, immutable thereafter — runtime mutation
-    /// would change "$1 = X points" under existing customers.
-    mint_numerator: u64,
-    mint_denominator: u64,
-    max_mint_per_payment: u64,
+    /// Loyalty mint configuration (numerator/denominator/cap). Replaceable via
+    /// `set_config` — note that changing the rate alters "$1 = X points" for
+    /// future settlements; existing invoices already snapshot both their
+    /// stablecoin `amount` and `loyalty` values at issuance, so they're unaffected.
+    config: Config,
     /// Listing CRUD lives below; this is the storage. Keys are freshly-generated
     /// `ID`s (via `tx_context::fresh_object_address`).
     listings: Table<ID, Listing>,
@@ -93,7 +92,7 @@ public struct MerchantCap has key, store {
 /// invoices and `LOYALTY` units for vouchers; the type is the same so it can be
 /// reused across both flows. Snapshot pricing decouples the order from later
 /// mutations of the underlying `Variant`.
-public struct Item has copy, drop, store {
+public struct Item has drop, store {
     variant_id: ID,
     quantity: u64,
     unit_price: u64,
@@ -109,13 +108,10 @@ public fun create(
     name: String,
     logo_url: Option<String>,
     payout_address: address,
-    mint_numerator: u64,
-    mint_denominator: u64,
-    max_mint_per_payment: u64,
+    config: Config,
     ctx: &mut TxContext,
 ): (Merchant, MerchantCap) {
     assert!(!name.is_empty(), EEmptyName);
-    assert!(mint_denominator != 0, EZeroMintDenominator);
 
     let (treasury_cap, policy_cap, policy_id) = loyalty::destruct(loyalty);
 
@@ -127,9 +123,7 @@ public fun create(
         loyalty_treasury_cap: treasury_cap,
         loyalty_policy_cap: policy_cap,
         loyalty_policy_id: policy_id,
-        mint_numerator,
-        mint_denominator,
-        max_mint_per_payment,
+        config,
         listings: table::new(ctx),
         variant_index: table::new(ctx),
     };
@@ -155,9 +149,7 @@ public fun payout_address(self: &Merchant): address { self.payout_address }
 
 public fun loyalty_policy_id(self: &Merchant): ID { self.loyalty_policy_id }
 
-public fun mint_params(self: &Merchant): (u64, u64, u64) {
-    (self.mint_numerator, self.mint_denominator, self.max_mint_per_payment)
-}
+public fun config(self: &Merchant): &Config { &self.config }
 
 public fun listing(self: &Merchant, id: ID): &Listing {
     assert!(self.listings.contains(id), EListingNotFound);
@@ -186,6 +178,20 @@ public fun set_display(
     assert!(!name.is_empty(), EEmptyName);
     self.name = name;
     self.logo_url = logo;
+}
+
+/// Replace the merchant's loyalty mint `Config`. Build the new value via
+/// `config::new(...)` and pass it in. The replacement is effective for
+/// subsequent settlements only; invoices already issued keep their snapshot
+/// `amount` and `loyalty` values and are unaffected. Aborts with
+/// `EConfigUnchanged` if the new config equals the current one.
+public fun set_config(self: &mut Merchant, _cap: &MerchantCap, config: Config) {
+    assert!(&self.config != &config, EConfigUnchanged);
+
+    self.config = config;
+
+    let merchant_id = object::id(self);
+    events::emit_config_updated(merchant_id);
 }
 
 /// Take ownership of a caller-built `Listing` and store it under its own ID.
@@ -279,8 +285,8 @@ public fun remove_listing_variant(
 
 /// Borrow the loyalty TreasuryCap. Called by `invoice::pay` (mint earned loyalty)
 /// and `redemption::redeem` (burn redeemed loyalty).
-public(package) fun loyalty_treasury_cap_mut(m: &mut Merchant): &mut TreasuryCap<LOYALTY> {
-    &mut m.loyalty_treasury_cap
+public(package) fun loyalty_treasury_cap_mut(self: &mut Merchant): &mut TreasuryCap<LOYALTY> {
+    &mut self.loyalty_treasury_cap
 }
 
 /// Build an order line by snapshotting the variant's current stablecoin price.
@@ -295,7 +301,6 @@ public(package) fun new_item(merchant: &Merchant, variant_id: ID, quantity: u64)
 
     Item { variant_id, quantity, unit_price }
 }
-
 
 // TODO#q: make public and move to the receipt.move module (can be reused by customer to calculate balance)
 

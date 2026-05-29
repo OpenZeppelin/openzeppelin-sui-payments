@@ -15,7 +15,7 @@ public struct InvoicePaid has copy, drop {
     order_ref: vector<u8>,
     customer: address,
     amount: u64,
-    loyalty_minted: u64,
+    loyalty: u64,
     timestamp_ms: u64,
 }
 
@@ -62,6 +62,11 @@ public struct VariantRemoved has copy, drop {
     variant_id: ID,
 }
 
+/// Emitted when a merchant replaces its loyalty mint `Config`.
+public struct ConfigUpdated has copy, drop {
+    merchant_id: ID,
+}
+
 // === Package Functions ===
 
 public(package) fun emit_invoice_paid(
@@ -70,7 +75,7 @@ public(package) fun emit_invoice_paid(
     order_ref: vector<u8>,
     customer: address,
     amount: u64,
-    loyalty_minted: u64,
+    loyalty: u64,
     timestamp_ms: u64,
 ) {
     event::emit(InvoicePaid {
@@ -79,7 +84,7 @@ public(package) fun emit_invoice_paid(
         order_ref,
         customer,
         amount,
-        loyalty_minted,
+        loyalty,
         timestamp_ms,
     });
 }
@@ -108,11 +113,7 @@ public(package) fun emit_listing_removed(merchant_id: ID, listing_id: ID) {
     event::emit(ListingRemoved { merchant_id, listing_id });
 }
 
-public(package) fun emit_listing_status_changed(
-    merchant_id: ID,
-    listing_id: ID,
-    active: bool,
-) {
+public(package) fun emit_listing_status_changed(merchant_id: ID, listing_id: ID, active: bool) {
     event::emit(ListingStatusChanged { merchant_id, listing_id, active });
 }
 
@@ -122,4 +123,10 @@ public(package) fun emit_variant_added(merchant_id: ID, listing_id: ID, variant_
 
 public(package) fun emit_variant_removed(merchant_id: ID, listing_id: ID, variant_id: ID) {
     event::emit(VariantRemoved { merchant_id, listing_id, variant_id });
+}
+
+public(package) fun emit_config_updated(merchant_id: ID) {
+    event::emit(ConfigUpdated {
+        merchant_id,
+    });
 }

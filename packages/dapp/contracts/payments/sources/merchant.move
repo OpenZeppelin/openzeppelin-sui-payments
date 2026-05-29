@@ -245,21 +245,16 @@ public fun add_listing_variant(
     id
 }
 
-// TODO#q: don't use listing_id as a parameter
-/// Remove a variant by ID from an existing listing. Also dropped from
-/// `variant_index`. Aborts if the listing or the variant does not exist.
-public fun remove_listing_variant(
-    self: &mut Merchant,
-    _cap: &MerchantCap,
-    listing_id: ID,
-    variant_id: ID,
-) {
-    assert!(self.listings.contains(listing_id), EListingNotFound);
+/// Remove a variant by ID from its listing. The owning listing is resolved
+/// via `variant_index` — no separate `listing_id` argument needed. Aborts
+/// with `EVariantNotFound` if the variant is not registered.
+public fun remove_listing_variant(self: &mut Merchant, _cap: &MerchantCap, variant_id: ID) {
+    assert!(self.variant_index.contains(variant_id), EVariantNotFound);
+
+    let listing_id = self.variant_index.remove(variant_id);
+    self.listings.borrow_mut(listing_id).remove_variant(variant_id);
 
     let merchant_id = object::id(self);
-    self.listings.borrow_mut(listing_id).remove_variant(variant_id);
-    let _: ID = self.variant_index.remove(variant_id);
-
     events::emit_variant_removed(merchant_id, listing_id, variant_id);
 }
 

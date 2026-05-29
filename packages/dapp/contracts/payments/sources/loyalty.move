@@ -13,7 +13,7 @@ use sui::coin_registry;
 public struct LOYALTY has drop {}
 
 /// Module init — creates the standard Sui currency and freezes its metadata.
-/// Policy creation happens in `setup` (the second deployer tx) because
+/// Policy creation happens in `create` (the second deployer tx) because
 /// `policy::new_for_currency` requires `&mut Namespace` which `init` can't take.
 fun init(otw: LOYALTY, ctx: &mut TxContext) {
     let (initializer, cap) = coin_registry::new_currency_with_otw(
@@ -32,11 +32,12 @@ fun init(otw: LOYALTY, ctx: &mut TxContext) {
 
 // === Structs ===
 
-/// Bundle of loyalty-side outputs from `setup`, consumed by
-/// `merchant::create`. `key`-only — has neither `drop` nor `store`,
-/// so the deployer cannot accidentally drop it or wrap it elsewhere.
-public struct Loyalty has key {
-    id: UID,
+/// Bundle of loyalty-side outputs from `create`, consumed by `merchant::create`
+/// which moves it whole into `Merchant.loyalty`. `store`-only — no `drop` and
+/// no `copy`, so the value is a hot potato that must be stored inside another
+/// struct (the Merchant) before the transaction ends. No `key`, so it cannot
+/// exist as a top-level on-chain object.
+public struct Loyalty has store {
     treasury_cap: TreasuryCap<LOYALTY>,
     policy_cap: PolicyCap<Balance<LOYALTY>>,
     policy_id: ID,
@@ -51,8 +52,7 @@ public struct RedeemUnlockApproval() has drop;
 
 /// Post-publish setup. Creates `Policy<Balance<LOYALTY>>` against the global PAS
 /// Namespace, registers approvals, shares the policy, and bundles the loyalty-side
-/// outputs into a `Loyalty` to be consumed by `merchant::create` in the
-/// same PTB.
+/// outputs into a `Loyalty` to be consumed by `merchant::create` in the same PTB.
 ///
 /// Approval registration:
 ///   - `unlock_funds`    requires `RedeemUnlockApproval` (gates redemption)
@@ -60,11 +60,9 @@ public struct RedeemUnlockApproval() has drop;
 ///   - `clawback_funds`  NOT registered + `clawback_allowed = false`
 public fun create(
     namespace: &mut Namespace,
-    treasury_cap: TreasuryCap<LOYALTY>,
-    ctx: &mut TxContext,
+    mut treasury_cap: TreasuryCap<LOYALTY>,
 ): Loyalty {
-    let mut cap = treasury_cap;
-    let (mut policy, policy_cap) = policy::new_for_currency(namespace, &mut cap, false);
+    let (mut policy, policy_cap) = policy::new_for_currency(namespace, &mut treasury_cap, false);
 
     policy.set_required_approval<_, RedeemUnlockApproval>(
         &policy_cap,
@@ -74,23 +72,26 @@ public fun create(
     let policy_id = object::id(&policy);
     policy::share(policy);
 
-    Loyalty {
-        id: object::new(ctx),
-        treasury_cap: cap,
-        policy_cap,
-        policy_id,
-    }
+    Loyalty { treasury_cap, policy_cap, policy_id }
 }
+
+// === View Functions ===
+
+/// Reference to the underlying `TreasuryCap<LOYALTY>`.
+public fun treasury_cap(self: &Loyalty): &TreasuryCap<LOYALTY> { &self.treasury_cap }
+
+/// Reference to the underlying `PolicyCap<Balance<LOYALTY>>`.
+public fun policy_cap(self: &Loyalty): &PolicyCap<Balance<LOYALTY>> { &self.policy_cap }
+
+/// ID of the shared `Policy<Balance<LOYALTY>>` created in `create`.
+public fun policy_id(self: &Loyalty): ID { self.policy_id }
 
 // === Package Functions ===
 
-/// Unwrap a Loyalty bundle. Only `merchant::create` calls this.
-public(package) fun destruct(
-    loyalty: Loyalty,
-): (TreasuryCap<LOYALTY>, PolicyCap<Balance<LOYALTY>>, ID) {
-    let Loyalty { id, treasury_cap, policy_cap, policy_id } = loyalty;
-    id.delete();
-    (treasury_cap, policy_cap, policy_id)
+/// Mutable accessor for the treasury cap. Used by `invoice::pay` (mint) and
+/// `redemption::redeem` (burn) via `merchant::loyalty_mut`.
+public(package) fun treasury_cap_mut(self: &mut Loyalty): &mut TreasuryCap<LOYALTY> {
+    &mut self.treasury_cap
 }
 
 /// Mint into the customer's PAS Account. Called by `payment::pay`. `deposit_balance`

@@ -117,7 +117,7 @@ public fun redeem(voucher: Voucher, _cap: &MerchantCap, merchant: &mut Merchant,
     let amount = funds.value();
 
     balance::decrease_supply(
-        coin::supply_mut(merchant::loyalty_treasury_cap_mut(merchant)),
+        coin::supply_mut(merchant.loyalty_mut().treasury_cap_mut()),
         funds,
     );
     id.delete();

@@ -8,9 +8,9 @@
 ///   1. `sui publish` → `loyalty::init` creates the LOYALTY currency. Deployer holds
 ///      `TreasuryCap<LOYALTY>` and a frozen `CoinMetadata<LOYALTY>`.
 ///   2. Deployer's PTB:
-///        loyalty         = loyalty::create(&mut namespace, treasury_cap, ctx)
+///        loyalty         = loyalty::create(&mut namespace, treasury_cap)
 ///        config          = config::new(num, den, max, invoice_ttl_ms, voucher_ttl_ms)
-///        (merchant, cap) = merchant::create(loyalty, name, logo_url, payout, config, ctx)
+///        (merchant, cap) = merchant::create(loyalty, config, name, logo_url, payout, ctx)
 ///        merchant::share(merchant);  transfer `cap` to the deployer's address.
 ///
 /// Cap-by-reference gating: every merchant-only entry takes `__cap: &MerchantCap`.
@@ -22,11 +22,8 @@ module openzeppelin_payments::merchant;
 use openzeppelin_payments::config::Config;
 use openzeppelin_payments::events;
 use openzeppelin_payments::listing::{Listing, Variant};
-use openzeppelin_payments::loyalty::{Self, Loyalty, LOYALTY};
-use pas::policy::PolicyCap;
+use openzeppelin_payments::loyalty::Loyalty;
 use std::string::String;
-use sui::balance::Balance;
-use sui::coin::TreasuryCap;
 use sui::table::{Self, Table};
 
 // === Errors ===
@@ -46,8 +43,6 @@ const EConfigUnchanged: vector<u8> = b"Config matches the current value";
 
 // === Structs ===
 
-// TODO#q: group loyalty like structs together
-
 /// Central shared object holding the merchant's entire on-chain state.
 public struct Merchant has key {
     id: UID,
@@ -58,10 +53,9 @@ public struct Merchant has key {
     /// Address receiving customer stablecoin payments. Mutable so the merchant can
     /// rotate keys.
     payout_address: address,
-    /// Loyalty asset bundle, set at `create`, immutable thereafter.
-    loyalty_treasury_cap: TreasuryCap<LOYALTY>,
-    loyalty_policy_cap: PolicyCap<Balance<LOYALTY>>,
-    loyalty_policy_id: ID,
+    /// Loyalty asset bundle (treasury cap, policy cap, policy id). Stored whole;
+    /// only accessible via `loyalty()` / `loyalty_mut()`.
+    loyalty: Loyalty,
     /// Loyalty mint configuration (numerator/denominator/cap). Replaceable via
     /// `set_config` — note that changing the rate alters "$1 = X points" for
     /// future settlements; existing invoices already snapshot both their
@@ -100,29 +94,26 @@ public struct Item has drop, store {
 
 // === Public Functions ===
 
-/// Consume the `Loyalty` bundle from `loyalty::setup` and return the `Merchant` and its
-/// `MerchantCap`. The caller controls placement — typically `merchant::share(merchant)`
-/// (and any same-PTB setup like `add_listing`) then transfers the cap to the deployer.
+/// Consume the `Loyalty` bundle from `loyalty::create` and return the `Merchant`
+/// and its `MerchantCap`. The caller controls placement — typically
+/// `merchant::share(merchant)` (and any same-PTB setup like `add_listing`) then
+/// transfers the cap to the deployer.
 public fun create(
     loyalty: Loyalty,
+    config: Config,
     name: String,
     logo_url: Option<String>,
     payout_address: address,
-    config: Config,
     ctx: &mut TxContext,
 ): (Merchant, MerchantCap) {
     assert!(!name.is_empty(), EEmptyName);
-
-    let (treasury_cap, policy_cap, policy_id) = loyalty::destruct(loyalty);
 
     let merchant = Merchant {
         id: object::new(ctx),
         name,
         logo_url,
         payout_address,
-        loyalty_treasury_cap: treasury_cap,
-        loyalty_policy_cap: policy_cap,
-        loyalty_policy_id: policy_id,
+        loyalty,
         config,
         listings: table::new(ctx),
         variant_index: table::new(ctx),
@@ -147,7 +138,8 @@ public fun logo_url(self: &Merchant): &Option<String> { &self.logo_url }
 
 public fun payout_address(self: &Merchant): address { self.payout_address }
 
-public fun loyalty_policy_id(self: &Merchant): ID { self.loyalty_policy_id }
+/// Reference to the merchant's `Loyalty` bundle (treasury + policy caps + policy id).
+public fun loyalty(self: &Merchant): &Loyalty { &self.loyalty }
 
 public fun config(self: &Merchant): &Config { &self.config }
 
@@ -236,6 +228,7 @@ public fun set_listing_activity(
     listing_id: ID,
     active: bool,
 ) {
+    // TODO#q: fail with error if it's unchanged
     assert!(self.listings.contains(listing_id), EListingNotFound);
 
     let merchant_id = object::id(self);
@@ -283,10 +276,11 @@ public fun remove_listing_variant(
 
 // === Package Functions ===
 
-/// Borrow the loyalty TreasuryCap. Called by `invoice::pay` (mint earned loyalty)
-/// and `redemption::redeem` (burn redeemed loyalty).
-public(package) fun loyalty_treasury_cap_mut(self: &mut Merchant): &mut TreasuryCap<LOYALTY> {
-    &mut self.loyalty_treasury_cap
+/// Mutable reference to the merchant's `Loyalty` bundle. Used by `invoice::pay`
+/// (mint earned loyalty) and `redemption::redeem` (burn redeemed loyalty) to
+/// reach the treasury cap via `loyalty::treasury_cap_mut`.
+public(package) fun loyalty_mut(self: &mut Merchant): &mut Loyalty {
+    &mut self.loyalty
 }
 
 /// Build an order line by snapshotting the variant's current stablecoin price.

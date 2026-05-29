@@ -160,7 +160,7 @@ public fun pay<S>(
     // Mint the loyalty snapshotted at issuance
     if (loyalty > 0) {
         loyalty::mint_into(
-            merchant::loyalty_treasury_cap_mut(merchant),
+            merchant.loyalty_mut().treasury_cap_mut(),
             customer_loyalty_account,
             loyalty,
         );

@@ -97,7 +97,7 @@ public fun new(
     let config = merchant.config();
     let loyalty = config.compute_loyalty(amount);
 
-    Invoice {
+    let invoice = Invoice {
         id: object::new(ctx),
         payout_address: merchant::payout_address(merchant),
         items,
@@ -105,7 +105,11 @@ public fun new(
         loyalty,
         order_ref,
         expires_at_ms: clock.timestamp_ms() + config.invoice_ttl_ms(),
-    }
+    };
+
+    events::emit_invoice_created(object::id(&invoice));
+
+    invoice
 }
 
 /// Share the `Invoice`. Required because it is `key`-only (no `store`), so

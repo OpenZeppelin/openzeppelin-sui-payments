@@ -90,13 +90,17 @@ public fun new(
     unlock_req.approve(loyalty::new_redeem_unlock_approval());
     let funds: Balance<LOYALTY> = unlock_funds::resolve(unlock_req, policy_loyalty);
 
-    Voucher {
+    let voucher = Voucher {
         id: object::new(ctx),
         customer,
         items,
         funds,
         expires_at_ms: clock.timestamp_ms() + merchant.config().voucher_ttl_ms(),
-    }
+    };
+
+    events::emit_voucher_created(object::id(&voucher));
+
+    voucher
 }
 
 /// Share the voucher. Required because it is `key`-only (no `store`), so

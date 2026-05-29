@@ -7,6 +7,16 @@ use sui::event;
 
 // === Events ===
 
+/// Emitted when a merchant issues a fresh `Invoice` via `invoice::new`.
+public struct InvoiceCreated has copy, drop {
+    invoice_id: ID,
+}
+
+/// Emitted when a customer creates a fresh `Voucher` via `redemption::new`.
+public struct VoucherCreated has copy, drop {
+    voucher_id: ID,
+}
+
 /// Emitted when a customer settles an `Invoice`. Indexer subscribes filtered by
 /// `merchant_id` and resolves `invoice_id`/`order_ref` → settled.
 public struct InvoicePaid has copy, drop {
@@ -68,6 +78,14 @@ public struct ConfigUpdated has copy, drop {
 }
 
 // === Package Functions ===
+
+public(package) fun emit_invoice_created(invoice_id: ID) {
+    event::emit(InvoiceCreated { invoice_id });
+}
+
+public(package) fun emit_voucher_created(voucher_id: ID) {
+    event::emit(VoucherCreated { voucher_id });
+}
 
 public(package) fun emit_invoice_paid(
     invoice_id: ID,

@@ -222,13 +222,12 @@ public fun remove_listing(self: &mut Merchant, _cap: &MerchantCap, id: ID) {
 /// Toggle a listing's `active` flag. Aborts if the listing does not exist, or
 /// if `active` already matches the listing's current state (no-op guard from
 /// `listing::set_active`).
-public fun set_listing_activity(
+public fun set_listing_status(
     self: &mut Merchant,
     _cap: &MerchantCap,
     listing_id: ID,
     active: bool,
 ) {
-    // TODO#q: fail with error if it's unchanged
     assert!(self.listings.contains(listing_id), EListingNotFound);
 
     let merchant_id = object::id(self);

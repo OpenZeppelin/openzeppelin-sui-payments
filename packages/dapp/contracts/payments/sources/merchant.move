@@ -33,12 +33,8 @@ const EEmptyName: vector<u8> = b"Merchant name cannot be empty";
 #[error(code = 1)]
 const EListingNotFound: vector<u8> = b"Listing not found";
 #[error(code = 2)]
-const EZeroQuantity: vector<u8> = b"Item quantity must be greater than zero";
-#[error(code = 3)]
 const EVariantNotFound: vector<u8> = b"Variant not found in catalog";
-#[error(code = 4)]
-const EAmountOverflow: vector<u8> = b"Amount exceeds u64 range";
-#[error(code = 5)]
+#[error(code = 3)]
 const EConfigUnchanged: vector<u8> = b"Config matches the current value";
 
 // === Structs ===
@@ -79,17 +75,6 @@ public struct Merchant has key {
 /// merchant-binding field needed.
 public struct MerchantCap has key, store {
     id: UID,
-}
-
-/// One line on an `Invoice` (or a `Voucher`) — a quantity of a specific listing
-/// variant at a snapshotted unit price. The price is in stablecoin units for
-/// invoices and `LOYALTY` units for vouchers; the type is the same so it can be
-/// reused across both flows. Snapshot pricing decouples the order from later
-/// mutations of the underlying `Variant`.
-public struct Item has drop, store {
-    variant_id: ID,
-    quantity: u64,
-    unit_price: u64,
 }
 
 // === Public Functions ===
@@ -149,11 +134,15 @@ public fun listing(self: &Merchant, id: ID): &Listing {
     self.listings.borrow(id)
 }
 
-public fun variant_id(self: &Item): ID { self.variant_id }
+/// Resolve a listing variant from the catalog by ID, going through `variant_index` to
+/// find its parent listing. Aborts with `EVariantNotFound` if the variant is
+/// not registered.
+public fun listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
+    assert!(self.variant_index.contains(*listing_variant_id), EVariantNotFound);
 
-public fun quantity(self: &Item): u64 { self.quantity }
-
-public fun unit_price(self: &Item): u64 { self.unit_price }
+    let listing_id = *self.variant_index.borrow(*listing_variant_id);
+    self.listings.borrow(listing_id).variant(listing_variant_id)
+}
 
 // === Admin Functions ===
 
@@ -256,6 +245,7 @@ public fun add_listing_variant(
     id
 }
 
+// TODO#q: don't use listing_id as a parameter
 /// Remove a variant by ID from an existing listing. Also dropped from
 /// `variant_index`. Aborts if the listing or the variant does not exist.
 public fun remove_listing_variant(
@@ -280,30 +270,4 @@ public fun remove_listing_variant(
 /// reach the treasury cap via `loyalty::treasury_cap_mut`.
 public(package) fun loyalty_mut(self: &mut Merchant): &mut Loyalty {
     &mut self.loyalty
-}
-
-/// Build an order line by snapshotting the variant's current stablecoin price.
-/// The listing is resolved from `variant_index` so callers only need the
-/// variant ID. `quantity` must be > 0. Aborts if the variant is not registered.
-public(package) fun new_item(merchant: &Merchant, variant_id: ID, quantity: u64): Item {
-    assert!(quantity > 0, EZeroQuantity);
-    assert!(merchant.variant_index.contains(variant_id), EVariantNotFound);
-
-    let listing_id = *merchant.variant_index.borrow(variant_id);
-    let unit_price = merchant.listing(listing_id).variant(&variant_id).price();
-
-    Item { variant_id, quantity, unit_price }
-}
-
-// TODO#q: make public and move to the receipt.move module (can be reused by customer to calculate balance)
-
-/// Sum `item.quantity * item.unit_price` across all items using a u128 accumulator,
-/// asserting the final total fits in u64 (otherwise aborts with `EAmountOverflow`).
-public(package) fun compute_total(items: &vector<Item>): u64 {
-    let mut total: u128 = 0;
-    items.do_ref!(|item| {
-        total = total + (item.quantity() as u128) * (item.unit_price() as u128);
-    });
-
-    total.try_as_u64().destroy_or!(abort EAmountOverflow)
 }

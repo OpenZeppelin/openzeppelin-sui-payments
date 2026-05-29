@@ -1,0 +1,153 @@
+/// Receipts — soulbound on-chain proof of settlement.
+///
+/// `Receipt<Payment>` is minted at the end of `invoice::pay<S>` and transferred
+/// to the paying customer. `Receipt<Redemption>` is minted at the end of
+/// `redemption::redeem` and transferred to the voucher's customer. Both are
+/// `key`-only (no `store`), so they cannot be re-transferred or wrapped in
+/// other structs — possession by an address is the proof, and that address
+/// keeps the receipt forever.
+///
+/// This module also hosts the shared `Item` line type and the helpers
+/// `new_item` and `compute_total`, which are reused by both `invoice` and
+/// `redemption` when building their respective line lists.
+module openzeppelin_payments::receipt;
+
+use openzeppelin_payments::merchant::Merchant;
+
+// === Errors ===
+
+#[error(code = 0)]
+const EZeroQuantity: vector<u8> = b"Item quantity must be greater than zero";
+#[error(code = 1)]
+const EAmountOverflow: vector<u8> = b"Amount exceeds u64 range";
+
+// === Structs ===
+
+/// One line on an `Invoice` or a `Voucher` — a quantity of a specific listing
+/// variant at a snapshotted unit price. The price is in stablecoin units for
+/// invoices and `LOYALTY` units for vouchers; the type is the same so it can
+/// be reused across both flows. Snapshot pricing decouples the order from
+/// later mutations of the underlying `Variant`.
+public struct Item has drop, store {
+    variant_id: ID,
+    quantity: u64,
+    unit_price: u64,
+}
+
+/// Soulbound proof of settlement. `T` is the flow-specific payload type:
+/// `Payment` for invoice settlements, `Redemption` for voucher burns. The
+/// generic shape lets the package add new receipt kinds later without
+/// duplicating the shared fields.
+public struct Receipt<T: store> has key {
+    id: UID,
+    items: vector<Item>,
+    amount: u64,
+    timestamp_ms: u64,
+    data: T,
+}
+
+/// Payment-flow payload (carried inside `Receipt<Payment>`).
+public struct Payment has store {
+    invoice_id: ID,
+    payout_address: address,
+    loyalty: u64,
+    order_ref: vector<u8>,
+}
+
+/// Redemption-flow payload (carried inside `Receipt<Redemption>`).
+public struct Redemption has store {
+    voucher_id: ID,
+}
+
+// === View Functions ===
+
+public fun variant_id(self: &Item): ID { self.variant_id }
+
+public fun quantity(self: &Item): u64 { self.quantity }
+
+public fun unit_price(self: &Item): u64 { self.unit_price }
+
+public fun id<T: store>(self: &Receipt<T>): ID { object::id(self) }
+
+public fun items<T: store>(self: &Receipt<T>): &vector<Item> { &self.items }
+
+public fun amount<T: store>(self: &Receipt<T>): u64 { self.amount }
+
+public fun timestamp_ms<T: store>(self: &Receipt<T>): u64 { self.timestamp_ms }
+
+public fun invoice_id(self: &Receipt<Payment>): ID { self.data.invoice_id }
+
+public fun payout_address(self: &Receipt<Payment>): address { self.data.payout_address }
+
+public fun loyalty(self: &Receipt<Payment>): u64 { self.data.loyalty }
+
+public fun order_ref(self: &Receipt<Payment>): &vector<u8> { &self.data.order_ref }
+
+public fun voucher_id(self: &Receipt<Redemption>): ID { self.data.voucher_id }
+
+// === Package Functions ===
+
+/// Build an order line by snapshotting the variant's current stablecoin price
+/// from the merchant's catalog. `quantity` must be > 0. Aborts if the variant
+/// is not registered (via `merchant::listing_variant`).
+public(package) fun new_item(merchant: &Merchant, variant_id: ID, quantity: u64): Item {
+    assert!(quantity > 0, EZeroQuantity);
+
+    let unit_price = merchant.listing_variant(&variant_id).price();
+
+    Item { variant_id, quantity, unit_price }
+}
+
+/// Sum `item.quantity * item.unit_price` across all items using a u128
+/// accumulator; aborts with `EAmountOverflow` if the final total doesn't fit
+/// in u64.
+public(package) fun compute_total(items: &vector<Item>): u64 {
+    let mut total: u128 = 0;
+    items.do_ref!(|item| {
+        total = total + (item.quantity as u128) * (item.unit_price as u128);
+    });
+
+    total.try_as_u64().destroy_or!(abort EAmountOverflow)
+}
+
+/// Mint a `Receipt<Payment>` and transfer it to `customer`. Soulbound — the
+/// receipt cannot be re-transferred or stored anywhere else.
+public(package) fun transfer_payment_receipt(
+    invoice_id: ID,
+    payout_address: address,
+    items: vector<Item>,
+    amount: u64,
+    loyalty: u64,
+    order_ref: vector<u8>,
+    timestamp_ms: u64,
+    customer: address,
+    ctx: &mut TxContext,
+) {
+    let receipt = Receipt<Payment> {
+        id: object::new(ctx),
+        items,
+        amount,
+        timestamp_ms,
+        data: Payment { invoice_id, payout_address, loyalty, order_ref },
+    };
+    transfer::transfer(receipt, customer);
+}
+
+/// Mint a `Receipt<Redemption>` and transfer it to `customer`. Soulbound.
+public(package) fun transfer_redemption_receipt(
+    voucher_id: ID,
+    items: vector<Item>,
+    amount: u64,
+    timestamp_ms: u64,
+    customer: address,
+    ctx: &mut TxContext,
+) {
+    let receipt = Receipt<Redemption> {
+        id: object::new(ctx),
+        items,
+        amount,
+        timestamp_ms,
+        data: Redemption { voucher_id },
+    };
+    transfer::transfer(receipt, customer);
+}

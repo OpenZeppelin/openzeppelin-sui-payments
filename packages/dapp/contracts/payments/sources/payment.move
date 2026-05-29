@@ -18,7 +18,8 @@ module openzeppelin_payments::invoice;
 
 use openzeppelin_payments::events;
 use openzeppelin_payments::loyalty;
-use openzeppelin_payments::merchant::{Self, Merchant, MerchantCap, Item};
+use openzeppelin_payments::merchant::{Self, Merchant, MerchantCap};
+use openzeppelin_payments::receipt::{Self, Item};
 use pas::account::Account;
 use pas::policy::Policy;
 use pas::request::Request;
@@ -87,10 +88,10 @@ public fun new(
     assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
 
     let items = listing_variant_ids.zip_map!(quantities, |vid, qty| {
-        merchant.new_item(vid, qty)
+        receipt::new_item(merchant, vid, qty)
     });
 
-    let amount = merchant::compute_total(&items);
+    let amount = receipt::compute_total(&items);
     assert!(amount > 0, EZeroAmount);
 
     let config = merchant.config();
@@ -113,12 +114,11 @@ public fun share(invoice: Invoice) {
     transfer::share_object(invoice);
 }
 
-// TODO#q: return receipt
-
 /// Customer settles the invoice. Resolves the customer's already-approved stablecoin
 /// `send_funds` request (transfers `Balance<S>` from customer's PAS Account to the
 /// merchant's), mints loyalty rewards into the customer's PAS `Account<LOYALTY>`,
-/// destroys the Invoice, and emits `InvoicePaid`.
+/// destroys the Invoice, mints a soulbound `PaymentReceipt` for the customer, and
+/// emits `InvoicePaid`.
 public fun pay<S>(
     invoice: Invoice,
     merchant: &mut Merchant,
@@ -126,7 +126,7 @@ public fun pay<S>(
     policy_s: &Policy<Balance<S>>,
     customer_loyalty_account: &Account,
     clock: &Clock,
-    _ctx: &mut TxContext,
+    ctx: &mut TxContext,
 ) {
     let now = clock.timestamp_ms();
     let invoice_id = object::id(&invoice);
@@ -137,20 +137,22 @@ public fun pay<S>(
 
     // Send-request integrity
     let data = send_request.data();
-    let sender = data.sender();
     assert!(data.recipient() == invoice.payout_address, EWrongRecipient);
     assert!(data.funds().value() == invoice.amount, EAmountMismatch);
 
     // Loyalty mints to the payer's own account
+    let sender = data.sender();
     assert!(customer_loyalty_account.owner() == sender, EWrongLoyaltyRecipient);
 
     // Consume the invoice — both amounts are already snapshotted on it
     let Invoice {
         id,
-        amount: payment_amount,
+        payout_address,
+        items,
+        amount,
         loyalty,
         order_ref,
-        ..,
+        expires_at_ms: _,
     } = invoice;
     id.delete();
 
@@ -166,12 +168,25 @@ public fun pay<S>(
         );
     };
 
+    // Soulbound receipt to the customer
+    receipt::transfer_payment_receipt(
+        invoice_id,
+        payout_address,
+        items,
+        amount,
+        loyalty,
+        order_ref,
+        now,
+        sender,
+        ctx,
+    );
+
     events::emit_invoice_paid(
         invoice_id,
         merchant_id,
         order_ref,
         sender,
-        payment_amount,
+        amount,
         loyalty,
         now,
     );

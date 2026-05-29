@@ -23,7 +23,8 @@ module openzeppelin_payments::redemption;
 
 use openzeppelin_payments::events;
 use openzeppelin_payments::loyalty::{Self, LOYALTY};
-use openzeppelin_payments::merchant::{Self, Merchant, MerchantCap, Item};
+use openzeppelin_payments::merchant::{Merchant, MerchantCap};
+use openzeppelin_payments::receipt::{Self, Item};
 use pas::account::Account;
 use pas::policy::Policy;
 use pas::request::Request;
@@ -82,9 +83,9 @@ public fun new(
     assert!(amount > 0, EZeroAmount);
 
     let items = listing_variant_ids.zip_map!(quantities, |vid, qty| {
-        merchant.new_item(vid, qty)
+        receipt::new_item(merchant, vid, qty)
     });
-    assert!(amount == merchant::compute_total(&items), EInvalidAmount);
+    assert!(amount == receipt::compute_total(&items), EInvalidAmount);
 
     unlock_req.approve(loyalty::new_redeem_unlock_approval());
     let funds: Balance<LOYALTY> = unlock_funds::resolve(unlock_req, policy_loyalty);
@@ -105,15 +106,22 @@ public fun share(voucher: Voucher) {
 }
 
 /// Merchant redeems the voucher: burns the locked `Balance<LOYALTY>` via the
-/// merchant's `TreasuryCap<LOYALTY>`, destroys the voucher, emits `VoucherRedeemed`.
-public fun redeem(voucher: Voucher, _cap: &MerchantCap, merchant: &mut Merchant, clock: &Clock) {
+/// merchant's `TreasuryCap<LOYALTY>`, destroys the voucher, mints a soulbound
+/// `RedemptionReceipt` for the customer, and emits `VoucherRedeemed`.
+public fun redeem(
+    voucher: Voucher,
+    _cap: &MerchantCap,
+    merchant: &mut Merchant,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
     let voucher_id = object::id(&voucher);
     let merchant_id = object::id(merchant);
     let now = clock.timestamp_ms();
 
     assert!(now < voucher.expires_at_ms, EVoucherExpired);
 
-    let Voucher { id, customer, funds, .. } = voucher;
+    let Voucher { id, customer, items, funds, expires_at_ms: _ } = voucher;
     let amount = funds.value();
 
     balance::decrease_supply(
@@ -121,6 +129,9 @@ public fun redeem(voucher: Voucher, _cap: &MerchantCap, merchant: &mut Merchant,
         funds,
     );
     id.delete();
+
+    // Soulbound receipt to the customer
+    receipt::transfer_redemption_receipt(voucher_id, items, amount, now, customer, ctx);
 
     events::emit_voucher_redeemed(voucher_id, merchant_id, customer, amount, now);
 }

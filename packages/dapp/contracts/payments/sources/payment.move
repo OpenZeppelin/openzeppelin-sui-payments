@@ -16,9 +16,10 @@
 /// Cleanup: `invoice::cancel(invoice, &clock)` (permissionless after expiry).
 module openzeppelin_payments::invoice;
 
+use openzeppelin_access::access_control::Auth;
 use openzeppelin_payments::events;
 use openzeppelin_payments::loyalty;
-use openzeppelin_payments::merchant::{Self, Merchant, MerchantCap};
+use openzeppelin_payments::merchant::{Self, Merchant, OperatorRole};
 use openzeppelin_payments::receipt::{Self, Item};
 use pas::account::Account;
 use pas::policy::Policy;
@@ -77,7 +78,7 @@ public struct Invoice has key {
 /// variant ID is not registered in the merchant's catalog.
 public fun new(
     merchant: &Merchant,
-    _: &MerchantCap,
+    _auth: &Auth<OperatorRole>,
     listing_variant_ids: vector<ID>,
     quantities: vector<u64>,
     order_ref: vector<u8>,

@@ -1,24 +1,29 @@
 /// Merchant identity, central state, and listing CRUD. This module is the leaf for
 /// the merchant-side flows — it does NOT depend on `invoice` or `redemption`. Those
-/// modules import `Merchant`/`MerchantCap` from here and own the issuance + settlement
-/// flows for their respective asset sides (invoice → stablecoin payment, redemption →
+/// modules import `Merchant` from here and own the issuance + settlement flows for
+/// their respective asset sides (invoice → stablecoin payment, redemption →
 /// loyalty burn).
 ///
-/// Two-step deployment:
-///   1. `sui publish` → `loyalty::init` creates the LOYALTY currency. Deployer holds
-///      `TreasuryCap<LOYALTY>` and a frozen `CoinMetadata<LOYALTY>`.
-///   2. Deployer's PTB:
-///        loyalty         = loyalty::create(&mut namespace, treasury_cap)
-///        config          = config::new(num, den, max, invoice_ttl_ms, voucher_ttl_ms)
-///        (merchant, cap) = merchant::create(loyalty, config, name, logo_url, payout, ctx)
-///        merchant::share(merchant);  transfer `cap` to the deployer's address.
+/// Access control: `AccessControl<MERCHANT>` (from `openzeppelin_access`) is
+/// created in `init` as a shared object and seeded with `OperatorRole` granted
+/// to the deployer. All admin entry points take `&Auth<OperatorRole>`, which
+/// the caller mints from the registry via `access_control::new_auth`. The root
+/// role (`MERCHANT` OTW) grants/revokes `OperatorRole` and can be transferred
+/// or renounced via the access-control timelock flow.
 ///
-/// Cap-by-reference gating: every merchant-only entry takes `__cap: &MerchantCap`.
-/// The package's OTW + Loyalty-hot-potato bootstrap guarantees exactly one
-/// `MerchantCap` exists per published package, so possession alone is the access
-/// control — no merchant-binding field or cap-id assert needed.
+/// Two-step deployment:
+///   1. `sui publish` runs both `loyalty::init` (LOYALTY currency) and
+///      `merchant::init` (AccessControl<MERCHANT>). The deployer holds:
+///      - `TreasuryCap<LOYALTY>` (owned, to be consumed by `loyalty::create`),
+///      - root role + `OperatorRole` on the shared `AccessControl<MERCHANT>`.
+///   2. Deployer's PTB:
+///        loyalty   = loyalty::create(&mut namespace, treasury_cap)
+///        config    = config::new(num, den, max, invoice_ttl_ms, voucher_ttl_ms)
+///        merchant  = merchant::create(loyalty, config, name, logo_url, payout, ctx)
+///        merchant::share(merchant);
 module openzeppelin_payments::merchant;
 
+use openzeppelin_access::access_control::{Self, Auth};
 use openzeppelin_payments::config::Config;
 use openzeppelin_payments::events;
 use openzeppelin_payments::listing::{Listing, Variant};
@@ -36,6 +41,32 @@ const EListingNotFound: vector<u8> = b"Listing not found";
 const EVariantNotFound: vector<u8> = b"Variant not found in catalog";
 #[error(code = 3)]
 const EConfigUnchanged: vector<u8> = b"Config matches the current value";
+
+// === Constants ===
+
+/// Timelock (in ms) applied to root role transfer / renounce on the shared
+/// `AccessControl<MERCHANT>`. 24 hours.
+const ROOT_TRANSFER_DELAY_MS: u64 = 86_400_000;
+
+// === Init ===
+
+/// One-time witness — struct name == module name uppercased. Consumed once
+/// in `init` to mint the package's `AccessControl<MERCHANT>` registry.
+public struct MERCHANT has drop {}
+
+/// Role marker — holders can call every cap-gated admin entry point on the
+/// `Merchant` shared object. Granted to the deployer in `init`; the root
+/// admin can grant/revoke via `access_control::grant_role` / `revoke_role`.
+public struct OperatorRole {}
+
+/// Module init — runs once on package publish. Creates the
+/// `AccessControl<MERCHANT>` shared registry, grants `OperatorRole` to the
+/// deployer (sender), and shares the registry.
+fun init(otw: MERCHANT, ctx: &mut TxContext) {
+    let mut ac = access_control::new(otw, ROOT_TRANSFER_DELAY_MS, ctx);
+    ac.grant_role<_, OperatorRole>(ctx.sender(), ctx);
+    transfer::public_share_object(ac);
+}
 
 // === Structs ===
 
@@ -67,22 +98,13 @@ public struct Merchant has key {
     variant_index: Table<ID, ID>,
 }
 
-// TODO#q: create capabilities for catalog CRUD, redemption verifications and balance withdrawal.
-
-/// Owned capability. `key, store` so it can be transferred between addresses. The
-/// package's OTW + Loyalty-hot-potato bootstrap guarantees exactly one `MerchantCap`
-/// exists per published package, so possession alone is the access control — no
-/// merchant-binding field needed.
-public struct MerchantCap has key, store {
-    id: UID,
-}
-
 // === Public Functions ===
 
-/// Consume the `Loyalty` bundle from `loyalty::create` and return the `Merchant`
-/// and its `MerchantCap`. The caller controls placement — typically
-/// `merchant::share(merchant)` (and any same-PTB setup like `add_listing`) then
-/// transfers the cap to the deployer.
+/// Consume the `Loyalty` bundle from `loyalty::create` and return the
+/// `Merchant`. Bootstrap-only — the Loyalty hot-potato is the gating
+/// mechanism; subsequent admin operations are gated by `OperatorRole` via
+/// `AccessControl<MERCHANT>`. Caller is expected to follow up with
+/// `merchant::share(merchant)` in the same PTB.
 public fun create(
     loyalty: Loyalty,
     config: Config,
@@ -90,10 +112,10 @@ public fun create(
     logo_url: Option<String>,
     payout_address: address,
     ctx: &mut TxContext,
-): (Merchant, MerchantCap) {
+): Merchant {
     assert!(!name.is_empty(), EEmptyName);
 
-    let merchant = Merchant {
+    Merchant {
         id: object::new(ctx),
         name,
         logo_url,
@@ -102,10 +124,7 @@ public fun create(
         config,
         listings: table::new(ctx),
         variant_index: table::new(ctx),
-    };
-    let cap = MerchantCap { id: object::new(ctx) };
-
-    (merchant, cap)
+    }
 }
 
 /// Share the `Merchant`. Required because `Merchant` is `key`-only (no `store`), so
@@ -146,13 +165,13 @@ public fun listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
 
 // === Admin Functions ===
 
-public fun set_payout_address(self: &mut Merchant, _cap: &MerchantCap, addr: address) {
+public fun set_payout_address(self: &mut Merchant, _auth: &Auth<OperatorRole>, addr: address) {
     self.payout_address = addr;
 }
 
 public fun set_display(
     self: &mut Merchant,
-    _cap: &MerchantCap,
+    _auth: &Auth<OperatorRole>,
     name: String,
     logo: Option<String>,
 ) {
@@ -166,7 +185,7 @@ public fun set_display(
 /// subsequent settlements only; invoices already issued keep their snapshot
 /// `amount` and `loyalty` values and are unaffected. Aborts with
 /// `EConfigUnchanged` if the new config equals the current one.
-public fun set_config(self: &mut Merchant, _cap: &MerchantCap, config: Config) {
+public fun set_config(self: &mut Merchant, _auth: &Auth<OperatorRole>, config: Config) {
     assert!(&self.config != &config, EConfigUnchanged);
 
     self.config = config;
@@ -179,7 +198,7 @@ public fun set_config(self: &mut Merchant, _cap: &MerchantCap, config: Config) {
 /// Every variant already on the listing is registered in `variant_index` so
 /// checkout can resolve it from the variant ID alone. Aborts if the listing
 /// ID or any of its variant IDs already exist on the merchant.
-public fun add_listing(self: &mut Merchant, _cap: &MerchantCap, listing: Listing): ID {
+public fun add_listing(self: &mut Merchant, _auth: &Auth<OperatorRole>, listing: Listing): ID {
     let id = listing.id();
     let merchant_id = object::id(self);
 
@@ -195,7 +214,7 @@ public fun add_listing(self: &mut Merchant, _cap: &MerchantCap, listing: Listing
 
 /// Pull a `Listing` out of the merchant. Every variant on the removed listing
 /// is also dropped from `variant_index`.
-public fun remove_listing(self: &mut Merchant, _cap: &MerchantCap, id: ID) {
+public fun remove_listing(self: &mut Merchant, _auth: &Auth<OperatorRole>, id: ID) {
     assert!(self.listings.contains(id), EListingNotFound);
 
     let merchant_id = object::id(self);
@@ -213,7 +232,7 @@ public fun remove_listing(self: &mut Merchant, _cap: &MerchantCap, id: ID) {
 /// `listing::set_active`).
 public fun set_listing_status(
     self: &mut Merchant,
-    _cap: &MerchantCap,
+    _auth: &Auth<OperatorRole>,
     listing_id: ID,
     active: bool,
 ) {
@@ -230,7 +249,7 @@ public fun set_listing_status(
 /// or if the variant's `id` already exists.
 public fun add_listing_variant(
     self: &mut Merchant,
-    _cap: &MerchantCap,
+    _auth: &Auth<OperatorRole>,
     listing_id: ID,
     variant: Variant,
 ): ID {
@@ -248,7 +267,7 @@ public fun add_listing_variant(
 /// Remove a variant by ID from its listing. The owning listing is resolved
 /// via `variant_index` — no separate `listing_id` argument needed. Aborts
 /// with `EVariantNotFound` if the variant is not registered.
-public fun remove_listing_variant(self: &mut Merchant, _cap: &MerchantCap, variant_id: ID) {
+public fun remove_listing_variant(self: &mut Merchant, _auth: &Auth<OperatorRole>, variant_id: ID) {
     assert!(self.variant_index.contains(variant_id), EVariantNotFound);
 
     let listing_id = self.variant_index.remove(variant_id);
@@ -265,4 +284,11 @@ public fun remove_listing_variant(self: &mut Merchant, _cap: &MerchantCap, varia
 /// reach the treasury cap via `loyalty::treasury_cap_mut`.
 public(package) fun loyalty_mut(self: &mut Merchant): &mut Loyalty {
     &mut self.loyalty
+}
+
+// === Test-Only Helpers ===
+
+#[test_only]
+public fun init_for_testing(ctx: &mut TxContext) {
+    init(MERCHANT {}, ctx);
 }

@@ -16,11 +16,17 @@ use_environment = "test-publish"
 manifest_digest = "7B6E5525FC0BFAECA61725298C425266BB21D456122669E3B2D3A4151A705F69"
 deps = { MoveStdlib = "MoveStdlib" }
 
+[pinned.test-publish.openzeppelin_access]
+source = { git = "https://github.com/OpenZeppelin/contracts-sui.git", subdir = "contracts/access", rev = "9cd06721b747c9f9919966dad5eb63403f2abdf0" }
+use_environment = "test-publish"
+manifest_digest = "2963D6B4689ED068546E86F8453FBCA51DCDF68A1C96D681328D2CDACE14B5CF"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
 [pinned.test-publish.openzeppelin_payments]
 source = { root = true }
 use_environment = "test-publish"
-manifest_digest = "8A22D9CA5E58D5B9351FBC854C1C2CDC41F09022A2C9EA84A5AC2A0079066EEE"
-deps = { pas = "pas", std = "MoveStdlib", sui = "Sui" }
+manifest_digest = "F793FF93E4D33122F3B9AA11DD9B3A8EC2FFA00C1D6B841FBB8496C74D86FBC4"
+deps = { openzeppelin_access = "openzeppelin_access", pas = "pas", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.test-publish.pas]
 source = { local = "../../../../vendor/pas/packages/pas" }
@@ -46,11 +52,17 @@ use_environment = "testnet"
 manifest_digest = "7AFB66695545775FBFBB2D3078ADFD084244D5002392E837FDE21D9EA1C6D01C"
 deps = { MoveStdlib = "MoveStdlib" }
 
+[pinned.testnet.openzeppelin_access]
+source = { git = "https://github.com/OpenZeppelin/contracts-sui.git", subdir = "contracts/access", rev = "9cd06721b747c9f9919966dad5eb63403f2abdf0" }
+use_environment = "testnet"
+manifest_digest = "5745706258F61D6CE210904B3E6AE87A73CE9D31A6F93BE4718C442529332A87"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
 [pinned.testnet.openzeppelin_payments]
 source = { root = true }
 use_environment = "testnet"
-manifest_digest = "202E387C45FD0454B05DC21964D2DB34BD9BC30FC2511DA52B905052D55E296A"
-deps = { pas = "pas", std = "MoveStdlib", sui = "Sui" }
+manifest_digest = "7E6C5CDE7CFCB069D3B25DCC05FDBE51E8BA83A927461F3EED0D5BA0C5CFD4F6"
+deps = { openzeppelin_access = "openzeppelin_access", pas = "pas", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.testnet.pas]
 source = { local = "../../../../vendor/pas/packages/pas" }

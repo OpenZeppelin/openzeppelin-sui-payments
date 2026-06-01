@@ -4,6 +4,7 @@ edition = "2024"
 
 [dependencies]
 pas = { local = "../../../../vendor/pas/packages/pas" }
+openzeppelin_access = { git = "https://github.com/OpenZeppelin/contracts-sui.git", subdir = "contracts/access", rev = "9cd06721b747c9f9919966dad5eb63403f2abdf0" }
 
 [environments]
 test-publish = "46b6270d"

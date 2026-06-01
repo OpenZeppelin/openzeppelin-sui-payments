@@ -2,9 +2,10 @@
 #[test_only]
 module openzeppelin_payments::payment_tests;
 
+use openzeppelin_access::access_control::AccessControl;
 use openzeppelin_payments::invoice::{Self, Invoice};
 use openzeppelin_payments::listing;
-use openzeppelin_payments::merchant::Merchant;
+use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, OperatorRole};
 use openzeppelin_payments::receipt::{Self, Receipt, Payment};
 use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::account::{Self, Account};
@@ -21,7 +22,8 @@ const CUSTOMER: address = @0xCAFE;
 #[test]
 fun payment_happy_path() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -49,14 +51,17 @@ fun payment_happy_path() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let _listing_id = merchant.add_listing(&cap, listing);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+
+        let _listing_id = merchant.add_listing(&auth, listing);
 
         // Merchant POS: issue invoice for 1 × Small Coffee.
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
         let inv = invoice::new(
             &merchant,
-            &cap,
+            &auth,
             vector[variant_id],
             vector[1],
             b"order-001",
@@ -75,9 +80,9 @@ fun payment_happy_path() {
         let payout_account_shared = scenario.take_shared_by_id<Account>(payout_account_id);
         let test_usd_policy = test_setup::take_test_usd_policy(scenario);
 
-        let auth = account::new_auth(scenario.ctx());
+        let customer_auth = account::new_auth(scenario.ctx());
         let mut send_req = customer_account_shared.send_balance<TEST_USD>(
-            &auth,
+            &customer_auth,
             &payout_account_shared,
             500,
             scenario.ctx(),
@@ -107,9 +112,9 @@ fun payment_happy_path() {
         destroy(r);
         test_setup::return_test_usd_policy(test_usd_policy);
         test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
         test_scenario::return_shared(customer_account_shared);
         test_scenario::return_shared(payout_account_shared);
-        destroy(cap);
         destroy(test_usd_cap);
         destroy(test_clock);
     });
@@ -118,7 +123,8 @@ fun payment_happy_path() {
 #[test, expected_failure(abort_code = invoice::EInvoiceExpired)]
 fun pay_after_expiry_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -143,13 +149,16 @@ fun pay_after_expiry_aborts() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let _ = merchant.add_listing(&cap, listing);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+
+        let _ = merchant.add_listing(&auth, listing);
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
         let inv = invoice::new(
             &merchant,
-            &cap,
+            &auth,
             vector[variant_id],
             vector[1],
             b"order-001",
@@ -170,9 +179,9 @@ fun pay_after_expiry_aborts() {
         let payout_account_shared = scenario.take_shared_by_id<Account>(payout_account_id);
         let test_usd_policy = test_setup::take_test_usd_policy(scenario);
 
-        let auth = account::new_auth(scenario.ctx());
+        let customer_auth = account::new_auth(scenario.ctx());
         let mut send_req = customer_account_shared.send_balance<TEST_USD>(
-            &auth,
+            &customer_auth,
             &payout_account_shared,
             500,
             scenario.ctx(),
@@ -189,12 +198,12 @@ fun pay_after_expiry_aborts() {
             scenario.ctx(),
         );
 
-        // Unreachable cleanup (kept so the compiler can typecheck the block).
+        // Unreachable cleanup.
         test_setup::return_test_usd_policy(test_usd_policy);
         test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
         test_scenario::return_shared(customer_account_shared);
         test_scenario::return_shared(payout_account_shared);
-        destroy(cap);
         destroy(test_usd_cap);
         destroy(test_clock);
     });
@@ -203,7 +212,8 @@ fun pay_after_expiry_aborts() {
 #[test]
 fun cancel_after_expiry_destroys_invoice() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -220,13 +230,16 @@ fun cancel_after_expiry_destroys_invoice() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let _ = merchant.add_listing(&cap, listing);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+
+        let _ = merchant.add_listing(&auth, listing);
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
         let inv = invoice::new(
             &merchant,
-            &cap,
+            &auth,
             vector[variant_id],
             vector[1],
             b"order-001",
@@ -243,7 +256,7 @@ fun cancel_after_expiry_destroys_invoice() {
         invoice::cancel(inv_shared, &test_clock);
 
         test_scenario::return_shared(merchant);
-        destroy(cap);
+        test_scenario::return_shared(ac);
         destroy(test_usd_cap);
         destroy(test_clock);
     });

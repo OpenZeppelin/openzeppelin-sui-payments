@@ -1,12 +1,12 @@
 /// Tests for `merchant.move` — exercises catalog CRUD and config updates
-/// through a fully bootstrapped Merchant (PAS namespace + LOYALTY policy +
-/// TEST_USD policy + Merchant).
+/// through a fully bootstrapped Merchant + `AccessControl<MERCHANT>` registry.
 #[test_only]
 module openzeppelin_payments::merchant_tests;
 
+use openzeppelin_access::access_control::AccessControl;
 use openzeppelin_payments::config;
 use openzeppelin_payments::listing;
-use openzeppelin_payments::merchant::{Self, Merchant};
+use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, OperatorRole};
 use openzeppelin_payments::test_setup;
 use pas::e2e;
 use std::unit_test::destroy;
@@ -18,7 +18,8 @@ const PAYOUT: address = @0xB;
 #[test]
 fun merchant_create_and_share() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -34,7 +35,6 @@ fun merchant_create_and_share() {
         assert!(merchant.config().invoice_ttl_ms() == 600_000, 0);
 
         test_scenario::return_shared(merchant);
-        destroy(cap);
         destroy(test_usd_cap);
     });
 }
@@ -42,7 +42,8 @@ fun merchant_create_and_share() {
 #[test]
 fun add_listing_with_variants() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -59,20 +60,20 @@ fun add_listing_with_variants() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&cap, listing);
+        let listing_id = merchant.add_listing(&auth, listing);
 
-        // Listing reachable through `merchant::listing`.
         let stored = merchant.listing(listing_id);
         assert!(stored.name() == b"Coffee".to_string(), 0);
         assert!(stored.variants().contains(&vid), 0);
 
-        // Variant resolvable through `merchant::listing_variant` (variant_index).
         let v_ref = merchant.listing_variant(&vid);
         assert!(v_ref.price() == 500, 0);
 
         test_scenario::return_shared(merchant);
-        destroy(cap);
+        test_scenario::return_shared(ac);
         destroy(test_usd_cap);
     });
 }
@@ -80,7 +81,8 @@ fun add_listing_with_variants() {
 #[test, expected_failure(abort_code = merchant::EVariantNotFound)]
 fun listing_variant_not_found_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -93,7 +95,6 @@ fun listing_variant_not_found_aborts() {
         let _v = merchant.listing_variant(&phantom);
 
         test_scenario::return_shared(merchant);
-        destroy(cap);
         destroy(test_usd_cap);
     });
 }
@@ -101,7 +102,8 @@ fun listing_variant_not_found_aborts() {
 #[test]
 fun remove_listing_drops_variant_index() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -118,12 +120,14 @@ fun remove_listing_drops_variant_index() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&cap, listing);
-        merchant.remove_listing(&cap, listing_id);
+        let listing_id = merchant.add_listing(&auth, listing);
+        merchant.remove_listing(&auth, listing_id);
 
         test_scenario::return_shared(merchant);
-        destroy(cap);
+        test_scenario::return_shared(ac);
         destroy(test_usd_cap);
     });
 }
@@ -131,7 +135,8 @@ fun remove_listing_drops_variant_index() {
 #[test]
 fun add_listing_variant_via_merchant() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -141,7 +146,10 @@ fun add_listing_variant_via_merchant() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let listing_id = merchant.add_listing(&cap, listing);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+
+        let listing_id = merchant.add_listing(&auth, listing);
 
         let variant = listing::new_variant(
             b"M".to_string(),
@@ -149,15 +157,14 @@ fun add_listing_variant_via_merchant() {
             std::option::some(70),
             scenario.ctx(),
         );
-        let vid = merchant.add_listing_variant(&cap, listing_id, variant);
+        let vid = merchant.add_listing_variant(&auth, listing_id, variant);
 
-        // Variant reachable via merchant accessor.
         let v_ref = merchant.listing_variant(&vid);
         assert!(v_ref.price() == 700, 0);
         assert!(*v_ref.loyalty_price().borrow() == 70, 0);
 
         test_scenario::return_shared(merchant);
-        destroy(cap);
+        test_scenario::return_shared(ac);
         destroy(test_usd_cap);
     });
 }
@@ -165,7 +172,8 @@ fun add_listing_variant_via_merchant() {
 #[test]
 fun remove_listing_variant_via_merchant() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -175,7 +183,10 @@ fun remove_listing_variant_via_merchant() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let listing_id = merchant.add_listing(&cap, listing);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+
+        let listing_id = merchant.add_listing(&auth, listing);
 
         let variant = listing::new_variant(
             b"M".to_string(),
@@ -183,16 +194,15 @@ fun remove_listing_variant_via_merchant() {
             std::option::none(),
             scenario.ctx(),
         );
-        let vid = merchant.add_listing_variant(&cap, listing_id, variant);
+        let vid = merchant.add_listing_variant(&auth, listing_id, variant);
 
-        merchant.remove_listing_variant(&cap, vid);
+        merchant.remove_listing_variant(&auth, vid);
 
-        // Listing still exists, but the variant is gone.
         let stored = merchant.listing(listing_id);
         assert!(!stored.variants().contains(&vid), 0);
 
         test_scenario::return_shared(merchant);
-        destroy(cap);
+        test_scenario::return_shared(ac);
         destroy(test_usd_cap);
     });
 }
@@ -200,7 +210,8 @@ fun remove_listing_variant_via_merchant() {
 #[test]
 fun set_listing_status_toggles() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -210,18 +221,21 @@ fun set_listing_status_toggles() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let listing_id = merchant.add_listing(&cap, listing);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+
+        let listing_id = merchant.add_listing(&auth, listing);
 
         assert!(merchant.listing(listing_id).active(), 0);
 
-        merchant.set_listing_status(&cap, listing_id, false);
+        merchant.set_listing_status(&auth, listing_id, false);
         assert!(!merchant.listing(listing_id).active(), 0);
 
-        merchant.set_listing_status(&cap, listing_id, true);
+        merchant.set_listing_status(&auth, listing_id, true);
         assert!(merchant.listing(listing_id).active(), 0);
 
         test_scenario::return_shared(merchant);
-        destroy(cap);
+        test_scenario::return_shared(ac);
         destroy(test_usd_cap);
     });
 }
@@ -229,7 +243,8 @@ fun set_listing_status_toggles() {
 #[test, expected_failure(abort_code = ::openzeppelin_payments::listing::EActiveStateUnchanged)]
 fun set_listing_status_same_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -239,13 +254,16 @@ fun set_listing_status_same_aborts() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let listing_id = merchant.add_listing(&cap, listing);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
 
-        // Listing is already active — setting active=true must abort.
-        merchant.set_listing_status(&cap, listing_id, true);
+        let listing_id = merchant.add_listing(&auth, listing);
+
+        // Already active — must abort.
+        merchant.set_listing_status(&auth, listing_id, true);
 
         test_scenario::return_shared(merchant);
-        destroy(cap);
+        test_scenario::return_shared(ac);
         destroy(test_usd_cap);
     });
 }
@@ -253,7 +271,8 @@ fun set_listing_status_same_aborts() {
 #[test]
 fun set_config_updates_values() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -261,9 +280,11 @@ fun set_config_updates_values() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
 
         let new_cfg = config::new(2, 20, 500_000, 300_000, 300_000);
-        merchant.set_config(&cap, new_cfg);
+        merchant.set_config(&auth, new_cfg);
 
         assert!(merchant.config().mint_numerator() == 2, 0);
         assert!(merchant.config().mint_denominator() == 20, 0);
@@ -272,7 +293,7 @@ fun set_config_updates_values() {
         assert!(merchant.config().voucher_ttl_ms() == 300_000, 0);
 
         test_scenario::return_shared(merchant);
-        destroy(cap);
+        test_scenario::return_shared(ac);
         destroy(test_usd_cap);
     });
 }
@@ -280,7 +301,8 @@ fun set_config_updates_values() {
 #[test, expected_failure(abort_code = merchant::EConfigUnchanged)]
 fun set_config_unchanged_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        let (merchant_id, cap, test_usd_cap) = test_setup::setup_merchant(
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
             ns,
             PAYOUT,
             scenario.ctx(),
@@ -288,13 +310,15 @@ fun set_config_unchanged_aborts() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
 
         // Same values as setup_merchant defaults.
         let same_cfg = config::new(1, 10, 1_000_000, 600_000, 600_000);
-        merchant.set_config(&cap, same_cfg);
+        merchant.set_config(&auth, same_cfg);
 
         test_scenario::return_shared(merchant);
-        destroy(cap);
+        test_scenario::return_shared(ac);
         destroy(test_usd_cap);
     });
 }

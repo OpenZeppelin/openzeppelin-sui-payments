@@ -110,8 +110,8 @@ public(package) fun compute_total(items: &vector<Item>): u64 {
     total.try_as_u64().destroy_or!(abort EAmountOverflow)
 }
 
-/// Mint a `Receipt<Payment>` and transfer it to `customer`. Soulbound — the
-/// receipt cannot be re-transferred or stored anywhere else.
+/// Mint a `Receipt<Payment>` and transfer it to `customer`.
+/// Soulbound (receipt cannot be re-transferred or stored anywhere else).
 public(package) fun transfer_payment_receipt(
     invoice_id: ID,
     payout_address: address,
@@ -133,7 +133,8 @@ public(package) fun transfer_payment_receipt(
     transfer::transfer(receipt, customer);
 }
 
-/// Mint a `Receipt<Redemption>` and transfer it to `customer`. Soulbound.
+/// Mint a `Receipt<Redemption>` and transfer it to `customer`.
+/// Soulbound (receipt cannot be re-transferred or stored anywhere else).
 public(package) fun transfer_redemption_receipt(
     voucher_id: ID,
     items: vector<Item>,

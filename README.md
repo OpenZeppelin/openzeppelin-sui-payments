@@ -47,6 +47,6 @@ vendor/
 ## Security
 
 This project is maintained by OpenZeppelin with the goal of providing a secure and
-reliable started dApp for PoS systems built on top of the Sui ecosystem.
+reliable starter dApp for PoS systems built on top of the Sui ecosystem.
 
 Refer to [SECURITY.md](SECURITY.md) for more details.

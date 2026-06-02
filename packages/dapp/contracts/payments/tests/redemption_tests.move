@@ -5,7 +5,7 @@ module openzeppelin_payments::redemption_tests;
 use openzeppelin_access::access_control::AccessControl;
 use openzeppelin_payments::listing;
 use openzeppelin_payments::loyalty::LOYALTY;
-use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, OperatorRole};
+use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, CashierRole, CatalogManagerRole};
 use openzeppelin_payments::receipt::{Self, Receipt, Redemption};
 use openzeppelin_payments::redemption::{Self, Voucher};
 use openzeppelin_payments::test_setup;
@@ -48,13 +48,16 @@ fun redemption_happy_path() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
             customer_account_id,
         );
 
-        let _ = merchant.add_listing(&auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing);
 
         // Mint LOYALTY for the customer via the merchant-held TreasuryCap.
         let loyalty_bal = merchant.loyalty_mut().treasury_cap_mut().mint_balance(100);
@@ -89,7 +92,7 @@ fun redemption_happy_path() {
         // Merchant redeems.
         scenario.next_tx(ADMIN);
         let v_shared = scenario.take_shared_by_id<Voucher>(voucher_id);
-        redemption::redeem(v_shared, &auth, &mut merchant, &test_clock, scenario.ctx());
+        redemption::redeem(v_shared, &cashier_auth, &mut merchant, &test_clock, scenario.ctx());
 
         // Customer receives the RedemptionReceipt.
         scenario.next_tx(CUSTOMER);
@@ -133,10 +136,13 @@ fun redeem_after_expiry_aborts() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing);
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -171,7 +177,7 @@ fun redeem_after_expiry_aborts() {
 
         scenario.next_tx(ADMIN);
         let v_shared = scenario.take_shared_by_id<Voucher>(voucher_id);
-        redemption::redeem(v_shared, &auth, &mut merchant, &test_clock, scenario.ctx());
+        redemption::redeem(v_shared, &cashier_auth, &mut merchant, &test_clock, scenario.ctx());
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -209,10 +215,11 @@ fun cancel_voucher_returns_funds() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing);
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(

@@ -6,7 +6,7 @@ module openzeppelin_payments::merchant_tests;
 use openzeppelin_access::access_control::AccessControl;
 use openzeppelin_payments::config;
 use openzeppelin_payments::listing;
-use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, OperatorRole};
+use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, MerchantRole, CatalogManagerRole};
 use openzeppelin_payments::test_setup;
 use pas::e2e;
 use std::unit_test::destroy;
@@ -60,10 +60,11 @@ fun add_listing_with_variants() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing);
 
         let stored = merchant.listing(listing_id);
         assert!(stored.name() == b"Coffee".to_string(), 0);
@@ -120,11 +121,12 @@ fun remove_listing_drops_variant_index() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&auth, listing);
-        merchant.remove_listing(&auth, listing_id);
+        let listing_id = merchant.add_listing(&catalog_auth, listing);
+        merchant.remove_listing(&catalog_auth, listing_id);
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -146,10 +148,11 @@ fun add_listing_variant_via_merchant() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing);
 
         let variant = listing::new_variant(
             b"M".to_string(),
@@ -157,7 +160,7 @@ fun add_listing_variant_via_merchant() {
             std::option::some(70),
             scenario.ctx(),
         );
-        let vid = merchant.add_listing_variant(&auth, listing_id, variant);
+        let vid = merchant.add_listing_variant(&catalog_auth, listing_id, variant);
 
         let v_ref = merchant.listing_variant(&vid);
         assert!(v_ref.price() == 700, 0);
@@ -183,10 +186,11 @@ fun remove_listing_variant_via_merchant() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing);
 
         let variant = listing::new_variant(
             b"M".to_string(),
@@ -194,9 +198,9 @@ fun remove_listing_variant_via_merchant() {
             std::option::none(),
             scenario.ctx(),
         );
-        let vid = merchant.add_listing_variant(&auth, listing_id, variant);
+        let vid = merchant.add_listing_variant(&catalog_auth, listing_id, variant);
 
-        merchant.remove_listing_variant(&auth, vid);
+        merchant.remove_listing_variant(&catalog_auth, vid);
 
         let stored = merchant.listing(listing_id);
         assert!(!stored.variants().contains(&vid), 0);
@@ -221,17 +225,18 @@ fun set_listing_status_toggles() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing);
 
         assert!(merchant.listing(listing_id).active(), 0);
 
-        merchant.set_listing_status(&auth, listing_id, false);
+        merchant.set_listing_status(&catalog_auth, listing_id, false);
         assert!(!merchant.listing(listing_id).active(), 0);
 
-        merchant.set_listing_status(&auth, listing_id, true);
+        merchant.set_listing_status(&catalog_auth, listing_id, true);
         assert!(merchant.listing(listing_id).active(), 0);
 
         test_scenario::return_shared(merchant);
@@ -254,13 +259,14 @@ fun set_listing_status_same_aborts() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing);
 
         // Already active — must abort.
-        merchant.set_listing_status(&auth, listing_id, true);
+        merchant.set_listing_status(&catalog_auth, listing_id, true);
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -280,11 +286,12 @@ fun set_config_updates_values() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
         let new_cfg = config::new(2, 20, 500_000, 300_000, 300_000);
-        merchant.set_config(&auth, new_cfg);
+        merchant.set_config(&merchant_auth, new_cfg);
 
         assert!(merchant.config().mint_numerator() == 2, 0);
         assert!(merchant.config().mint_denominator() == 20, 0);
@@ -310,12 +317,13 @@ fun set_config_unchanged_aborts() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
         // Same values as setup_merchant defaults.
         let same_cfg = config::new(1, 10, 1_000_000, 600_000, 600_000);
-        merchant.set_config(&auth, same_cfg);
+        merchant.set_config(&merchant_auth, same_cfg);
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);

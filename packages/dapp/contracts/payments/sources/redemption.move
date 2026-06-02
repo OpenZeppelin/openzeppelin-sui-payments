@@ -24,7 +24,7 @@ module openzeppelin_payments::redemption;
 use openzeppelin_access::access_control::Auth;
 use openzeppelin_payments::events;
 use openzeppelin_payments::loyalty::{Self, LOYALTY};
-use openzeppelin_payments::merchant::{Merchant, OperatorRole};
+use openzeppelin_payments::merchant::{Merchant, CashierRole};
 use openzeppelin_payments::receipt::{Self, Item};
 use pas::account::Account;
 use pas::policy::Policy;
@@ -115,7 +115,7 @@ public fun share(voucher: Voucher) {
 /// `RedemptionReceipt` for the customer, and emits `VoucherRedeemed`.
 public fun redeem(
     voucher: Voucher,
-    _auth: &Auth<OperatorRole>,
+    _auth: &Auth<CashierRole>,
     merchant: &mut Merchant,
     clock: &Clock,
     ctx: &mut TxContext,

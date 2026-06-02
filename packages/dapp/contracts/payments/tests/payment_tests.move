@@ -5,7 +5,7 @@ module openzeppelin_payments::payment_tests;
 use openzeppelin_access::access_control::AccessControl;
 use openzeppelin_payments::invoice::{Self, Invoice};
 use openzeppelin_payments::listing;
-use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, OperatorRole};
+use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, CashierRole, CatalogManagerRole};
 use openzeppelin_payments::receipt::{Self, Receipt, Payment};
 use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::account::{Self, Account};
@@ -51,17 +51,20 @@ fun payment_happy_path() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _listing_id = merchant.add_listing(&auth, listing);
+        let _listing_id = merchant.add_listing(&catalog_auth, listing);
 
         // Merchant POS: issue invoice for 1 × Small Coffee.
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
         let inv = invoice::new(
             &merchant,
-            &auth,
+            &cashier_auth,
             vector[variant_id],
             vector[1],
             b"order-001",
@@ -149,16 +152,19 @@ fun pay_after_expiry_aborts() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing);
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
         let inv = invoice::new(
             &merchant,
-            &auth,
+            &cashier_auth,
             vector[variant_id],
             vector[1],
             b"order-001",
@@ -230,16 +236,19 @@ fun cancel_after_expiry_destroys_invoice() {
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        let auth = ac.new_auth<MERCHANT, OperatorRole>(scenario.ctx());
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing);
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
         let inv = invoice::new(
             &merchant,
-            &auth,
+            &cashier_auth,
             vector[variant_id],
             vector[1],
             b"order-001",

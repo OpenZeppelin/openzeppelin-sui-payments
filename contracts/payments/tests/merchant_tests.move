@@ -330,3 +330,111 @@ fun set_config_unchanged_aborts() {
         destroy(test_usd_cap);
     });
 }
+
+#[test]
+fun set_payout_address_rotates_payout() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        merchant.set_payout_address(&merchant_auth, @0xC0FFEE);
+        assert!(merchant.payout_address() == @0xC0FFEE, 0);
+
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EPayoutAddressUnchanged)]
+fun set_payout_address_unchanged_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        // Same as setup_merchant default — must abort.
+        merchant.set_payout_address(&merchant_auth, PAYOUT);
+
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test]
+fun set_display_updates_name_and_logo() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        merchant.set_display(
+            &merchant_auth,
+            b"Renamed Shop".to_string(),
+            std::option::some(b"https://example.com/logo.png".to_string()),
+        );
+        assert!(merchant.name() == b"Renamed Shop".to_string(), 0);
+        assert!(
+            merchant.logo_url().borrow() == b"https://example.com/logo.png".to_string(),
+            0,
+        );
+
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EDisplayUnchanged)]
+fun set_display_unchanged_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        // Same as setup_merchant defaults (name="Test Shop", logo=None) — must abort.
+        merchant.set_display(&merchant_auth, b"Test Shop".to_string(), std::option::none());
+
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}

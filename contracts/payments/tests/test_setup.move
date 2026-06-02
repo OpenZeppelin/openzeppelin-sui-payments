@@ -39,10 +39,11 @@ public fun approve_test_usd(request: &mut Request<SendFunds<Balance<TEST_USD>>>)
 /// policies and a `Merchant` with sane defaults. Shares the Merchant. Returns
 /// `(merchant_id, TreasuryCap<TEST_USD>)` — the TreasuryCap is needed by
 /// tests to mint balance into customer PAS accounts. The shared
-/// `AccessControl<MERCHANT>` registry (with `OperatorRole` granted to the
-/// tx sender) is set up by `merchant::init_for_testing`; tests should call
-/// that themselves before invoking this helper so the registry exists in the
-/// scenario.
+/// `AccessControl<MERCHANT>` registry is set up by `merchant::init_for_testing`
+/// (tests should call that themselves before invoking this helper). No
+/// operational roles are pre-granted — each test calls
+/// `ac.grant_role<MERCHANT, {Merchant,CatalogManager,Cashier}Role>(...)`
+/// explicitly for the roles it needs.
 public fun setup_merchant(
     namespace: &mut Namespace,
     payout_address: address,

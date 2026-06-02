@@ -58,6 +58,8 @@ const EConfigUnchanged: vector<u8> = b"Config matches the current value";
 const EPayoutAddressUnchanged: vector<u8> = b"Payout address matches the current value";
 #[error(code = 5)]
 const EDisplayUnchanged: vector<u8> = b"Display name and logo both match the current values";
+#[error(code = 6)]
+const EListingInactive: vector<u8> = b"Listing is inactive and cannot be sold or redeemed";
 
 // === Constants ===
 
@@ -195,6 +197,21 @@ public fun listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
 
     let listing_id = *self.variant_index.borrow(*listing_variant_id);
     self.listings.borrow(listing_id).variant(listing_variant_id)
+}
+
+/// Like `listing_variant`, but additionally asserts the parent listing is
+/// `active`. Used at issuance time by `payment::new` / `redemption::new` (via
+/// `receipt::new_item` / `new_loyalty_item`) so inactive listings can't be
+/// sold or redeemed against. Aborts with `EVariantNotFound` or
+/// `EListingInactive`. Also useful to clients for pre-flight checks before
+/// submitting an issuance call.
+public fun active_listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
+    assert!(self.variant_index.contains(*listing_variant_id), EVariantNotFound);
+
+    let listing_id = *self.variant_index.borrow(*listing_variant_id);
+    let listing = self.listings.borrow(listing_id);
+    assert!(listing.active(), EListingInactive);
+    listing.variant(listing_variant_id)
 }
 
 // === Admin Functions ===

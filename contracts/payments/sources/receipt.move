@@ -43,7 +43,7 @@ public struct Item has drop, store {
 /// `Payment` for invoice settlements, `Redemption` for voucher burns. The
 /// generic shape lets the package add new receipt kinds later without
 /// duplicating the shared fields.
-public struct Receipt<T: store> has key {
+public struct Receipt<T> has key {
     /// Object ID. The receipt itself is transferred to the customer.
     id: UID,
     /// Line items copied from the originating invoice or voucher.
@@ -57,7 +57,7 @@ public struct Receipt<T: store> has key {
 }
 
 /// Payment-flow payload (carried inside `Receipt<Payment>`).
-public struct Payment has store {
+public struct Payment has drop, store {
     /// ID of the `Invoice` this receipt settled.
     invoice_id: ID,
     /// Payout address that received the stablecoin.
@@ -69,9 +69,21 @@ public struct Payment has store {
 }
 
 /// Redemption-flow payload (carried inside `Receipt<Redemption>`).
-public struct Redemption has store {
+public struct Redemption has drop, store {
     /// ID of the `Voucher` this receipt settled.
     voucher_id: ID,
+}
+
+// === Public Functions ===
+
+/// Voluntarily discard a receipt. Only the owner (the customer the receipt was
+/// transferred to) can call this since the receipt is `key`-only and owned.
+/// The canonical settlement record stays on-chain as the originating
+/// `InvoicePaid` / `VoucherRedeemed` event — destroying the receipt just
+/// reclaims object storage for the customer.
+public fun destroy<T: store + drop>(receipt: Receipt<T>) {
+    let Receipt { id, items: _, amount: _, timestamp_ms: _, data: _ } = receipt;
+    id.delete();
 }
 
 // === View Functions ===
@@ -89,13 +101,13 @@ public fun price(self: &Item): u64 { self.price }
 public fun id<T: store>(self: &Receipt<T>): ID { object::id(self) }
 
 /// Line items copied from the originating invoice or voucher.
-public fun items<T: store>(self: &Receipt<T>): &vector<Item> { &self.items }
+public fun items<T>(self: &Receipt<T>): &vector<Item> { &self.items }
 
 /// Total settled amount (stablecoin for payment, LOYALTY for redemption).
-public fun amount<T: store>(self: &Receipt<T>): u64 { self.amount }
+public fun amount<T>(self: &Receipt<T>): u64 { self.amount }
 
 /// Settlement timestamp (ms since epoch).
-public fun timestamp_ms<T: store>(self: &Receipt<T>): u64 { self.timestamp_ms }
+public fun timestamp_ms<T>(self: &Receipt<T>): u64 { self.timestamp_ms }
 
 /// ID of the `Invoice` this receipt settled.
 public fun invoice_id(self: &Receipt<Payment>): ID { self.data.invoice_id }
@@ -116,11 +128,12 @@ public fun voucher_id(self: &Receipt<Redemption>): ID { self.data.voucher_id }
 
 /// Build an order line by snapshotting the variant's current stablecoin price
 /// from the merchant's catalog. `quantity` must be > 0. Aborts if the variant
-/// is not registered (via `merchant::listing_variant`).
+/// is not registered or its parent listing is inactive (via
+/// `merchant::active_listing_variant`).
 public(package) fun new_item(merchant: &Merchant, variant_id: ID, quantity: u64): Item {
     assert!(quantity > 0, EZeroQuantity);
 
-    let price = merchant.listing_variant(&variant_id).price();
+    let price = merchant.active_listing_variant(&variant_id).price();
 
     Item { variant_id, quantity, price }
 }
@@ -129,12 +142,13 @@ public(package) fun new_item(merchant: &Merchant, variant_id: ID, quantity: u64)
 /// from the merchant's catalog. `quantity` must be > 0. Aborts with
 /// `ENoLoyaltyPrice` if the variant does not declare a loyalty-side price
 /// (i.e. `Variant.loyalty_price` is `None`), and propagates the abort from
-/// `merchant::listing_variant` if the variant is not registered.
+/// `merchant::active_listing_variant` if the variant is not registered or its
+/// parent listing is inactive.
 public(package) fun new_loyalty_item(merchant: &Merchant, variant_id: ID, quantity: u64): Item {
     assert!(quantity > 0, EZeroQuantity);
 
     let price = merchant
-        .listing_variant(&variant_id)
+        .active_listing_variant(&variant_id)
         .loyalty_price()
         .destroy_or!(abort ENoLoyaltyPrice);
 

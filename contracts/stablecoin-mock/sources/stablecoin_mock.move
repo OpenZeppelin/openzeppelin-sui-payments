@@ -71,7 +71,10 @@ public fun setup(
     transfer::public_transfer(policy_cap, ctx.sender());
 }
 
-/// Permissionless faucet — mints `amount` mock USD into the recipient's PAS Account.
+/// Deployer-only faucet — mints `amount` mock USD into the recipient's PAS
+/// Account. Requires the holder of `TreasuryCap<STABLECOIN_MOCK>` (owned by
+/// the deployer after `init`) to call; not a permissionless tap. For a real
+/// permissionless faucet, wrap the cap inside a shared object with rate-limiting.
 /// Devnet only.
 public fun faucet(
     cap: &mut TreasuryCap<STABLECOIN_MOCK>,

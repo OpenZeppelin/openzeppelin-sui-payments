@@ -47,6 +47,10 @@ const EVoucherExpired: vector<u8> = b"Voucher has expired";
 const EWrongCustomer: vector<u8> = b"Account owner does not match Voucher customer";
 #[error(code = 4)]
 const EInvalidAmount: vector<u8> = b"Voucher amount must be equal to total redeemed amount";
+#[error(code = 5)]
+const ENoItems: vector<u8> = b"Voucher must include at least one item";
+#[error(code = 6)]
+const ELengthMismatch: vector<u8> = b"listing_variant_ids and quantities must have the same length";
 
 // === Structs ===
 
@@ -90,6 +94,9 @@ public fun new(
     clock: &Clock,
     ctx: &mut TxContext,
 ): Voucher {
+    assert!(!listing_variant_ids.is_empty(), ENoItems);
+    assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
+
     let customer = unlock_req.data().owner();
     let amount = unlock_req.data().funds().value();
     assert!(amount > 0, EZeroAmount);
@@ -123,7 +130,7 @@ public fun share(voucher: Voucher) {
 
 /// Merchant redeems the voucher: burns the locked `Balance<LOYALTY>` via the
 /// merchant's `TreasuryCap<LOYALTY>`, destroys the voucher, mints a soulbound
-/// `RedemptionReceipt` for the customer, and emits `VoucherRedeemed`.
+/// `Receipt<Redemption>` for the customer, and emits `VoucherRedeemed`.
 public fun redeem(
     voucher: Voucher,
     _auth: &Auth<CashierRole>,

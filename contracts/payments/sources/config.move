@@ -1,4 +1,4 @@
-/// Merchant configuration. Owned by `Merchant` and consumed by `invoice` and
+/// Merchant configuration. Owned by `Merchant` and consumed by `payment` and
 /// `redemption` for two purposes:
 ///
 /// 1. Loyalty mint rate per payment:

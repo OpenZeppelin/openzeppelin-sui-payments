@@ -133,7 +133,7 @@ public fun share(invoice: Invoice) {
 /// Customer settles the invoice. Resolves the customer's already-approved stablecoin
 /// `send_funds` request (transfers `Balance<S>` from customer's PAS Account to the
 /// merchant's), mints loyalty rewards into the customer's PAS `Account<LOYALTY>`,
-/// destroys the Invoice, mints a soulbound `PaymentReceipt` for the customer, and
+/// destroys the Invoice, mints a soulbound `Receipt<Payment>` for the customer, and
 /// emits `InvoicePaid`.
 public fun pay<S>(
     invoice: Invoice,

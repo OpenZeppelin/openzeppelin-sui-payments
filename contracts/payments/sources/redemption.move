@@ -10,7 +10,7 @@
 /// Customer wallet flow:
 ///   auth       = account::new_auth(&ctx)
 ///   unlock_req = customer_LOY.unlock_balance<LOYALTY>(&auth, amount, &ctx)
-///   voucher    = redemption::new(merchant, unlock_req, policy_loyalty, ids, qtys, &clock, ctx)
+///   voucher    = redemption::new(merchant, unlock_req, policy_loyalty, ids, quantities, &clock, ctx)
 ///   redemption::share(voucher)
 ///
 /// Merchant POS flow (after scanning the customer's QR):
@@ -122,7 +122,6 @@ public fun redeem(
     ctx: &mut TxContext,
 ) {
     let voucher_id = object::id(&voucher);
-    let merchant_id = object::id(merchant);
     let now = clock.timestamp_ms();
 
     assert!(now < voucher.expires_at_ms, EVoucherExpired);
@@ -139,7 +138,7 @@ public fun redeem(
     // Soulbound receipt to the customer
     receipt::transfer_redemption_receipt(voucher_id, items, amount, now, customer, ctx);
 
-    events::emit_voucher_redeemed(voucher_id, merchant_id, customer, amount, now);
+    events::emit_voucher_redeemed(voucher_id, customer, amount, now);
 }
 
 /// Permissionless cleanup after expiry — deposits the locked balance back into the

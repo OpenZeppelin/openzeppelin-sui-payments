@@ -136,7 +136,6 @@ public fun pay<S>(
 ) {
     let now = clock.timestamp_ms();
     let invoice_id = object::id(&invoice);
-    let merchant_id = object::id(merchant);
 
     // Invoice validity
     assert!(now < invoice.expires_at_ms, EInvoiceExpired);
@@ -189,7 +188,6 @@ public fun pay<S>(
 
     events::emit_invoice_paid(
         invoice_id,
-        merchant_id,
         order_ref,
         sender,
         amount,

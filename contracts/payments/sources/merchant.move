@@ -221,8 +221,7 @@ public fun set_config(self: &mut Merchant, _auth: &Auth<MerchantRole>, config: C
 
     self.config = config;
 
-    let merchant_id = object::id(self);
-    events::emit_config_updated(merchant_id);
+    events::emit_config_updated();
 }
 
 /// Take ownership of a caller-built `Listing` and store it under its own ID.
@@ -235,14 +234,13 @@ public fun add_listing(
     listing: Listing,
 ): ID {
     let id = listing.id();
-    let merchant_id = object::id(self);
 
     listing.variants().keys().do!(|vid| {
         self.variant_index.add(vid, id);
     });
 
     self.listings.add(id, listing);
-    events::emit_listing_added(merchant_id, id);
+    events::emit_listing_added(id);
 
     id
 }
@@ -252,14 +250,13 @@ public fun add_listing(
 public fun remove_listing(self: &mut Merchant, _auth: &Auth<CatalogManagerRole>, id: ID) {
     assert!(self.listings.contains(id), EListingNotFound);
 
-    let merchant_id = object::id(self);
     let removed = self.listings.remove(id);
 
     removed.variants().keys().do!(|vid| {
         let _: ID = self.variant_index.remove(vid);
     });
 
-    events::emit_listing_removed(merchant_id, id);
+    events::emit_listing_removed(id);
 }
 
 /// Toggle a listing's `active` flag. Aborts if the listing does not exist, or
@@ -273,10 +270,9 @@ public fun set_listing_status(
 ) {
     assert!(self.listings.contains(listing_id), EListingNotFound);
 
-    let merchant_id = object::id(self);
     self.listings.borrow_mut(listing_id).set_active(active);
 
-    events::emit_listing_status_changed(merchant_id, listing_id, active);
+    events::emit_listing_status_changed(listing_id, active);
 }
 
 /// Insert a variant into an existing listing and return its ID. The new variant
@@ -290,11 +286,10 @@ public fun add_listing_variant(
 ): ID {
     assert!(self.listings.contains(listing_id), EListingNotFound);
 
-    let merchant_id = object::id(self);
     let id = self.listings.borrow_mut(listing_id).add_variant(variant);
     self.variant_index.add(id, listing_id);
 
-    events::emit_variant_added(merchant_id, listing_id, id);
+    events::emit_variant_added(listing_id, id);
 
     id
 }
@@ -311,9 +306,8 @@ public fun remove_listing_variant(
 
     let listing_id = self.variant_index.remove(variant_id);
     self.listings.borrow_mut(listing_id).remove_variant(variant_id);
-    let merchant_id = object::id(self);
 
-    events::emit_variant_removed(merchant_id, listing_id, variant_id);
+    events::emit_variant_removed(listing_id, variant_id);
 }
 
 // === Package Functions ===

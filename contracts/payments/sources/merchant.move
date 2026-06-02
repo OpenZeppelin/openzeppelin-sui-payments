@@ -47,11 +47,11 @@ use sui::table::{Self, Table};
 // === Errors ===
 
 #[error(code = 0)]
-const EEmptyName: vector<u8> = b"Merchant name cannot be empty";
+const EEmptyName: vector<u8> = b"Name cannot be empty";
 #[error(code = 1)]
 const EListingNotFound: vector<u8> = b"Listing not found";
 #[error(code = 2)]
-const EVariantNotFound: vector<u8> = b"Variant not found in catalog";
+const EVariantNotFound: vector<u8> = b"Listing variant not found";
 #[error(code = 3)]
 const EConfigUnchanged: vector<u8> = b"Config matches the current value";
 #[error(code = 4)]

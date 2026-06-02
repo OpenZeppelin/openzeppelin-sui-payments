@@ -13,11 +13,11 @@ use sui::vec_map::{Self, VecMap};
 // === Errors ===
 
 #[error(code = 0)]
-const EEmptyName: vector<u8> = b"Listing name cannot be empty";
+const EEmptyName: vector<u8> = b"Name cannot be empty";
 #[error(code = 1)]
-const EZeroPrice: vector<u8> = b"Listing price must be greater than zero";
+const EZeroPrice: vector<u8> = b"Price must be greater than zero";
 #[error(code = 2)]
-const EVariantNotFound: vector<u8> = b"Variant not found";
+const EVariantNotFound: vector<u8> = b"Listing variant not found";
 #[error(code = 3)]
 const EActiveStateUnchanged: vector<u8> = b"Listing already has the requested active state";
 

@@ -1,0 +1,91 @@
+name: Move
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: move-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SUI_CLI_VERSION: "1.70.2"
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      packages: ${{ steps.set-matrix.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set package matrix
+        id: set-matrix
+        run: |
+          PACKAGES='["payments", "stablecoin-mock"]'
+          echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
+
+      - uses: ./.github/actions/setup-sui
+
+  check-move-formatting:
+    name: Move Formatter Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: MystenLabs/move-formatter-action@v1
+        with:
+          prettier-plugin-move-version: "latest"
+          working-directory: "./contracts"
+          pattern: "**/*.move"
+          write-changes: false
+
+  move-lint:
+    name: Move Lint ${{ matrix.package }}
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: true
+      matrix:
+        package: ${{ fromJson(needs.setup.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sui
+      - name: Lint ${{ matrix.package }}
+        run: sui move build --lint --build-env test-publish
+        working-directory: ./contracts/${{ matrix.package }}
+      - name: Lint tests for ${{ matrix.package }}
+        run: sui move build --test --lint --build-env test-publish
+        working-directory: ./contracts/${{ matrix.package }}
+
+  move-tests:
+    name: Move Test ${{ matrix.package }}
+    needs:
+      - setup
+      - move-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: true
+      matrix:
+        package: ${{ fromJson(needs.setup.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sui
+      - name: Run Move tests for ${{ matrix.package }}
+        run: sui move test --coverage --build-env test-publish
+        working-directory: ./contracts/${{ matrix.package }}
+      - name: Generate coverage summary for ${{ matrix.package }}
+        run: |
+          if [ -f .coverage_map.mvcov ]; then
+            sui move coverage summary
+          fi
+        working-directory: ./contracts/${{ matrix.package }}

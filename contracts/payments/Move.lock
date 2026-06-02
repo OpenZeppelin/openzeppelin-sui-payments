@@ -25,17 +25,17 @@ deps = { std = "MoveStdlib", sui = "Sui" }
 [pinned.test-publish.openzeppelin_payments]
 source = { root = true }
 use_environment = "test-publish"
-manifest_digest = "F793FF93E4D33122F3B9AA11DD9B3A8EC2FFA00C1D6B841FBB8496C74D86FBC4"
+manifest_digest = "CFEDB04A672B3BDD46BC93E017B0A25317583EAE5AB36E9F4C89BBCE93E67F9A"
 deps = { openzeppelin_access = "openzeppelin_access", pas = "pas", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.test-publish.pas]
-source = { local = "../../../../vendor/pas/packages/pas" }
+source = { local = "../../vendor/pas/packages/pas" }
 use_environment = "test-publish"
 manifest_digest = "17258CB0D3D0AACE7EAD0FE83E6ECB40F90008AF52EE3E24148AA0825E5C1F6A"
 deps = { ptb = "ptb", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.test-publish.ptb]
-source = { local = "../../../../vendor/pas/packages/ptb" }
+source = { local = "../../vendor/pas/packages/ptb" }
 use_environment = "test-publish"
 manifest_digest = "2963D6B4689ED068546E86F8453FBCA51DCDF68A1C96D681328D2CDACE14B5CF"
 deps = { std = "MoveStdlib", sui = "Sui" }

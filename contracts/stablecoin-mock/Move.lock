@@ -19,17 +19,17 @@ deps = { MoveStdlib = "MoveStdlib" }
 [pinned.test-publish.local_mock_stablecoin]
 source = { root = true }
 use_environment = "test-publish"
-manifest_digest = "8A22D9CA5E58D5B9351FBC854C1C2CDC41F09022A2C9EA84A5AC2A0079066EEE"
+manifest_digest = "1007F6820A08077E7D06C559CF54BCAD296D8CD9B13900E96CD17D5437957C1D"
 deps = { pas = "pas", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.test-publish.pas]
-source = { local = "../../../../vendor/pas/packages/pas" }
+source = { local = "../../vendor/pas/packages/pas" }
 use_environment = "test-publish"
 manifest_digest = "17258CB0D3D0AACE7EAD0FE83E6ECB40F90008AF52EE3E24148AA0825E5C1F6A"
 deps = { ptb = "ptb", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.test-publish.ptb]
-source = { local = "../../../../vendor/pas/packages/ptb" }
+source = { local = "../../vendor/pas/packages/ptb" }
 use_environment = "test-publish"
 manifest_digest = "2963D6B4689ED068546E86F8453FBCA51DCDF68A1C96D681328D2CDACE14B5CF"
 deps = { std = "MoveStdlib", sui = "Sui" }

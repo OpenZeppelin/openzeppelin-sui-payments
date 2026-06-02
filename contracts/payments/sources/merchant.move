@@ -54,6 +54,10 @@ const EListingNotFound: vector<u8> = b"Listing not found";
 const EVariantNotFound: vector<u8> = b"Variant not found in catalog";
 #[error(code = 3)]
 const EConfigUnchanged: vector<u8> = b"Config matches the current value";
+#[error(code = 4)]
+const EPayoutAddressUnchanged: vector<u8> = b"Payout address matches the current value";
+#[error(code = 5)]
+const EDisplayUnchanged: vector<u8> = b"Display name and logo both match the current values";
 
 // === Constants ===
 
@@ -195,14 +199,20 @@ public fun listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
 
 // === Admin Functions ===
 
-/// Rotate the address that receives customer stablecoin payments. Gated by
-/// `MerchantRole`.
+/// Rotate the address that receives customer stablecoin payments. Aborts with
+/// `EPayoutAddressUnchanged` if `addr` already matches the current payout.
+/// Gated by `MerchantRole`. Emits `PayoutAddressChanged`.
 public fun set_payout_address(self: &mut Merchant, _auth: &Auth<MerchantRole>, addr: address) {
+    assert!(self.payout_address != addr, EPayoutAddressUnchanged);
+
     self.payout_address = addr;
+
+    events::emit_payout_address_changed();
 }
 
-/// Update display name and logo URL. Aborts with `EEmptyName` if `name` is empty.
-/// Gated by `MerchantRole`.
+/// Update display name and logo URL. Aborts with `EEmptyName` if `name` is
+/// empty, or with `EDisplayUnchanged` if both `name` and `logo` already match
+/// the current values. Gated by `MerchantRole`. Emits `DisplayChanged`.
 public fun set_display(
     self: &mut Merchant,
     _auth: &Auth<MerchantRole>,
@@ -210,8 +220,12 @@ public fun set_display(
     logo: Option<String>,
 ) {
     assert!(!name.is_empty(), EEmptyName);
+    assert!(&self.name != &name || &self.logo_url != &logo, EDisplayUnchanged);
+
     self.name = name;
     self.logo_url = logo;
+
+    events::emit_display_changed();
 }
 
 /// Replace the merchant's loyalty mint `Config`. Build the new value via

@@ -106,8 +106,17 @@ public struct VariantRemoved has copy, drop {
     variant_id: ID,
 }
 
-/// Emitted when a merchant replaces its loyalty mint `Config`.
+/// Emitted when a merchant replaces its loyalty mint `Config`. Pulse only —
+/// query `Merchant.config` for the current values.
 public struct ConfigUpdated has copy, drop {}
+
+/// Emitted when a merchant rotates its payout address. Pulse only — query
+/// `Merchant.payout_address` for the current value.
+public struct PayoutAddressChanged has copy, drop {}
+
+/// Emitted when a merchant updates its display name or logo. Pulse only —
+/// query `Merchant.name` / `Merchant.logo_url` for the current values.
+public struct DisplayChanged has copy, drop {}
 
 // === Package Functions ===
 
@@ -193,4 +202,14 @@ public(package) fun emit_variant_removed(listing_id: ID, variant_id: ID) {
 /// Emit `ConfigUpdated`.
 public(package) fun emit_config_updated() {
     event::emit(ConfigUpdated {});
+}
+
+/// Emit `PayoutAddressChanged`.
+public(package) fun emit_payout_address_changed() {
+    event::emit(PayoutAddressChanged {});
+}
+
+/// Emit `DisplayChanged`.
+public(package) fun emit_display_changed() {
+    event::emit(DisplayChanged {});
 }

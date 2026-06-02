@@ -211,7 +211,11 @@ public fun pay<S>(
 /// object destruction.
 public fun cancel(invoice: Invoice, clock: &Clock) {
     assert!(clock.timestamp_ms() >= invoice.expires_at_ms, ENotExpired);
-    let Invoice { id, .. } = invoice;
+
+    let Invoice { id, order_ref, .. } = invoice;
+
+    events::emit_invoice_canceled(id.to_inner(), order_ref);
+
     id.delete();
 }
 

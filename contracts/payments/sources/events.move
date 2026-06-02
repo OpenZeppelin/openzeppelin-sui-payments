@@ -51,6 +51,25 @@ public struct VoucherRedeemed has copy, drop {
     timestamp_ms: u64,
 }
 
+/// Emitted when an expired `Invoice` is cleaned up via `payment::cancel`.
+public struct InvoiceCanceled has copy, drop {
+    /// ID of the canceled `Invoice` (now destroyed).
+    invoice_id: ID,
+    /// Merchant-supplied order reference carried over from the invoice.
+    order_ref: vector<u8>,
+}
+
+/// Emitted when an expired `Voucher` is cleaned up via `redemption::cancel`.
+/// The locked LOYALTY balance has been returned to `customer`.
+public struct VoucherCanceled has copy, drop {
+    /// ID of the canceled `Voucher` (now destroyed).
+    voucher_id: ID,
+    /// Address that received the returned LOYALTY balance.
+    customer: address,
+    /// LOYALTY units returned.
+    amount: u64,
+}
+
 /// Emitted when a merchant adds a `Listing`.
 public struct ListingAdded has copy, drop {
     /// ID of the added listing.
@@ -134,6 +153,16 @@ public(package) fun emit_voucher_redeemed(
         amount,
         timestamp_ms,
     });
+}
+
+/// Emit `InvoiceCanceled`.
+public(package) fun emit_invoice_canceled(invoice_id: ID, order_ref: vector<u8>) {
+    event::emit(InvoiceCanceled { invoice_id, order_ref });
+}
+
+/// Emit `VoucherCanceled`.
+public(package) fun emit_voucher_canceled(voucher_id: ID, customer: address, amount: u64) {
+    event::emit(VoucherCanceled { voucher_id, customer, amount });
 }
 
 /// Emit `ListingAdded`.

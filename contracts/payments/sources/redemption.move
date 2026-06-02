@@ -158,7 +158,12 @@ public fun cancel(voucher: Voucher, customer_loyalty_account: &Account, clock: &
     assert!(clock.timestamp_ms() >= voucher.expires_at_ms, ENotExpired);
     assert!(customer_loyalty_account.owner() == voucher.customer, EWrongCustomer);
 
-    let Voucher { id, funds, .. } = voucher;
+    let voucher_id = object::id(&voucher);
+    let Voucher { id, customer, funds, .. } = voucher;
+    let amount = funds.value();
+
+    events::emit_voucher_canceled(voucher_id, customer, amount);
+
     customer_loyalty_account.deposit_balance(funds);
     id.delete();
 }

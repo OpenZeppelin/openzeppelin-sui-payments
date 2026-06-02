@@ -48,8 +48,15 @@ fun init(otw: LOYALTY, ctx: &mut TxContext) {
 /// struct (the Merchant) before the transaction ends. No `key`, so it cannot
 /// exist as a top-level on-chain object.
 public struct Loyalty has store {
+    /// Mint/burn authority for `LOYALTY`. Mutably accessed only via
+    /// `treasury_cap_mut` (package-private) to mint on `payment::pay` and burn
+    /// on `redemption::redeem`.
     treasury_cap: TreasuryCap<LOYALTY>,
+    /// PAS authority over `Policy<Balance<LOYALTY>>`. Held but never exposed
+    /// mutably — the policy is locked once registered in `create`.
     policy_cap: PolicyCap<Balance<LOYALTY>>,
+    /// ID of the shared `Policy<Balance<LOYALTY>>` created in `create`. Useful
+    /// for off-chain consumers that need to resolve the policy object.
     policy_id: ID,
 }
 

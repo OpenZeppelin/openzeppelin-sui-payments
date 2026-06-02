@@ -158,6 +158,9 @@ public fun share(m: Merchant) {
 
 // === View Functions ===
 
+/// Object ID of the shared `Merchant`.
+public fun id(self: &Merchant): ID { object::id(self) }
+
 /// Display name (mutable via `set_display`).
 public fun name(self: &Merchant): &String { &self.name }
 

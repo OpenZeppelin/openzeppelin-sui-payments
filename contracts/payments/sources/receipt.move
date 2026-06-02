@@ -20,6 +20,8 @@ use openzeppelin_payments::merchant::Merchant;
 const EZeroQuantity: vector<u8> = b"Item quantity must be greater than zero";
 #[error(code = 1)]
 const EAmountOverflow: vector<u8> = b"Amount exceeds u64 range";
+#[error(code = 2)]
+const ENoLoyaltyPrice: vector<u8> = b"Variant is not redeemable: loyalty_price is not set";
 
 // === Structs ===
 
@@ -29,9 +31,12 @@ const EAmountOverflow: vector<u8> = b"Amount exceeds u64 range";
 /// be reused across both flows. Snapshot pricing decouples the order from
 /// later mutations of the underlying `Variant`.
 public struct Item has drop, store {
+    /// ID of the listing variant this line refers to.
     variant_id: ID,
+    /// Quantity ordered.
     quantity: u64,
-    unit_price: u64,
+    /// Snapshot unit price (stablecoin units for invoices, LOYALTY units for vouchers).
+    price: u64,
 }
 
 /// Soulbound proof of settlement. `T` is the flow-specific payload type:
@@ -39,23 +44,33 @@ public struct Item has drop, store {
 /// generic shape lets the package add new receipt kinds later without
 /// duplicating the shared fields.
 public struct Receipt<T: store> has key {
+    /// Object ID. The receipt itself is transferred to the customer.
     id: UID,
+    /// Line items copied from the originating invoice or voucher.
     items: vector<Item>,
+    /// Total settled amount (stablecoin for payment, LOYALTY for redemption).
     amount: u64,
+    /// Settlement clock timestamp (ms since epoch).
     timestamp_ms: u64,
+    /// Flow-specific payload (`Payment` or `Redemption`).
     data: T,
 }
 
 /// Payment-flow payload (carried inside `Receipt<Payment>`).
 public struct Payment has store {
+    /// ID of the `Invoice` this receipt settled.
     invoice_id: ID,
+    /// Payout address that received the stablecoin.
     payout_address: address,
+    /// LOYALTY units minted to the customer on settlement.
     loyalty: u64,
+    /// Merchant-supplied order reference carried over from the invoice.
     order_ref: vector<u8>,
 }
 
 /// Redemption-flow payload (carried inside `Receipt<Redemption>`).
 public struct Redemption has store {
+    /// ID of the `Voucher` this receipt settled.
     voucher_id: ID,
 }
 
@@ -68,7 +83,7 @@ public fun variant_id(self: &Item): ID { self.variant_id }
 public fun quantity(self: &Item): u64 { self.quantity }
 
 /// Snapshot unit price (stablecoin units for invoices, LOYALTY units for vouchers).
-public fun unit_price(self: &Item): u64 { self.unit_price }
+public fun price(self: &Item): u64 { self.price }
 
 /// Object ID of the receipt.
 public fun id<T: store>(self: &Receipt<T>): ID { object::id(self) }
@@ -105,18 +120,34 @@ public fun voucher_id(self: &Receipt<Redemption>): ID { self.data.voucher_id }
 public(package) fun new_item(merchant: &Merchant, variant_id: ID, quantity: u64): Item {
     assert!(quantity > 0, EZeroQuantity);
 
-    let unit_price = merchant.listing_variant(&variant_id).price();
+    let price = merchant.listing_variant(&variant_id).price();
 
-    Item { variant_id, quantity, unit_price }
+    Item { variant_id, quantity, price }
 }
 
-/// Sum `item.quantity * item.unit_price` across all items using a u128
+/// Build a voucher line by snapshotting the variant's current `loyalty_price`
+/// from the merchant's catalog. `quantity` must be > 0. Aborts with
+/// `ENoLoyaltyPrice` if the variant does not declare a loyalty-side price
+/// (i.e. `Variant.loyalty_price` is `None`), and propagates the abort from
+/// `merchant::listing_variant` if the variant is not registered.
+public(package) fun new_loyalty_item(merchant: &Merchant, variant_id: ID, quantity: u64): Item {
+    assert!(quantity > 0, EZeroQuantity);
+
+    let price = merchant
+        .listing_variant(&variant_id)
+        .loyalty_price()
+        .destroy_or!(abort ENoLoyaltyPrice);
+
+    Item { variant_id, quantity, price }
+}
+
+/// Sum `item.quantity * item.price` across all items using a u128
 /// accumulator; aborts with `EAmountOverflow` if the final total doesn't fit
 /// in u64.
 public(package) fun compute_total(items: &vector<Item>): u64 {
     let mut total: u128 = 0;
     items.do_ref!(|item| {
-        total = total + (item.quantity as u128) * (item.unit_price as u128);
+        total = total + (item.quantity as u128) * (item.price as u128);
     });
 
     total.try_as_u64().destroy_or!(abort EAmountOverflow)

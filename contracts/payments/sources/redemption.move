@@ -57,10 +57,20 @@ const EInvalidAmount: vector<u8> = b"Voucher amount must be equal to total redee
 /// NOTE: No `merchant_id` field: the package's single-Merchant invariant means there's
 /// only one Merchant any Voucher could be against.
 public struct Voucher has key {
+    /// Object ID. Surfaced via QR for the merchant to scan and look up the
+    /// shared object.
     id: UID,
+    /// Owner of the unlock request that funded this voucher. Recipient of the
+    /// soulbound `Receipt<Redemption>` on `redeem`, and of the returned balance
+    /// on `cancel`.
     customer: address,
+    /// Line items with snapshot LOYALTY prices (see `receipt::new_loyalty_item`).
     items: vector<Item>,
+    /// LOYALTY balance locked inside the voucher. Burned on `redeem`,
+    /// returned to the customer's PAS Account on `cancel`.
     funds: Balance<LOYALTY>,
+    /// Expiry timestamp (ms). Past this point `redeem` aborts and `cancel`
+    /// becomes permissionless.
     expires_at_ms: u64,
 }
 
@@ -85,7 +95,7 @@ public fun new(
     assert!(amount > 0, EZeroAmount);
 
     let items = listing_variant_ids.zip_map!(quantities, |vid, qty| {
-        receipt::new_item(merchant, vid, qty)
+        receipt::new_loyalty_item(merchant, vid, qty)
     });
     assert!(amount == receipt::compute_total(&items), EInvalidAmount);
 
@@ -155,8 +165,14 @@ public fun cancel(voucher: Voucher, customer_loyalty_account: &Account, clock: &
 
 // === View Functions ===
 
+/// Object ID of the shared `Voucher`.
+public fun id(self: &Voucher): ID { object::id(self) }
+
 /// Address that owns the locked LOYALTY balance (recipient on `cancel`).
 public fun customer(self: &Voucher): address { self.customer }
+
+/// Line items with snapshot LOYALTY prices.
+public fun items(self: &Voucher): &vector<Item> { &self.items }
 
 /// LOYALTY units locked inside the voucher.
 public fun amount(self: &Voucher): u64 { self.funds.value() }

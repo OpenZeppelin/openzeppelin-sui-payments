@@ -4,7 +4,7 @@
 /// `payment::new(merchant, &auth, listing_variant_ids, quantities, ...)` (gated by
 /// `Auth<CashierRole>`).
 /// `Item` line entries are derived inside `new` by snapshotting each variant's
-/// current price; the resulting `amount` total is the sum of `quantity * unit_price`,
+/// current price; the resulting `amount` total is the sum of `quantity * price`,
 /// and the `loyalty` to be granted on settlement is snapshotted from the
 /// merchant's `Config` at issuance — subsequent `set_config` calls do not retroactively
 /// affect open invoices.
@@ -55,8 +55,14 @@ const ELengthMismatch: vector<u8> = b"listing_variant_ids and quantities must ha
 /// NOTE: No `merchant_id` field: the package's single-Merchant invariant means there's
 /// only one Merchant any Invoice could be against.
 public struct Invoice has key {
+    /// Object ID. Surfaced via QR for the customer to scan and look up the
+    /// shared object.
     id: UID,
+    /// Snapshot of `merchant.payout_address` at issuance. Later
+    /// `set_payout_address` calls do not retarget open invoices.
     payout_address: address,
+    /// Line items with snapshot prices. Each entry's `price` is in stablecoin
+    /// units (see `receipt::new_item`).
     items: vector<Item>,
     /// Total stablecoin amount due, computed from `items` at issuance.
     amount: u64,
@@ -64,7 +70,11 @@ public struct Invoice has key {
     /// merchant's `Config` at issuance so subsequent `set_config` calls don't
     /// change what's owed on this invoice.
     loyalty: u64,
+    /// Merchant-supplied opaque tag (e.g. POS order number). Carried through
+    /// to `Receipt<Payment>.order_ref` and the `InvoicePaid` event.
     order_ref: vector<u8>,
+    /// Expiry timestamp (ms). Past this point `pay` aborts and `cancel`
+    /// becomes permissionless.
     expires_at_ms: u64,
 }
 
@@ -207,10 +217,13 @@ public fun cancel(invoice: Invoice, clock: &Clock) {
 
 // === View Functions ===
 
+/// Object ID of the shared `Invoice`.
+public fun id(self: &Invoice): ID { object::id(self) }
+
 /// Address that will receive the customer's stablecoin on `pay`.
 public fun payout_address(self: &Invoice): address { self.payout_address }
 
-/// Line items, each carrying `variant_id`, `quantity`, and snapshot `unit_price`.
+/// Line items, each carrying `variant_id`, `quantity`, and snapshot `price`.
 public fun items(self: &Invoice): &vector<Item> { &self.items }
 
 /// Total stablecoin due, computed from `items` at issuance.

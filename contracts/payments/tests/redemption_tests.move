@@ -36,12 +36,12 @@ fun redemption_happy_path() {
         let customer_account_id = ns.account_address(CUSTOMER).to_id();
         account::create_and_share(ns, CUSTOMER);
 
-        // Catalog: one listing with a variant priced 50 (LOYALTY units in this flow).
+        // Catalog: one listing with a variant priced 500 stablecoin units and 50 LOYALTY.
         let mut listing = listing::new(b"Free Drink".to_string(), scenario.ctx());
         let variant = listing::new_variant(
             b"Small".to_string(),
-            50,
-            std::option::none(),
+            500,
+            std::option::some(50),
             scenario.ctx(),
         );
         let variant_id = listing.add_variant(variant);
@@ -128,8 +128,8 @@ fun redeem_after_expiry_aborts() {
         let mut listing = listing::new(b"Free Drink".to_string(), scenario.ctx());
         let variant = listing::new_variant(
             b"S".to_string(),
-            50,
-            std::option::none(),
+            500,
+            std::option::some(50),
             scenario.ctx(),
         );
         let variant_id = listing.add_variant(variant);
@@ -207,8 +207,8 @@ fun cancel_voucher_returns_funds() {
         let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
         let variant = listing::new_variant(
             b"S".to_string(),
-            50,
-            std::option::none(),
+            500,
+            std::option::some(50),
             scenario.ctx(),
         );
         let variant_id = listing.add_variant(variant);
@@ -254,6 +254,78 @@ fun cancel_voucher_returns_funds() {
         let v_shared = scenario.take_shared_by_id<Voucher>(voucher_id);
         redemption::cancel(v_shared, &customer_account_shared, &test_clock);
 
+        test_setup::return_loyalty_policy(loyalty_policy);
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = receipt::ENoLoyaltyPrice)]
+fun voucher_without_loyalty_price_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
+        customer_account.share();
+
+        // Variant has only a stablecoin price (no loyalty_price) — should be
+        // unredeemable for LOYALTY.
+        let mut listing = listing::new(b"Cash-only Drink".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        scenario.next_tx(CUSTOMER);
+        let mut customer_account_shared = scenario.take_shared_by_id<Account>(
+            customer_account_id,
+        );
+        let loyalty_policy = test_setup::take_loyalty_policy(scenario);
+
+        let customer_auth = account::new_auth(scenario.ctx());
+        let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
+            &customer_auth,
+            50,
+            scenario.ctx(),
+        );
+
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+
+        // Aborts with `receipt::ENoLoyaltyPrice` — variant has no loyalty_price.
+        let voucher = redemption::new(
+            &merchant,
+            unlock_req,
+            &loyalty_policy,
+            vector[variant_id],
+            vector[1],
+            &test_clock,
+            scenario.ctx(),
+        );
+        redemption::share(voucher);
+
+        // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);

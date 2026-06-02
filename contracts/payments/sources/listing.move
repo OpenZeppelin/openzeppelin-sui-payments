@@ -25,18 +25,28 @@ const EActiveStateUnchanged: vector<u8> = b"Listing already has the requested ac
 
 /// A menu entry. Holds zero-or-more priced variants and an `active` toggle.
 public struct Listing has drop, store {
+    /// Stable, freshly-generated ID. Also used as the key in `Merchant.listings`.
     id: ID,
+    /// Display name (e.g. "Black Coffee").
     name: String,
+    /// Priced variants, keyed by `Variant.id`.
     variants: VecMap<ID, Variant>,
+    /// Whether this listing is currently purchasable (display hint).
     active: bool,
 }
 
 /// A priced variant of a Listing (e.g. a size). Identified by its own `id`,
 /// which is used as the key in `Listing.variants`.
 public struct Variant has drop, store {
+    /// Stable, freshly-generated ID. Used as the key in `Listing.variants` and
+    /// in `Merchant.variant_index`.
     id: ID,
+    /// Display name (e.g. "Small").
     name: String,
+    /// Stablecoin price in token units.
     price: u64,
+    /// Optional LOYALTY price. `None` means this variant cannot be paid for in
+    /// LOYALTY (voucher creation aborts with `receipt::ENoLoyaltyPrice`).
     loyalty_price: Option<u64>,
 }
 
@@ -100,7 +110,7 @@ public fun variant_name(self: &Variant): &String { &self.name }
 public fun price(self: &Variant): u64 { self.price }
 
 /// Optional price in `LOYALTY` units. `None` if the variant cannot be paid in loyalty.
-public fun loyalty_price(self: &Variant): &Option<u64> { &self.loyalty_price }
+public fun loyalty_price(self: &Variant): Option<u64> { self.loyalty_price }
 
 // === Package Functions ===
 

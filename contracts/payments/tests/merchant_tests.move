@@ -403,10 +403,7 @@ fun set_display_updates_name_and_logo() {
             std::option::some(b"https://example.com/logo.png".to_string()),
         );
         assert!(merchant.name() == b"Renamed Shop".to_string(), 0);
-        assert!(
-            merchant.logo_url().borrow() == b"https://example.com/logo.png".to_string(),
-            0,
-        );
+        assert!(merchant.logo_url().borrow() == b"https://example.com/logo.png".to_string(), 0);
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);

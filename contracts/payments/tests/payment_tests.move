@@ -11,7 +11,7 @@ use openzeppelin_payments::merchant::{
     MERCHANT,
     CashierRole,
     CatalogManagerRole,
-    MerchantRole,
+    MerchantRole
 };
 use openzeppelin_payments::payment::{Self, Invoice};
 use openzeppelin_payments::receipt::{Self, Receipt, Payment};

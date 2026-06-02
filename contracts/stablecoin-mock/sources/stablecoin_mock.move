@@ -84,9 +84,6 @@ public fun faucet(
 /// Permissive transfer approval — stamps the `TransferApproval` witness on a pending
 /// `send_funds` request so the customer's `Policy<Balance<STABLECOIN_MOCK>>` will
 /// resolve it. Called by the customer's PTB before `payment::pay`.
-public fun approve_transfer(
-    request: &mut Request<SendFunds<Balance<STABLECOIN_MOCK>>>,
-) {
+public fun approve_transfer(request: &mut Request<SendFunds<Balance<STABLECOIN_MOCK>>>) {
     request.approve(TransferApproval());
 }
-

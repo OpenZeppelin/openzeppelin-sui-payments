@@ -3,9 +3,9 @@
 module openzeppelin_payments::payment_tests;
 
 use openzeppelin_access::access_control::AccessControl;
-use openzeppelin_payments::invoice::{Self, Invoice};
 use openzeppelin_payments::listing;
 use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, CashierRole, CatalogManagerRole};
+use openzeppelin_payments::payment::{Self, Invoice};
 use openzeppelin_payments::receipt::{Self, Receipt, Payment};
 use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::account::{Self, Account};
@@ -62,7 +62,7 @@ fun payment_happy_path() {
         // Merchant POS: issue invoice for 1 × Small Coffee.
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = invoice::new(
+        let inv = payment::new(
             &merchant,
             &cashier_auth,
             vector[variant_id],
@@ -72,7 +72,7 @@ fun payment_happy_path() {
             scenario.ctx(),
         );
         let invoice_id = object::id(&inv);
-        invoice::share(inv);
+        payment::share(inv);
 
         // Customer flow: take shared things, build send_funds, approve, pay.
         scenario.next_tx(CUSTOMER);
@@ -92,7 +92,7 @@ fun payment_happy_path() {
         );
         test_setup::approve_test_usd(&mut send_req);
 
-        invoice::pay<TEST_USD>(
+        payment::pay<TEST_USD>(
             inv_shared,
             &mut merchant,
             send_req,
@@ -123,7 +123,7 @@ fun payment_happy_path() {
     });
 }
 
-#[test, expected_failure(abort_code = invoice::EInvoiceExpired)]
+#[test, expected_failure(abort_code = payment::EInvoiceExpired)]
 fun pay_after_expiry_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -162,7 +162,7 @@ fun pay_after_expiry_aborts() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = invoice::new(
+        let inv = payment::new(
             &merchant,
             &cashier_auth,
             vector[variant_id],
@@ -172,7 +172,7 @@ fun pay_after_expiry_aborts() {
             scenario.ctx(),
         );
         let invoice_id = object::id(&inv);
-        invoice::share(inv);
+        payment::share(inv);
 
         // Advance clock past invoice_ttl_ms (600_000).
         test_clock.set_for_testing(2_000_000);
@@ -194,7 +194,7 @@ fun pay_after_expiry_aborts() {
         );
         test_setup::approve_test_usd(&mut send_req);
 
-        invoice::pay<TEST_USD>(
+        payment::pay<TEST_USD>(
             inv_shared,
             &mut merchant,
             send_req,
@@ -246,7 +246,7 @@ fun cancel_after_expiry_destroys_invoice() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = invoice::new(
+        let inv = payment::new(
             &merchant,
             &cashier_auth,
             vector[variant_id],
@@ -256,13 +256,13 @@ fun cancel_after_expiry_destroys_invoice() {
             scenario.ctx(),
         );
         let invoice_id = object::id(&inv);
-        invoice::share(inv);
+        payment::share(inv);
 
         // Move past expiry, then cancel permissionlessly.
         test_clock.set_for_testing(2_000_000);
         scenario.next_tx(@0xDEAD);
         let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
-        invoice::cancel(inv_shared, &test_clock);
+        payment::cancel(inv_shared, &test_clock);
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);

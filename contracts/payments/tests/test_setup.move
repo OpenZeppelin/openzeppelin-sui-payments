@@ -21,7 +21,7 @@ use sui::coin::{Self, TreasuryCap};
 
 // === Test types ===
 
-/// Mock stablecoin used as the `S` parameter to `invoice::pay<S>` in tests.
+/// Mock stablecoin used as the `S` parameter to `payment::pay<S>` in tests.
 public struct TEST_USD has drop {}
 
 /// Permissive approval witness for the `TEST_USD` policy. Anyone can produce

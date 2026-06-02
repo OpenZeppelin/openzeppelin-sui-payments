@@ -1,13 +1,17 @@
+/// Event types and package-private emit helpers for the payments package.
+///
+/// All on-chain state transitions worth indexing emit one event from this
+/// module. Indexers filter by event type (`InvoicePaid`, `VoucherRedeemed`, …)
+/// and resolve the embedded IDs back to the relevant objects.
 module openzeppelin_payments::events;
 
 use sui::event;
 
 // TODO#q: remove merchant_id from events (the only one merchant available)
-// TODO#q: add module docs
 
 // === Events ===
 
-/// Emitted when a merchant issues a fresh `Invoice` via `invoice::new`.
+/// Emitted when a merchant issues a fresh `Invoice` via `payment::new`.
 public struct InvoiceCreated has copy, drop {
     invoice_id: ID,
 }
@@ -78,6 +82,10 @@ public struct ConfigUpdated has copy, drop {
 }
 
 // === Package Functions ===
+//
+// Thin wrappers around `event::emit`. Other modules in this package call these
+// rather than constructing event structs directly so the struct fields can stay
+// private to `events.move`.
 
 public(package) fun emit_invoice_created(invoice_id: ID) {
     event::emit(InvoiceCreated { invoice_id });

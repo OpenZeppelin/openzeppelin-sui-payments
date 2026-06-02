@@ -1,20 +1,21 @@
 /// Invoice — merchant-issued payment intent + customer-side settlement.
 ///
 /// Merchant POS issues an `Invoice` via
-/// `invoice::new(merchant, &cap, listing_variant_ids, quantities, ...)` (cap-gated).
+/// `payment::new(merchant, &auth, listing_variant_ids, quantities, ...)` (gated by
+/// `Auth<CashierRole>`).
 /// `Item` line entries are derived inside `new` by snapshotting each variant's
 /// current price; the resulting `amount` total is the sum of `quantity * unit_price`,
 /// and the `loyalty` to be granted on settlement is snapshotted from the
 /// merchant's `Config` at issuance — subsequent `set_config` calls do not retroactively
 /// affect open invoices.
-/// Merchant calls `invoice::share(invoice)` and surfaces
-/// the object ID through a QR. Customer scans and calls `invoice::pay<S>(...)`,
+/// Merchant calls `payment::share(invoice)` and surfaces
+/// the object ID through a QR. Customer scans and calls `payment::pay<S>(...)`,
 /// which resolves the customer's already-approved PAS `send_funds` request
 /// (transfers stablecoin into the merchant's PAS Account), mints loyalty rewards
 /// into the customer's PAS Account, destroys the Invoice, and emits `InvoicePaid`.
 ///
-/// Cleanup: `invoice::cancel(invoice, &clock)` (permissionless after expiry).
-module openzeppelin_payments::invoice;
+/// Cleanup: `payment::cancel(invoice, &clock)` (permissionless after expiry).
+module openzeppelin_payments::payment;
 
 use openzeppelin_access::access_control::Auth;
 use openzeppelin_payments::events;
@@ -208,14 +209,22 @@ public fun cancel(invoice: Invoice, clock: &Clock) {
 
 // === View Functions ===
 
+/// Address that will receive the customer's stablecoin on `pay`.
 public fun payout_address(self: &Invoice): address { self.payout_address }
 
+/// Line items, each carrying `variant_id`, `quantity`, and snapshot `unit_price`.
 public fun items(self: &Invoice): &vector<Item> { &self.items }
 
+/// Total stablecoin due, computed from `items` at issuance.
 public fun amount(self: &Invoice): u64 { self.amount }
 
+/// Loyalty units that will be minted to the customer on settlement (snapshotted
+/// from the merchant's `Config` at issuance).
 public fun loyalty(self: &Invoice): u64 { self.loyalty }
 
+/// Merchant-supplied order reference (opaque bytes, surfaced in `InvoicePaid`).
 public fun order_ref(self: &Invoice): &vector<u8> { &self.order_ref }
 
+/// Expiry timestamp (ms). After this point `pay` aborts with `EInvoiceExpired`
+/// and `cancel` becomes permissionless.
 public fun expires_at_ms(self: &Invoice): u64 { self.expires_at_ms }

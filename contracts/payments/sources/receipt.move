@@ -1,6 +1,6 @@
 /// Receipts — soulbound on-chain proof of settlement.
 ///
-/// `Receipt<Payment>` is minted at the end of `invoice::pay<S>` and transferred
+/// `Receipt<Payment>` is minted at the end of `payment::pay<S>` and transferred
 /// to the paying customer. `Receipt<Redemption>` is minted at the end of
 /// `redemption::redeem` and transferred to the voucher's customer. Both are
 /// `key`-only (no `store`), so they cannot be re-transferred or wrapped in
@@ -8,7 +8,7 @@
 /// keeps the receipt forever.
 ///
 /// This module also hosts the shared `Item` line type and the helpers
-/// `new_item` and `compute_total`, which are reused by both `invoice` and
+/// `new_item` and `compute_total`, which are reused by both `payment` and
 /// `redemption` when building their respective line lists.
 module openzeppelin_payments::receipt;
 
@@ -61,28 +61,40 @@ public struct Redemption has store {
 
 // === View Functions ===
 
+/// ID of the listing variant this line refers to.
 public fun variant_id(self: &Item): ID { self.variant_id }
 
+/// Quantity ordered.
 public fun quantity(self: &Item): u64 { self.quantity }
 
+/// Snapshot unit price (stablecoin units for invoices, LOYALTY units for vouchers).
 public fun unit_price(self: &Item): u64 { self.unit_price }
 
+/// Object ID of the receipt.
 public fun id<T: store>(self: &Receipt<T>): ID { object::id(self) }
 
+/// Line items copied from the originating invoice or voucher.
 public fun items<T: store>(self: &Receipt<T>): &vector<Item> { &self.items }
 
+/// Total settled amount (stablecoin for payment, LOYALTY for redemption).
 public fun amount<T: store>(self: &Receipt<T>): u64 { self.amount }
 
+/// Settlement timestamp (ms since epoch).
 public fun timestamp_ms<T: store>(self: &Receipt<T>): u64 { self.timestamp_ms }
 
+/// ID of the `Invoice` this receipt settled.
 public fun invoice_id(self: &Receipt<Payment>): ID { self.data.invoice_id }
 
+/// Payout address recorded at settlement.
 public fun payout_address(self: &Receipt<Payment>): address { self.data.payout_address }
 
+/// LOYALTY units minted to the customer on settlement.
 public fun loyalty(self: &Receipt<Payment>): u64 { self.data.loyalty }
 
+/// Merchant-supplied order reference carried over from the invoice.
 public fun order_ref(self: &Receipt<Payment>): &vector<u8> { &self.data.order_ref }
 
+/// ID of the `Voucher` this receipt settled.
 public fun voucher_id(self: &Receipt<Redemption>): ID { self.data.voucher_id }
 
 // === Package Functions ===

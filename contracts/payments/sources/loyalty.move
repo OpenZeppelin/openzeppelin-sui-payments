@@ -1,3 +1,13 @@
+/// `LOYALTY` currency + the `Loyalty` bundle that hands its caps to the
+/// `Merchant`. The OTW pattern guarantees exactly one `TreasuryCap<LOYALTY>`
+/// ever exists; that cap is consumed by `create` into the hot-potato `Loyalty`
+/// bundle, which `merchant::create` consumes into the shared `Merchant`. After
+/// bootstrap, no path can mint a second cap or stand up a second merchant.
+///
+/// LOYALTY is soulbound: the policy registers `RedeemUnlockApproval` for
+/// `unlock_funds` (so redemption can take balance out of a customer's account)
+/// but does NOT register an approval for `send_funds`. Account-to-account
+/// transfers can never resolve.
 module openzeppelin_payments::loyalty;
 
 use pas::account::Account;
@@ -58,10 +68,7 @@ public struct RedeemUnlockApproval() has drop;
 ///   - `unlock_funds`    requires `RedeemUnlockApproval` (gates redemption)
 ///   - `send_funds`      NOT registered → soulbound (transfers can never resolve)
 ///   - `clawback_funds`  NOT registered + `clawback_allowed = false`
-public fun create(
-    namespace: &mut Namespace,
-    mut treasury_cap: TreasuryCap<LOYALTY>,
-): Loyalty {
+public fun create(namespace: &mut Namespace, mut treasury_cap: TreasuryCap<LOYALTY>): Loyalty {
     let (mut policy, policy_cap) = policy::new_for_currency(namespace, &mut treasury_cap, false);
 
     policy.set_required_approval<_, RedeemUnlockApproval>(
@@ -88,15 +95,15 @@ public fun policy_id(self: &Loyalty): ID { self.policy_id }
 
 // === Package Functions ===
 
-/// Mutable accessor for the treasury cap. Used by `invoice::pay` (mint) and
+/// Mutable accessor for the treasury cap. Used by `payment::pay` (mint) and
 /// `redemption::redeem` (burn) via `merchant::loyalty_mut`.
 public(package) fun treasury_cap_mut(self: &mut Loyalty): &mut TreasuryCap<LOYALTY> {
     &mut self.treasury_cap
 }
 
-/// Mint into the customer's PAS Account. Called by `payment::pay`. `deposit_balance`
-/// is unrestricted in PAS (no Auth needed), so the customer doesn't have to sign for
-/// the loyalty-side leg — only for their stablecoin spend.
+/// Mint into the customer's PAS Account. Called by `payment::pay`.
+/// `deposit_balance` is unrestricted in PAS (no `Auth` needed), so the customer
+/// doesn't have to sign for the loyalty-side leg — only for their stablecoin spend.
 public(package) fun mint_into(
     cap: &mut TreasuryCap<LOYALTY>,
     customer_account: &Account,

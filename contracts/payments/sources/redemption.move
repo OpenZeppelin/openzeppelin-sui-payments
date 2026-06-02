@@ -14,7 +14,8 @@
 ///   redemption::share(voucher)
 ///
 /// Merchant POS flow (after scanning the customer's QR):
-///   redemption::redeem(voucher, merchant, &cap, &clock)
+///   redemption::redeem(voucher, &auth, merchant, &clock, ctx)
+///   — gated by `Auth<CashierRole>`.
 ///
 /// Cleanup (permissionless after expiry):
 ///   redemption::cancel(voucher, customer_LOY_account, &clock)
@@ -155,8 +156,12 @@ public fun cancel(voucher: Voucher, customer_loyalty_account: &Account, clock: &
 
 // === View Functions ===
 
+/// Address that owns the locked LOYALTY balance (recipient on `cancel`).
 public fun customer(self: &Voucher): address { self.customer }
 
+/// LOYALTY units locked inside the voucher.
 public fun amount(self: &Voucher): u64 { self.funds.value() }
 
+/// Expiry timestamp (ms). After this point `redeem` aborts with
+/// `EVoucherExpired` and `cancel` becomes permissionless.
 public fun expires_at_ms(self: &Voucher): u64 { self.expires_at_ms }

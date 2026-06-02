@@ -1,3 +1,6 @@
+> [!Warning]
+> This is experimental UN-AUDITED code currently under development
+
 # openzeppelin-sui-payments
 
 Closed-loop **stablecoin payments + loyalty + redemption** template for Sui, built on
@@ -40,3 +43,9 @@ contracts/
 vendor/
 └── pas/              # Vendored Permissioned Asset Standard
 ```
+
+## Security
+
+This project is maintained by OpenZeppelin with the goal of providing a secure and reliable started dApp for AMM onchain trading for the Sui ecosystem.
+
+Refer to [SECURITY.md](SECURITY.md) for more details.

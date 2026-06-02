@@ -13,7 +13,7 @@
 ///   - `CatalogManagerRole`   → catalog CRUD (`add_listing`, `remove_listing`,
 ///                              `set_listing_status`, `add_listing_variant`,
 ///                              `remove_listing_variant`)
-///   - `CashierRole`          → settlement (`invoice::new`, `redemption::redeem`)
+///   - `CashierRole`          → settlement (`payment::new`, `redemption::redeem`)
 /// Each role's default admin is the root role, so the root holder can
 /// grant/revoke via `access_control::grant_role` / `revoke_role`. None of the
 /// operational roles are auto-granted by `init` — the deployer (root holder)
@@ -75,7 +75,7 @@ public struct MerchantRole {}
 /// `set_listing_status`, `add_listing_variant`, `remove_listing_variant`.
 public struct CatalogManagerRole {}
 
-/// Holder gates settlement entry points: `invoice::new`,
+/// Holder gates settlement entry points: `payment::new`,
 /// `redemption::redeem`.
 public struct CashierRole {}
 
@@ -158,17 +158,22 @@ public fun share(m: Merchant) {
 
 // === View Functions ===
 
+/// Display name (mutable via `set_display`).
 public fun name(self: &Merchant): &String { &self.name }
 
+/// Optional logo URL (mutable via `set_display`).
 public fun logo_url(self: &Merchant): &Option<String> { &self.logo_url }
 
+/// Payout address — where customer stablecoin lands on `payment::pay`.
 public fun payout_address(self: &Merchant): address { self.payout_address }
 
 /// Reference to the merchant's `Loyalty` bundle (treasury + policy caps + policy id).
 public fun loyalty(self: &Merchant): &Loyalty { &self.loyalty }
 
+/// Current loyalty-mint `Config` (numerator / denominator / cap).
 public fun config(self: &Merchant): &Config { &self.config }
 
+/// Look up a stored `Listing` by ID. Aborts with `EListingNotFound` if absent.
 public fun listing(self: &Merchant, id: ID): &Listing {
     assert!(self.listings.contains(id), EListingNotFound);
 
@@ -187,10 +192,14 @@ public fun listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
 
 // === Admin Functions ===
 
+/// Rotate the address that receives customer stablecoin payments. Gated by
+/// `MerchantRole`.
 public fun set_payout_address(self: &mut Merchant, _auth: &Auth<MerchantRole>, addr: address) {
     self.payout_address = addr;
 }
 
+/// Update display name and logo URL. Aborts with `EEmptyName` if `name` is empty.
+/// Gated by `MerchantRole`.
 public fun set_display(
     self: &mut Merchant,
     _auth: &Auth<MerchantRole>,
@@ -309,7 +318,7 @@ public fun remove_listing_variant(
 
 // === Package Functions ===
 
-/// Mutable reference to the merchant's `Loyalty` bundle. Used by `invoice::pay`
+/// Mutable reference to the merchant's `Loyalty` bundle. Used by `payment::pay`
 /// (mint earned loyalty) and `redemption::redeem` (burn redeemed loyalty) to
 /// reach the treasury cap via `loyalty::treasury_cap_mut`.
 public(package) fun loyalty_mut(self: &mut Merchant): &mut Loyalty {

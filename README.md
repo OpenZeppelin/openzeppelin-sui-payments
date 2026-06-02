@@ -36,7 +36,7 @@ cold-storage admin keys stay out of daily POS operations.
 
 ## Repository Layout
 
-```
+```text
 contracts/
 ├── payments/         # The template (8 modules + 5 test files)
 └── stablecoin-mock/  # Devnet-only mock PAS stablecoin (for end-to-end tests)

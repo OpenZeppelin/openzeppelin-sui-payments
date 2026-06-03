@@ -155,13 +155,3 @@ fun new_variant_zero_loyalty_price_aborts() {
     destroy(v);
     scenario.end();
 }
-
-#[test]
-fun set_name_updates_display() {
-    let mut scenario = test_scenario::begin(@0xA);
-    let mut listing = listing::new(b"Old".to_string(), scenario.ctx());
-    listing.set_name(b"New".to_string());
-    assert!(listing.name() == b"New".to_string(), 0);
-    destroy(listing);
-    scenario.end();
-}

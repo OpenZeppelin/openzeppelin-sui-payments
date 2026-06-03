@@ -129,13 +129,6 @@ public(package) fun remove_variant(self: &mut Listing, variant_id: ID) {
     let (_, _) = self.variants.remove(&variant_id);
 }
 
-/// Rename the listing. `name` must be non-empty.
-public(package) fun set_name(self: &mut Listing, name: String) {
-    assert!(!name.is_empty(), EEmptyName);
-
-    self.name = name;
-}
-
 /// Toggle whether this listing is purchasable. Aborts if `active` matches the
 /// current state (no-op guard).
 public(package) fun set_active(self: &mut Listing, active: bool) {

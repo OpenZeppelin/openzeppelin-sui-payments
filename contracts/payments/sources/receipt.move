@@ -159,12 +159,16 @@ public(package) fun new_loyalty_item(merchant: &Merchant, variant_id: ID, quanti
 /// accumulator; aborts with `EAmountOverflow` if the final total doesn't fit
 /// in u64.
 public(package) fun compute_total(items: &vector<Item>): u64 {
-    let mut total: u128 = 0;
+    let mut total: u64 = 0;
     items.do_ref!(|item| {
-        total = total + (item.quantity as u128) * (item.price as u128);
+        let position_total = item
+            .quantity
+            .checked_mul(item.price)
+            .destroy_or!(abort EAmountOverflow);
+        total = total.checked_add(position_total).destroy_or!(abort EAmountOverflow);
     });
 
-    total.try_as_u64().destroy_or!(abort EAmountOverflow)
+    total
 }
 
 /// Mint a `Receipt<Payment>` and transfer it to `customer`.

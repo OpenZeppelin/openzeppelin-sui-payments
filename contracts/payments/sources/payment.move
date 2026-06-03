@@ -233,7 +233,7 @@ public fun cancel(invoice: Invoice, clock: &Clock) {
         payment_type,
         amount,
         order_ref,
-        ..
+        ..,
     } = invoice;
 
     events::emit_invoice_canceled(

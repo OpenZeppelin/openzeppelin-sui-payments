@@ -38,19 +38,19 @@ use sui::coin;
 // === Errors ===
 
 #[error(code = 0)]
-const EZeroAmount: vector<u8> = b"Voucher amount must be greater than zero";
+const EZeroAmount: vector<u8> = "Voucher amount must be greater than zero";
 #[error(code = 1)]
-const ENotExpired: vector<u8> = b"Voucher has not yet expired";
+const ENotExpired: vector<u8> = "Voucher has not yet expired";
 #[error(code = 2)]
-const EVoucherExpired: vector<u8> = b"Voucher has expired";
+const EVoucherExpired: vector<u8> = "Voucher has expired";
 #[error(code = 3)]
-const EWrongCustomer: vector<u8> = b"Account owner does not match Voucher customer";
+const EWrongCustomer: vector<u8> = "Account owner does not match Voucher customer";
 #[error(code = 4)]
-const EInvalidAmount: vector<u8> = b"Voucher amount must be equal to total redeemed amount";
+const EInvalidAmount: vector<u8> = "Voucher amount must be equal to total redeemed amount";
 #[error(code = 5)]
-const ENoItems: vector<u8> = b"Voucher must include at least one item";
+const ENoItems: vector<u8> = "Voucher must include at least one item";
 #[error(code = 6)]
-const ELengthMismatch: vector<u8> = b"listing_variant_ids and quantities must have the same length";
+const ELengthMismatch: vector<u8> = "listing_variant_ids and quantities must have the same length";
 
 // === Structs ===
 

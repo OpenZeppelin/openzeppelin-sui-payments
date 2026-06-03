@@ -17,11 +17,11 @@ use openzeppelin_payments::merchant::Merchant;
 // === Errors ===
 
 #[error(code = 0)]
-const EZeroQuantity: vector<u8> = b"Item quantity must be greater than zero";
+const EZeroQuantity: vector<u8> = "Item quantity must be greater than zero";
 #[error(code = 1)]
-const EAmountOverflow: vector<u8> = b"Amount exceeds u64 range";
+const EAmountOverflow: vector<u8> = "Amount exceeds u64 range";
 #[error(code = 2)]
-const ENoLoyaltyPrice: vector<u8> = b"Variant is not redeemable: loyalty_price is not set";
+const ENoLoyaltyPrice: vector<u8> = "Variant is not redeemable: loyalty_price is not set";
 
 // === Structs ===
 

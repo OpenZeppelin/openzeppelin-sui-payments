@@ -47,19 +47,19 @@ use sui::table::{Self, Table};
 // === Errors ===
 
 #[error(code = 0)]
-const EEmptyName: vector<u8> = b"Name cannot be empty";
+const EEmptyName: vector<u8> = "Name cannot be empty";
 #[error(code = 1)]
-const EListingNotFound: vector<u8> = b"Listing not found";
+const EListingNotFound: vector<u8> = "Listing not found";
 #[error(code = 2)]
-const EVariantNotFound: vector<u8> = b"Listing variant not found";
+const EVariantNotFound: vector<u8> = "Listing variant not found";
 #[error(code = 3)]
-const EConfigUnchanged: vector<u8> = b"Config matches the current value";
+const EConfigUnchanged: vector<u8> = "Config matches the current value";
 #[error(code = 4)]
-const EPayoutAddressUnchanged: vector<u8> = b"Payout address matches the current value";
+const EPayoutAddressUnchanged: vector<u8> = "Payout address matches the current value";
 #[error(code = 5)]
-const EDisplayUnchanged: vector<u8> = b"Display name and logo both match the current values";
+const EDisplayUnchanged: vector<u8> = "Display name and logo both match the current values";
 #[error(code = 6)]
-const EListingInactive: vector<u8> = b"Listing is inactive and cannot be sold or redeemed";
+const EListingInactive: vector<u8> = "Listing is inactive and cannot be sold or redeemed";
 
 // === Constants ===
 

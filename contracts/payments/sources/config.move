@@ -14,11 +14,11 @@ module openzeppelin_payments::config;
 // === Errors ===
 
 #[error(code = 0)]
-const EZeroMintDenominator: vector<u8> = b"Mint denominator cannot be zero";
+const EZeroMintDenominator: vector<u8> = "Mint denominator cannot be zero";
 #[error(code = 1)]
-const EZeroInvoiceTtl: vector<u8> = b"invoice_ttl_ms must be greater than zero";
+const EZeroInvoiceTtl: vector<u8> = "invoice_ttl_ms must be greater than zero";
 #[error(code = 2)]
-const EZeroVoucherTtl: vector<u8> = b"voucher_ttl_ms must be greater than zero";
+const EZeroVoucherTtl: vector<u8> = "voucher_ttl_ms must be greater than zero";
 
 // === Structs ===
 

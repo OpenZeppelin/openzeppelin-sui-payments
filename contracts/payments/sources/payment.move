@@ -32,21 +32,21 @@ use sui::clock::Clock;
 // === Errors ===
 
 #[error(code = 0)]
-const EZeroAmount: vector<u8> = b"Invoice amount must be greater than zero";
+const EZeroAmount: vector<u8> = "Invoice amount must be greater than zero";
 #[error(code = 1)]
-const ENotExpired: vector<u8> = b"Invoice has not yet expired";
+const ENotExpired: vector<u8> = "Invoice has not yet expired";
 #[error(code = 2)]
-const EInvoiceExpired: vector<u8> = b"Invoice has expired";
+const EInvoiceExpired: vector<u8> = "Invoice has expired";
 #[error(code = 3)]
-const EAmountMismatch: vector<u8> = b"Send amount does not match Invoice amount";
+const EAmountMismatch: vector<u8> = "Send amount does not match Invoice amount";
 #[error(code = 4)]
-const EWrongRecipient: vector<u8> = b"Send recipient does not match Invoice payout_address";
+const EWrongRecipient: vector<u8> = "Send recipient does not match Invoice payout_address";
 #[error(code = 5)]
-const EWrongLoyaltyRecipient: vector<u8> = b"Loyalty account owner does not match payer";
+const EWrongLoyaltyRecipient: vector<u8> = "Loyalty account owner does not match payer";
 #[error(code = 6)]
-const ENoItems: vector<u8> = b"Invoice must include at least one item";
+const ENoItems: vector<u8> = "Invoice must include at least one item";
 #[error(code = 7)]
-const ELengthMismatch: vector<u8> = b"listing_variant_ids and quantities must have the same length";
+const ELengthMismatch: vector<u8> = "listing_variant_ids and quantities must have the same length";
 
 // === Structs ===
 

@@ -4,7 +4,12 @@ edition = "2024"
 
 [dependencies]
 pas = { local = "../../vendor/pas/packages/pas" }
-openzeppelin_access = { git = "https://github.com/OpenZeppelin/contracts-sui.git", subdir = "contracts/access", rev = "9cd06721b747c9f9919966dad5eb63403f2abdf0" }
+openzeppelin_access = { r.mvr = "@openzeppelin-move/access" }
+openzeppelin_math = { r.mvr = "@openzeppelin-move/integer-math" }
 
 [environments]
 test-publish = "46b6270d"
+
+[dep-replacements.test-publish]
+openzeppelin_access = { git = "https://github.com/OpenZeppelin/contracts-sui.git", subdir = "contracts/access", rev = "v1.2.0" }
+openzeppelin_math = { git = "https://github.com/OpenZeppelin/contracts-sui.git", subdir = "math/core", rev = "v1.1.0" }

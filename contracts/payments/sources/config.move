@@ -11,6 +11,9 @@
 /// Updated via `merchant::set_config`.
 module openzeppelin_payments::config;
 
+use openzeppelin_math::rounding;
+use openzeppelin_math::u64 as oz_u64;
+
 // === Errors ===
 
 #[error(code = 0)]
@@ -69,8 +72,13 @@ public fun new(
 ///
 ///     `loyalty = min(payment_amount * mint_numerator / mint_denominator, max_mint_per_payment)`
 public fun compute_loyalty(self: &Config, payment_amount: u64): u64 {
-    payment_amount
-        .mul_div(self.mint_numerator, self.mint_denominator)
+    oz_u64::mul_div(
+        payment_amount,
+        self.mint_numerator,
+        self.mint_denominator,
+        rounding::down(),
+    )
+        .destroy_or!(self.max_mint_per_payment)
         .min(self.max_mint_per_payment)
 }
 

@@ -3,7 +3,7 @@ name = "openzeppelin_payments"
 edition = "2024"
 
 [dependencies]
-pas = { local = "../../vendor/pas/packages/pas" }
+pas = { r.mvr = "@pas/pas" }
 openzeppelin_access = { r.mvr = "@openzeppelin-move/access" }
 openzeppelin_math = { r.mvr = "@openzeppelin-move/integer-math" }
 
@@ -11,5 +11,12 @@ openzeppelin_math = { r.mvr = "@openzeppelin-move/integer-math" }
 test-publish = "46b6270d"
 
 [dep-replacements.test-publish]
+# Upstream `MystenLabs/pas` is on `edition = "2024.beta"`, which enforces a
+# strict env-compatibility check at dep-load time: pas's Move.lock pins only
+# `testnet` / `mainnet`, so loading it under our custom `test-publish` env
+# aborts with `Package pas does not declare a test-publish environment`. The
+# vendored copy under `vendor/pas/` keeps the same edition but adds an
+# `[environments]` table declaring `test-publish`, which satisfies the check.
+pas = { local = "../../vendor/pas/packages/pas" }
 openzeppelin_access = { git = "https://github.com/OpenZeppelin/contracts-sui.git", subdir = "contracts/access", rev = "v1.2.0" }
 openzeppelin_math = { git = "https://github.com/OpenZeppelin/contracts-sui.git", subdir = "math/core", rev = "v1.1.0" }

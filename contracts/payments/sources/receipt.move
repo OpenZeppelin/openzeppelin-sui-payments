@@ -13,6 +13,7 @@
 module openzeppelin_payments::receipt;
 
 use openzeppelin_payments::merchant::Merchant;
+use std::type_name::TypeName;
 
 // === Errors ===
 
@@ -62,6 +63,9 @@ public struct Payment has drop, store {
     invoice_id: ID,
     /// Payout address that received the stablecoin.
     payout_address: address,
+    /// `TypeName` of the stablecoin the customer paid in (matches
+    /// `Merchant.accepted_payment_type` and `Invoice.payment_type` at settlement).
+    payment_type: TypeName,
     /// LOYALTY units minted to the customer on settlement.
     loyalty: u64,
     /// Merchant-supplied order reference carried over from the invoice.
@@ -121,6 +125,9 @@ public fun loyalty(self: &Receipt<Payment>): u64 { self.data.loyalty }
 /// Merchant-supplied order reference carried over from the invoice.
 public fun order_ref(self: &Receipt<Payment>): &vector<u8> { &self.data.order_ref }
 
+/// `TypeName` of the stablecoin the customer paid in.
+public fun payment_type(self: &Receipt<Payment>): TypeName { self.data.payment_type }
+
 /// ID of the `Voucher` this receipt settled.
 public fun voucher_id(self: &Receipt<Redemption>): ID { self.data.voucher_id }
 
@@ -176,6 +183,7 @@ public(package) fun compute_total(items: &vector<Item>): u64 {
 public(package) fun transfer_payment_receipt(
     invoice_id: ID,
     payout_address: address,
+    payment_type: TypeName,
     items: vector<Item>,
     amount: u64,
     loyalty: u64,
@@ -189,7 +197,7 @@ public(package) fun transfer_payment_receipt(
         items,
         amount,
         timestamp_ms,
-        data: Payment { invoice_id, payout_address, loyalty, order_ref },
+        data: Payment { invoice_id, payout_address, payment_type, loyalty, order_ref },
     };
     transfer::transfer(receipt, customer);
 }

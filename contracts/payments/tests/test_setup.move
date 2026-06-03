@@ -70,7 +70,7 @@ public fun setup_merchant(
     // Merchant config: 10% loyalty (1/10), cap 1_000_000, 10-minute TTLs.
     let cfg = config::new(1, 10, 1_000_000, 600_000, 600_000);
 
-    let m = merchant::create(
+    let m = merchant::create<TEST_USD>(
         loyalty_bundle,
         cfg,
         b"Test Shop".to_string(),

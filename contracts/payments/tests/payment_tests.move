@@ -18,9 +18,11 @@ use openzeppelin_payments::receipt::{Self, Receipt, Payment};
 use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::account::{Self, Account};
 use pas::e2e;
+use pas::policy;
 use std::unit_test::destroy;
 use sui::balance;
 use sui::clock;
+use sui::coin;
 use sui::test_scenario;
 
 const ADMIN: address = @0xA;
@@ -28,6 +30,9 @@ const PAYOUT: address = @0xB;
 const CUSTOMER: address = @0xCAFE;
 const BAD: address = @0xBAD;
 const OTHER: address = @0xC0FFEE;
+
+/// Self-minted "stablecoin" used by the wrong-currency abort test.
+public struct WRONG_USD has drop {}
 
 #[test]
 fun payment_happy_path() {
@@ -806,6 +811,113 @@ fun destroy_payment_receipt_succeeds() {
         test_scenario::return_shared(customer_account_shared);
         test_scenario::return_shared(payout_account_shared);
         destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = payment::EWrongPaymentType)]
+fun pay_wrong_currency_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        // Merchant is created with TEST_USD as the accepted currency.
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        // Stand up a parallel `WRONG_USD` policy + put `Balance<WRONG_USD>` in
+        // the customer's PAS account — as if the customer self-minted their own
+        // coin and is trying to pay with it.
+        let mut wrong_usd_cap = coin::create_treasury_cap_for_testing<WRONG_USD>(scenario.ctx());
+        let (wrong_usd_policy, wrong_usd_policy_cap) = policy::new_for_currency(
+            ns,
+            &mut wrong_usd_cap,
+            false,
+        );
+        policy::share(wrong_usd_policy);
+        destroy(wrong_usd_policy_cap);
+
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.deposit_balance(balance::create_for_testing<WRONG_USD>(10_000));
+        customer_account.share();
+
+        let payout_account_id = ns.account_address(PAYOUT).to_id();
+        account::create_and_share(ns, PAYOUT);
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+        let inv = payment::new(
+            &merchant,
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+        let invoice_id = object::id(&inv);
+        payment::share(inv);
+
+        scenario.next_tx(CUSTOMER);
+        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
+        let mut customer_account_shared = scenario.take_shared_by_id<Account>(
+            customer_account_id,
+        );
+        let payout_account_shared = scenario.take_shared_by_id<Account>(payout_account_id);
+        let wrong_usd_policy_shared = scenario.take_shared<
+            policy::Policy<balance::Balance<WRONG_USD>>,
+        >();
+
+        let customer_auth = account::new_auth(scenario.ctx());
+        let send_req = customer_account_shared.send_balance<WRONG_USD>(
+            &customer_auth,
+            &payout_account_shared,
+            500,
+            scenario.ctx(),
+        );
+        // No approve — `EWrongPaymentType` fires before send_request is read.
+
+        // Aborts with `payment::EWrongPaymentType` — invoice expects TEST_USD,
+        // customer is paying in WRONG_USD.
+        payment::pay<WRONG_USD>(
+            inv_shared,
+            &mut merchant,
+            send_req,
+            &wrong_usd_policy_shared,
+            &customer_account_shared,
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(wrong_usd_policy_shared);
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        test_scenario::return_shared(payout_account_shared);
+        destroy(test_usd_cap);
+        destroy(wrong_usd_cap);
         destroy(test_clock);
     });
 }

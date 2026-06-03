@@ -42,6 +42,7 @@ use openzeppelin_payments::events;
 use openzeppelin_payments::listing::{Listing, Variant};
 use openzeppelin_payments::loyalty::Loyalty;
 use std::string::String;
+use std::type_name::{Self, TypeName};
 use sui::table::{Self, Table};
 
 // === Errors ===
@@ -60,6 +61,8 @@ const EPayoutAddressUnchanged: vector<u8> = "Payout address matches the current 
 const EDisplayUnchanged: vector<u8> = "Display name and logo both match the current values";
 #[error(code = 6)]
 const EListingInactive: vector<u8> = "Listing is inactive and cannot be sold or redeemed";
+#[error(code = 7)]
+const EPaymentTypeUnchanged: vector<u8> = "Payment type matches the current value";
 
 // === Constants ===
 
@@ -103,11 +106,16 @@ public struct Merchant has key {
     id: UID,
     /// Display name (e.g. "Joe's Coffee"). Mutable via `set_display`.
     name: String,
-    /// Optional logo URL.
+    /// Optional logo URL. Mutable via `set_display`.
     logo_url: Option<String>,
     /// Address receiving customer stablecoin payments. Mutable so the merchant can
     /// rotate keys.
     payout_address: address,
+    /// `TypeName` of the only stablecoin this merchant accepts. Captured from
+    /// the type parameter `C` at `create<C>` time and immutable thereafter.
+    /// `payment::pay<S>` aborts if `type_name::with_defining_ids<S>() != accepted_payment_type`,
+    /// preventing customers from settling with self-minted tokens.
+    accepted_payment_type: TypeName,
     /// Loyalty asset bundle (treasury cap, policy cap, policy id). Stored whole;
     /// only accessible via `loyalty()` / `loyalty_mut()`.
     loyalty: Loyalty,
@@ -129,11 +137,14 @@ public struct Merchant has key {
 // === Public Functions ===
 
 /// Consume the `Loyalty` bundle from `loyalty::create` and return the
-/// `Merchant`. Bootstrap-only — the Loyalty hot-potato is the gating
-/// mechanism; subsequent admin operations are gated by `MerchantRole` /
-/// `CatalogManagerRole` / `CashierRole` via `AccessControl<MERCHANT>`. Caller
-/// is expected to follow up with `merchant::share(merchant)` in the same PTB.
-public fun create(
+/// `Merchant`. The type parameter `C` is the stablecoin currency this merchant
+/// will accept — it gets captured as `accepted_payment_type` and pinned for
+/// the lifetime of the merchant. Bootstrap-only: the `Loyalty` linear resource
+/// is the gating mechanism; subsequent admin operations are gated by
+/// `MerchantRole` / `CatalogManagerRole` / `CashierRole` via
+/// `AccessControl<MERCHANT>`. Caller is expected to follow up with
+/// `merchant::share(merchant)` in the same PTB.
+public fun create<C>(
     loyalty: Loyalty,
     config: Config,
     name: String,
@@ -148,6 +159,7 @@ public fun create(
         name,
         logo_url,
         payout_address,
+        accepted_payment_type: type_name::with_defining_ids<C>(),
         loyalty,
         config,
         listings: table::new(ctx),
@@ -175,6 +187,11 @@ public fun logo_url(self: &Merchant): &Option<String> { &self.logo_url }
 
 /// Payout address — where customer stablecoin lands on `payment::pay`.
 public fun payout_address(self: &Merchant): address { self.payout_address }
+
+/// `TypeName` of the only stablecoin currency this merchant accepts. Pinned
+/// at `create<C>` time. Clients should use this to filter which `pay<S>` calls
+/// will be honored.
+public fun accepted_payment_type(self: &Merchant): TypeName { self.accepted_payment_type }
 
 /// Reference to the merchant's `Loyalty` bundle (treasury + policy caps + policy id).
 public fun loyalty(self: &Merchant): &Loyalty { &self.loyalty }
@@ -208,9 +225,11 @@ public fun listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
 public fun active_listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
     assert!(self.variant_index.contains(*listing_variant_id), EVariantNotFound);
 
+    // Lookup matching listing by variant index.
     let listing_id = *self.variant_index.borrow(*listing_variant_id);
     let listing = self.listings.borrow(listing_id);
     assert!(listing.active(), EListingInactive);
+
     listing.variant(listing_variant_id)
 }
 
@@ -225,6 +244,22 @@ public fun set_payout_address(self: &mut Merchant, _auth: &Auth<MerchantRole>, a
     self.payout_address = addr;
 
     events::emit_payout_address_changed();
+}
+
+/// Rotate the merchant's accepted stablecoin currency. The new `C` is captured
+/// from the type parameter and pinned as `accepted_payment_type`. Aborts with
+/// `EPaymentTypeUnchanged` if `C` matches the current value. Gated by
+/// `MerchantRole`. Emits `PaymentTypeChanged`.
+///
+/// Note: in-flight invoices are unaffected — each invoice snapshots its
+/// `payment_type` at issuance, so rotating here only affects future invoices.
+public fun set_payment_type<C>(self: &mut Merchant, _auth: &Auth<MerchantRole>) {
+    let new_type = type_name::with_defining_ids<C>();
+    assert!(self.accepted_payment_type != new_type, EPaymentTypeUnchanged);
+
+    self.accepted_payment_type = new_type;
+
+    events::emit_payment_type_changed();
 }
 
 /// Update display name and logo URL. Aborts with `EEmptyName` if `name` is
@@ -269,11 +304,12 @@ public fun add_listing(
 ): ID {
     let id = listing.id();
 
+    // Add listing's variants to variant lookup table.
     listing.variants().keys().do!(|vid| {
         self.variant_index.add(vid, id);
     });
-
     self.listings.add(id, listing);
+
     events::emit_listing_added(id);
 
     id
@@ -286,6 +322,7 @@ public fun remove_listing(self: &mut Merchant, _auth: &Auth<CatalogManagerRole>,
 
     let removed = self.listings.remove(id);
 
+    // Remove listing's variants from variant lookup table.
     removed.variants().keys().do!(|vid| {
         let _: ID = self.variant_index.remove(vid);
     });
@@ -320,6 +357,7 @@ public fun add_listing_variant(
 ): ID {
     assert!(self.listings.contains(listing_id), EListingNotFound);
 
+    // Add listing's variant to listing and to listing variant's lookup table.
     let id = self.listings.borrow_mut(listing_id).add_variant(variant);
     self.variant_index.add(id, listing_id);
 
@@ -338,6 +376,7 @@ public fun remove_listing_variant(
 ) {
     assert!(self.variant_index.contains(variant_id), EVariantNotFound);
 
+    // Remove listing's variant from listing and from listing variant's lookup table.
     let listing_id = self.variant_index.remove(variant_id);
     self.listings.borrow_mut(listing_id).remove_variant(variant_id);
 

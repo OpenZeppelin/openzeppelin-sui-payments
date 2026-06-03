@@ -26,6 +26,7 @@ use pas::account::Account;
 use pas::policy::Policy;
 use pas::request::Request;
 use pas::send_funds::{Self, SendFunds};
+use std::type_name::{Self, TypeName};
 use sui::balance::Balance;
 use sui::clock::Clock;
 
@@ -47,6 +48,9 @@ const EWrongLoyaltyRecipient: vector<u8> = "Loyalty account owner does not match
 const ENoItems: vector<u8> = "Invoice must include at least one item";
 #[error(code = 7)]
 const ELengthMismatch: vector<u8> = "listing_variant_ids and quantities must have the same length";
+#[error(code = 8)]
+const EWrongPaymentType: vector<u8> =
+    "Send currency does not match merchant's accepted payment type";
 
 // === Structs ===
 
@@ -61,6 +65,10 @@ public struct Invoice has key {
     /// Snapshot of `merchant.payout_address` at issuance. Later
     /// `set_payout_address` calls do not retarget open invoices.
     payout_address: address,
+    /// Snapshot of `merchant.accepted_payment_type` at issuance. `pay<S>`
+    /// aborts if `type_name::with_defining_ids<S>() != payment_type`, preventing settlement
+    /// in arbitrary self-minted currencies.
+    payment_type: TypeName,
     /// Line items with snapshot prices. Each entry's `price` is in stablecoin
     /// units (see `receipt::new_item`).
     items: vector<Item>,
@@ -99,19 +107,21 @@ public fun new(
     assert!(!listing_variant_ids.is_empty(), ENoItems);
     assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
 
+    // Combine and validate active items and quantities.
     let items = listing_variant_ids.zip_map!(quantities, |vid, qty| {
         receipt::new_item(merchant, vid, qty)
     });
 
+    // Validate amount and compute loyalty.
     let amount = receipt::compute_total(&items);
     assert!(amount > 0, EZeroAmount);
-
     let config = merchant.config();
     let loyalty = config.compute_loyalty(amount);
 
     let invoice = Invoice {
         id: object::new(ctx),
         payout_address: merchant::payout_address(merchant),
+        payment_type: merchant.accepted_payment_type(),
         items,
         amount,
         loyalty,
@@ -147,22 +157,26 @@ public fun pay<S>(
     let now = clock.timestamp_ms();
     let invoice_id = object::id(&invoice);
 
-    // Invoice validity
+    // Validate invoice expiration time.
     assert!(now < invoice.expires_at_ms, EInvoiceExpired);
+    // Validate currency type.
+    // Otherwise a customer could mint their own coin and settle in junk tokens.
+    assert!(type_name::with_defining_ids<S>() == invoice.payment_type, EWrongPaymentType);
 
-    // Send-request integrity
+    // Validate send request.
     let data = send_request.data();
     assert!(data.recipient() == invoice.payout_address, EWrongRecipient);
     assert!(data.funds().value() == invoice.amount, EAmountMismatch);
 
-    // Loyalty mints to the payer's own account
+    // Mint loyalty to payer's account.
     let sender = data.sender();
     assert!(customer_loyalty_account.owner() == sender, EWrongLoyaltyRecipient);
 
-    // Consume the invoice — both amounts are already snapshotted on it
+    // Consume the invoice.
     let Invoice {
         id,
         payout_address,
+        payment_type,
         items,
         amount,
         loyalty,
@@ -171,22 +185,23 @@ public fun pay<S>(
     } = invoice;
     id.delete();
 
-    // Resolve send_funds — transfers stablecoin into the merchant's PAS Account
+    // Resolve send request and send funds to payout_address.
     send_funds::resolve_balance(send_request, policy_s);
 
-    // Mint the loyalty snapshotted at issuance
+    // Mint the loyalty tokens snapshotted at issuance.
     if (loyalty > 0) {
-        loyalty::mint_into(
+        loyalty::mint_to(
             merchant.loyalty_mut().treasury_cap_mut(),
             customer_loyalty_account,
             loyalty,
         );
     };
 
-    // Soulbound receipt to the customer
+    // Soulbound receipt to the customer.
     receipt::transfer_payment_receipt(
         invoice_id,
         payout_address,
+        payment_type,
         items,
         amount,
         loyalty,
@@ -212,9 +227,22 @@ public fun pay<S>(
 public fun cancel(invoice: Invoice, clock: &Clock) {
     assert!(clock.timestamp_ms() >= invoice.expires_at_ms, ENotExpired);
 
-    let Invoice { id, order_ref, .. } = invoice;
+    let Invoice {
+        id,
+        payout_address,
+        payment_type,
+        amount,
+        order_ref,
+        ..
+    } = invoice;
 
-    events::emit_invoice_canceled(id.to_inner(), order_ref);
+    events::emit_invoice_canceled(
+        id.to_inner(),
+        payout_address,
+        payment_type,
+        amount,
+        order_ref,
+    );
 
     id.delete();
 }
@@ -226,6 +254,11 @@ public fun id(self: &Invoice): ID { object::id(self) }
 
 /// Address that will receive the customer's stablecoin on `pay`.
 public fun payout_address(self: &Invoice): address { self.payout_address }
+
+/// `TypeName` of the stablecoin the customer must pay in, snapshotted from
+/// `merchant.accepted_payment_type` at issuance. `pay<S>` aborts if `S` does
+/// not match this.
+public fun payment_type(self: &Invoice): TypeName { self.payment_type }
 
 /// Line items, each carrying `variant_id`, `quantity`, and snapshot `price`.
 public fun items(self: &Invoice): &vector<Item> { &self.items }

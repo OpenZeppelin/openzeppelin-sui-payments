@@ -5,6 +5,7 @@
 /// and resolve the embedded IDs back to the relevant objects.
 module openzeppelin_payments::events;
 
+use std::type_name::TypeName;
 use sui::event;
 
 // === Events ===
@@ -55,6 +56,12 @@ public struct VoucherRedeemed has copy, drop {
 public struct InvoiceCanceled has copy, drop {
     /// ID of the canceled `Invoice` (now destroyed).
     invoice_id: ID,
+    /// Payout address recorded on the canceled invoice.
+    payout_address: address,
+    /// `TypeName` of the stablecoin the canceled invoice expected.
+    payment_type: TypeName,
+    /// Stablecoin amount that was due on the canceled invoice.
+    amount: u64,
     /// Merchant-supplied order reference carried over from the invoice.
     order_ref: vector<u8>,
 }
@@ -114,6 +121,10 @@ public struct ConfigUpdated has copy, drop {}
 /// `Merchant.payout_address` for the current value.
 public struct PayoutAddressChanged has copy, drop {}
 
+/// Emitted when a merchant rotates its accepted payment currency. Pulse only —
+/// query `Merchant.accepted_payment_type` for the current value.
+public struct PaymentTypeChanged has copy, drop {}
+
 /// Emitted when a merchant updates its display name or logo. Pulse only —
 /// query `Merchant.name` / `Merchant.logo_url` for the current values.
 public struct DisplayChanged has copy, drop {}
@@ -165,8 +176,14 @@ public(package) fun emit_voucher_redeemed(
 }
 
 /// Emit `InvoiceCanceled`.
-public(package) fun emit_invoice_canceled(invoice_id: ID, order_ref: vector<u8>) {
-    event::emit(InvoiceCanceled { invoice_id, order_ref });
+public(package) fun emit_invoice_canceled(
+    invoice_id: ID,
+    payout_address: address,
+    payment_type: TypeName,
+    amount: u64,
+    order_ref: vector<u8>,
+) {
+    event::emit(InvoiceCanceled { invoice_id, payout_address, payment_type, amount, order_ref });
 }
 
 /// Emit `VoucherCanceled`.
@@ -207,6 +224,11 @@ public(package) fun emit_config_updated() {
 /// Emit `PayoutAddressChanged`.
 public(package) fun emit_payout_address_changed() {
     event::emit(PayoutAddressChanged {});
+}
+
+/// Emit `PaymentTypeChanged`.
+public(package) fun emit_payment_type_changed() {
+    event::emit(PaymentTypeChanged {});
 }
 
 /// Emit `DisplayChanged`.

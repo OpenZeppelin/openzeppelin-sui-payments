@@ -97,15 +97,18 @@ public fun new(
     assert!(!listing_variant_ids.is_empty(), ENoItems);
     assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
 
+    // Take and validate customer account and funds.
     let customer = unlock_req.data().owner();
     let amount = unlock_req.data().funds().value();
     assert!(amount > 0, EZeroAmount);
 
+    // Combine and validate active items and quantities.
     let items = listing_variant_ids.zip_map!(quantities, |vid, qty| {
         receipt::new_loyalty_item(merchant, vid, qty)
     });
     assert!(amount == receipt::compute_total(&items), EInvalidAmount);
 
+    // Extract funds from customer's PAS account and lock them in voucher.
     unlock_req.approve(loyalty::new_redeem_unlock_approval());
     let funds: Balance<LOYALTY> = unlock_funds::resolve(unlock_req, policy_loyalty);
 
@@ -165,13 +168,13 @@ public fun cancel(voucher: Voucher, customer_loyalty_account: &Account, clock: &
     assert!(clock.timestamp_ms() >= voucher.expires_at_ms, ENotExpired);
     assert!(customer_loyalty_account.owner() == voucher.customer, EWrongCustomer);
 
-    let voucher_id = object::id(&voucher);
     let Voucher { id, customer, funds, .. } = voucher;
-    let amount = funds.value();
 
-    events::emit_voucher_canceled(voucher_id, customer, amount);
+    events::emit_voucher_canceled(id.to_inner(), customer, funds.value());
 
+    // Deposit funds back to customer.
     customer_loyalty_account.deposit_balance(funds);
+
     id.delete();
 }
 

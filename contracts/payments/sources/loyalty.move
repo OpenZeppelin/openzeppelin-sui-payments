@@ -1,8 +1,9 @@
 /// `LOYALTY` currency + the `Loyalty` bundle that hands its caps to the
 /// `Merchant`. The OTW pattern guarantees exactly one `TreasuryCap<LOYALTY>`
-/// ever exists; that cap is consumed by `create` into the hot-potato `Loyalty`
-/// bundle, which `merchant::create` consumes into the shared `Merchant`. After
-/// bootstrap, no path can mint a second cap or stand up a second merchant.
+/// ever exists; that cap is consumed by `create` into the `Loyalty` linear
+/// resource bundle, which `merchant::create` consumes into the shared
+/// `Merchant`. After bootstrap, no path can mint a second cap or stand up a
+/// second merchant.
 ///
 /// LOYALTY is soulbound: the policy registers `RedeemUnlockApproval` for
 /// `unlock_funds` (so redemption can take balance out of a customer's account)
@@ -44,9 +45,9 @@ fun init(otw: LOYALTY, ctx: &mut TxContext) {
 
 /// Bundle of loyalty-side outputs from `create`, consumed by `merchant::create`
 /// which moves it whole into `Merchant.loyalty`. `store`-only — no `drop` and
-/// no `copy`, so the value is a hot potato that must be stored inside another
-/// struct (the Merchant) before the transaction ends. No `key`, so it cannot
-/// exist as a top-level on-chain object.
+/// no `copy`, so the value is a linear resource that must be moved into
+/// another struct (the Merchant) before the transaction ends. No `key`, so it
+/// cannot exist as a top-level on-chain object.
 public struct Loyalty has store {
     /// Mint/burn authority for `LOYALTY`. Mutably accessed only via
     /// `treasury_cap_mut` (package-private) to mint on `payment::pay` and burn
@@ -111,7 +112,7 @@ public(package) fun treasury_cap_mut(self: &mut Loyalty): &mut TreasuryCap<LOYAL
 /// Mint into the customer's PAS Account. Called by `payment::pay`.
 /// `deposit_balance` is unrestricted in PAS (no `Auth` needed), so the customer
 /// doesn't have to sign for the loyalty-side leg — only for their stablecoin spend.
-public(package) fun mint_into(
+public(package) fun mint_to(
     cap: &mut TreasuryCap<LOYALTY>,
     customer_account: &Account,
     amount: u64,

@@ -4,6 +4,7 @@ module openzeppelin_payments::payment_tests;
 
 use openzeppelin_access::access_control::AccessControl;
 use openzeppelin_payments::config;
+use openzeppelin_payments::events::{InvoicePaid, InvoiceCanceled};
 use openzeppelin_payments::listing;
 use openzeppelin_payments::merchant::{
     Self,
@@ -23,6 +24,7 @@ use std::unit_test::destroy;
 use sui::balance;
 use sui::clock;
 use sui::coin;
+use sui::event;
 use sui::test_scenario;
 
 const ADMIN: address = @0xA;
@@ -116,6 +118,9 @@ fun payment_happy_path() {
             &test_clock,
             scenario.ctx(),
         );
+
+        // `InvoicePaid` was emitted.
+        assert!(event::events_by_type<InvoicePaid>().length() == 1, 0);
 
         // Verify the soulbound receipt landed in the customer's owned objects.
         scenario.next_tx(CUSTOMER);
@@ -279,6 +284,65 @@ fun cancel_after_expiry_destroys_invoice() {
         let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
         payment::cancel(inv_shared, &test_clock);
 
+        // `InvoiceCanceled` was emitted.
+        assert!(event::events_by_type<InvoiceCanceled>().length() == 1, 0);
+
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = payment::ENotExpired)]
+fun cancel_before_expiry_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+        let inv = payment::new(
+            &merchant,
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+        let invoice_id = object::id(&inv);
+        payment::share(inv);
+
+        // Try to cancel while the invoice is still live — must abort.
+        scenario.next_tx(@0xDEAD);
+        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
+        payment::cancel(inv_shared, &test_clock);
+
+        // Unreachable cleanup.
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
         destroy(test_usd_cap);
@@ -918,6 +982,241 @@ fun pay_wrong_currency_aborts() {
         test_scenario::return_shared(payout_account_shared);
         destroy(test_usd_cap);
         destroy(wrong_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = payment::ENoItems)]
+fun new_no_items_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        scenario.next_tx(ADMIN);
+        let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // Empty vectors — aborts on `ENoItems`.
+        let inv = payment::new(
+            &merchant,
+            &cashier_auth,
+            vector[],
+            vector[],
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+        payment::share(inv);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = payment::ELengthMismatch)]
+fun new_length_mismatch_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // 1 variant id, 2 quantities — aborts on `ELengthMismatch`.
+        let inv = payment::new(
+            &merchant,
+            &cashier_auth,
+            vector[variant_id],
+            vector[1, 2],
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+        payment::share(inv);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EVariantNotFound)]
+fun new_variant_not_found_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        scenario.next_tx(ADMIN);
+        let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // Variant ID that doesn't exist in the merchant's catalog — aborts via
+        // `merchant::active_listing_variant`'s `EVariantNotFound`.
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        let inv = payment::new(
+            &merchant,
+            &cashier_auth,
+            vector[phantom],
+            vector[1],
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+        payment::share(inv);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test]
+fun pay_zero_loyalty_no_mint() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.deposit_balance(balance::create_for_testing<TEST_USD>(10_000));
+        customer_account.share();
+
+        let payout_account_id = ns.account_address(PAYOUT).to_id();
+        account::create_and_share(ns, PAYOUT);
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        // mint_numerator = 0 → compute_loyalty(_) = 0 for every payment.
+        let zero_cfg = config::new(0, 10, 1_000_000, 600_000, 600_000);
+        merchant.set_config(&merchant_auth, zero_cfg);
+
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+        let inv = payment::new(
+            &merchant,
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+        let invoice_id = object::id(&inv);
+        payment::share(inv);
+
+        // Capture LOYALTY supply before pay so we can assert no mint occurred.
+        let supply_before = coin::total_supply(merchant.loyalty().treasury_cap());
+
+        scenario.next_tx(CUSTOMER);
+        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
+        let mut customer_account_shared = scenario.take_shared_by_id<Account>(
+            customer_account_id,
+        );
+        let payout_account_shared = scenario.take_shared_by_id<Account>(payout_account_id);
+        let test_usd_policy = test_setup::take_test_usd_policy(scenario);
+
+        let customer_auth = account::new_auth(scenario.ctx());
+        let mut send_req = customer_account_shared.send_balance<TEST_USD>(
+            &customer_auth,
+            &payout_account_shared,
+            500,
+            scenario.ctx(),
+        );
+        test_setup::approve_test_usd(&mut send_req);
+
+        payment::pay<TEST_USD>(
+            inv_shared,
+            &mut merchant,
+            send_req,
+            &test_usd_policy,
+            &customer_account_shared,
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Receipt records loyalty = 0 and the supply didn't move.
+        scenario.next_tx(CUSTOMER);
+        let r = scenario.take_from_sender<Receipt<Payment>>();
+        assert!(receipt::amount(&r) == 500, 0);
+        assert!(receipt::loyalty(&r) == 0, 0);
+        let supply_after = coin::total_supply(merchant.loyalty().treasury_cap());
+        assert!(supply_before == supply_after, 0);
+
+        destroy(r);
+        test_setup::return_test_usd_policy(test_usd_policy);
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        test_scenario::return_shared(payout_account_shared);
+        destroy(test_usd_cap);
         destroy(test_clock);
     });
 }

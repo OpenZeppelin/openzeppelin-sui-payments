@@ -80,11 +80,18 @@ public struct Redemption has drop, store {
 
 // === Public Functions ===
 
-/// Voluntarily discard a receipt. Only the owner (the customer the receipt was
-/// transferred to) can call this since the receipt is `key`-only and owned.
-/// The canonical settlement record stays on-chain as the originating
-/// `InvoicePaid` / `VoucherRedeemed` event — destroying the receipt just
-/// reclaims object storage for the customer.
+/// Voluntarily discard a receipt.
+///
+/// Only the owner (the customer the receipt was transferred to) can call this
+/// since the receipt is `key`-only and owned. The canonical settlement record
+/// stays on-chain as the originating `InvoicePaid` / `VoucherRedeemed` event —
+/// destroying the receipt just reclaims object storage for the customer.
+///
+/// #### Generics
+/// - `T`: The receipt payload type (`Payment` or `Redemption`).
+///
+/// #### Parameters
+/// - `receipt`: The receipt to destroy (consumed).
 public fun destroy<T: store + drop>(receipt: Receipt<T>) {
     let Receipt { id, items: _, amount: _, timestamp_ms: _, data: _ } = receipt;
     id.delete();
@@ -134,9 +141,20 @@ public fun voucher_id(self: &Receipt<Redemption>): ID { self.data.voucher_id }
 // === Package Functions ===
 
 /// Build an order line by snapshotting the variant's current stablecoin price
-/// from the merchant's catalog. `quantity` must be > 0. Aborts if the variant
-/// is not registered or its parent listing is inactive (via
-/// `merchant::active_listing_variant`).
+/// from the merchant's catalog.
+///
+/// #### Parameters
+/// - `merchant`: The merchant whose catalog is read.
+/// - `variant_id`: ID of the variant to bill.
+/// - `quantity`: Quantity ordered. Must be > 0.
+///
+/// #### Returns
+/// - The constructed `Item` with the snapshotted stablecoin price.
+///
+/// #### Aborts
+/// - `EZeroQuantity` if `quantity` is zero.
+/// - `EVariantNotFound` / `EListingInactive` (via `merchant::active_listing_variant`)
+///   if the variant is unregistered or its parent listing is inactive.
 public(package) fun new_item(merchant: &Merchant, variant_id: ID, quantity: u64): Item {
     assert!(quantity > 0, EZeroQuantity);
 
@@ -146,11 +164,21 @@ public(package) fun new_item(merchant: &Merchant, variant_id: ID, quantity: u64)
 }
 
 /// Build a voucher line by snapshotting the variant's current `loyalty_price`
-/// from the merchant's catalog. `quantity` must be > 0. Aborts with
-/// `ENoLoyaltyPrice` if the variant does not declare a loyalty-side price
-/// (i.e. `Variant.loyalty_price` is `None`), and propagates the abort from
-/// `merchant::active_listing_variant` if the variant is not registered or its
-/// parent listing is inactive.
+/// from the merchant's catalog.
+///
+/// #### Parameters
+/// - `merchant`: The merchant whose catalog is read.
+/// - `variant_id`: ID of the variant to redeem against.
+/// - `quantity`: Quantity ordered. Must be > 0.
+///
+/// #### Returns
+/// - The constructed `Item` with the snapshotted LOYALTY price.
+///
+/// #### Aborts
+/// - `EZeroQuantity` if `quantity` is zero.
+/// - `ENoLoyaltyPrice` if the variant's `loyalty_price` is `None`.
+/// - `EVariantNotFound` / `EListingInactive` (via `merchant::active_listing_variant`)
+///   if the variant is unregistered or its parent listing is inactive.
 public(package) fun new_loyalty_item(merchant: &Merchant, variant_id: ID, quantity: u64): Item {
     assert!(quantity > 0, EZeroQuantity);
 
@@ -162,9 +190,19 @@ public(package) fun new_loyalty_item(merchant: &Merchant, variant_id: ID, quanti
     Item { variant_id, quantity, price }
 }
 
-/// Sum `item.quantity * item.price` across all items using a u128
-/// accumulator; aborts with `EAmountOverflow` if the final total doesn't fit
-/// in u64.
+/// Sum `item.quantity * item.price` across all items.
+///
+/// Each multiply and add is checked, so the total never wraps.
+///
+/// #### Parameters
+/// - `items`: The line items to total.
+///
+/// #### Returns
+/// - The summed amount.
+///
+/// #### Aborts
+/// - `EAmountOverflow` if any intermediate product or the running total exceeds
+///   the `u64` range.
 public(package) fun compute_total(items: &vector<Item>): u64 {
     let mut total: u64 = 0;
     items.do_ref!(|item| {
@@ -179,7 +217,20 @@ public(package) fun compute_total(items: &vector<Item>): u64 {
 }
 
 /// Mint a `Receipt<Payment>` and transfer it to `customer`.
-/// Soulbound (receipt cannot be re-transferred or stored anywhere else).
+///
+/// Soulbound — the receipt cannot be re-transferred or stored anywhere else.
+///
+/// #### Parameters
+/// - `invoice_id`: ID of the settled invoice.
+/// - `payout_address`: Payout address recorded on the invoice.
+/// - `payment_type`: `TypeName` of the stablecoin paid in.
+/// - `items`: Line items copied from the invoice.
+/// - `amount`: Stablecoin amount settled.
+/// - `loyalty`: LOYALTY units minted to the customer.
+/// - `order_ref`: Merchant order reference carried from the invoice.
+/// - `timestamp_ms`: Settlement timestamp.
+/// - `customer`: Recipient of the soulbound receipt.
+/// - `ctx`: Transaction context.
 public(package) fun transfer_payment_receipt(
     invoice_id: ID,
     payout_address: address,
@@ -203,7 +254,16 @@ public(package) fun transfer_payment_receipt(
 }
 
 /// Mint a `Receipt<Redemption>` and transfer it to `customer`.
-/// Soulbound (receipt cannot be re-transferred or stored anywhere else).
+///
+/// Soulbound — the receipt cannot be re-transferred or stored anywhere else.
+///
+/// #### Parameters
+/// - `voucher_id`: ID of the redeemed voucher.
+/// - `items`: Line items copied from the voucher.
+/// - `amount`: LOYALTY units burned.
+/// - `timestamp_ms`: Settlement timestamp.
+/// - `customer`: Recipient of the soulbound receipt.
+/// - `ctx`: Transaction context.
 public(package) fun transfer_redemption_receipt(
     voucher_id: ID,
     items: vector<Item>,

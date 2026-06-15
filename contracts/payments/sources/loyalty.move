@@ -18,30 +18,10 @@ use sui::balance::Balance;
 use sui::coin::TreasuryCap;
 use sui::coin_registry;
 
-// === Init ===
+// === Structs ===
 
 /// One-time witness — struct name == module name, uppercased.
 public struct LOYALTY has drop {}
-
-/// Module init — creates the standard Sui currency and freezes its metadata.
-/// Policy creation happens in `create` (the second deployer tx) because
-/// `policy::new_for_currency` requires `&mut Namespace` which `init` can't take.
-fun init(otw: LOYALTY, ctx: &mut TxContext) {
-    let (initializer, cap) = coin_registry::new_currency_with_otw(
-        otw,
-        0,
-        b"LOY".to_string(),
-        b"Loyalty Points".to_string(),
-        b"OpenZeppelin Sui Payments loyalty token (soulbound).".to_string(),
-        b"".to_string(),
-        ctx,
-    );
-    let metadata = initializer.finalize(ctx);
-    transfer::public_freeze_object(metadata);
-    transfer::public_transfer(cap, ctx.sender());
-}
-
-// === Structs ===
 
 /// Bundle of loyalty-side outputs from `create`, consumed by `merchant::create`
 /// which moves it whole into `Merchant.loyalty`. `store`-only — no `drop` and
@@ -66,6 +46,32 @@ public struct Loyalty has store {
 /// Constructor is package-private — only modules in this package can produce one.
 public struct RedeemUnlockApproval() has drop;
 
+// === Init ===
+
+/// Module init — creates the standard Sui currency and freezes its metadata.
+///
+/// Policy creation happens in `create` (the second deployer tx) because
+/// `policy::new_for_currency` requires `&mut Namespace`, which `init` cannot
+/// take.
+///
+/// #### Parameters
+/// - `otw`: The `LOYALTY` one-time witness, consumed to register the currency.
+/// - `ctx`: Transaction context.
+fun init(otw: LOYALTY, ctx: &mut TxContext) {
+    let (initializer, cap) = coin_registry::new_currency_with_otw(
+        otw,
+        0,
+        b"LOY".to_string(),
+        b"Loyalty Points".to_string(),
+        b"OpenZeppelin Sui Payments loyalty token (soulbound).".to_string(),
+        b"".to_string(),
+        ctx,
+    );
+    let metadata = initializer.finalize(ctx);
+    transfer::public_freeze_object(metadata);
+    transfer::public_transfer(cap, ctx.sender());
+}
+
 // === Public Functions ===
 
 /// Post-publish setup. Creates `Policy<Balance<LOYALTY>>` against the global PAS
@@ -76,6 +82,13 @@ public struct RedeemUnlockApproval() has drop;
 ///   - `unlock_funds`    requires `RedeemUnlockApproval` (gates redemption)
 ///   - `send_funds`      NOT registered → soulbound (transfers can never resolve)
 ///   - `clawback_funds`  NOT registered + `clawback_allowed = false`
+///
+/// #### Parameters
+/// - `namespace`: The global PAS `Namespace` the policy is registered against.
+/// - `treasury_cap`: The sole `TreasuryCap<LOYALTY>` from `init`, moved into the bundle.
+///
+/// #### Returns
+/// - The `Loyalty` bundle (treasury cap, policy cap, policy id) for `merchant::create`.
 public fun create(namespace: &mut Namespace, mut treasury_cap: TreasuryCap<LOYALTY>): Loyalty {
     let (mut policy, policy_cap) = policy::new_for_currency(namespace, &mut treasury_cap, false);
 
@@ -109,9 +122,15 @@ public(package) fun treasury_cap_mut(self: &mut Loyalty): &mut TreasuryCap<LOYAL
     &mut self.treasury_cap
 }
 
-/// Mint into the customer's PAS Account. Called by `payment::pay`.
+/// Mint LOYALTY into the customer's PAS Account. Called by `payment::pay`.
+///
 /// `deposit_balance` is unrestricted in PAS (no `Auth` needed), so the customer
 /// doesn't have to sign for the loyalty-side leg — only for their stablecoin spend.
+///
+/// #### Parameters
+/// - `cap`: The merchant's `TreasuryCap<LOYALTY>` (mint authority).
+/// - `customer_account`: The payer's PAS account to deposit the minted balance into.
+/// - `amount`: LOYALTY units to mint.
 public(package) fun mint_to(
     cap: &mut TreasuryCap<LOYALTY>,
     customer_account: &Account,

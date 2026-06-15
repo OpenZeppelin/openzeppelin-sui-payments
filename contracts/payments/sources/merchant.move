@@ -70,7 +70,7 @@ const EPaymentTypeUnchanged: vector<u8> = "Payment type matches the current valu
 /// `AccessControl<MERCHANT>`. 24 hours.
 const ROOT_TRANSFER_DELAY_MS: u64 = 86_400_000;
 
-// === Init ===
+// === Structs ===
 
 /// One-time witness — struct name == module name uppercased. Consumed once
 /// in `init` to mint the package's `AccessControl<MERCHANT>` registry.
@@ -87,19 +87,6 @@ public struct CatalogManagerRole {}
 /// Holder gates settlement entry points: `payment::new`,
 /// `redemption::redeem`.
 public struct CashierRole {}
-
-/// Module init — runs once on package publish. Creates the
-/// `AccessControl<MERCHANT>` shared registry and shares it. The root role is
-/// granted to the deployer by `access_control::new`. Operational roles
-/// (`MerchantRole`, `CatalogManagerRole`, `CashierRole`) are NOT pre-granted
-/// here — the deployer grants them explicitly in the bootstrap PTB (typically
-/// to different addresses than the root key).
-fun init(otw: MERCHANT, ctx: &mut TxContext) {
-    let ac = access_control::new(otw, ROOT_TRANSFER_DELAY_MS, ctx);
-    transfer::public_share_object(ac);
-}
-
-// === Structs ===
 
 /// Central shared object holding the merchant's entire on-chain state.
 public struct Merchant has key {
@@ -134,16 +121,49 @@ public struct Merchant has key {
     variant_index: Table<ID, ID>,
 }
 
+// === Init ===
+
+/// Module init — runs once on package publish. Creates the
+/// `AccessControl<MERCHANT>` shared registry and shares it. The root role is
+/// granted to the deployer by `access_control::new`. Operational roles
+/// (`MerchantRole`, `CatalogManagerRole`, `CashierRole`) are NOT pre-granted
+/// here — the deployer grants them explicitly in the bootstrap PTB (typically
+/// to different addresses than the root key).
+///
+/// #### Parameters
+/// - `otw`: The `MERCHANT` one-time witness, consumed to mint the registry.
+/// - `ctx`: Transaction context.
+fun init(otw: MERCHANT, ctx: &mut TxContext) {
+    let ac = access_control::new(otw, ROOT_TRANSFER_DELAY_MS, ctx);
+    transfer::public_share_object(ac);
+}
+
 // === Public Functions ===
 
-/// Consume the `Loyalty` bundle from `loyalty::create` and return the
-/// `Merchant`. The type parameter `C` is the stablecoin currency this merchant
-/// will accept — it gets captured as `accepted_payment_type` and pinned for
-/// the lifetime of the merchant. Bootstrap-only: the `Loyalty` linear resource
-/// is the gating mechanism; subsequent admin operations are gated by
-/// `MerchantRole` / `CatalogManagerRole` / `CashierRole` via
-/// `AccessControl<MERCHANT>`. Caller is expected to follow up with
-/// `merchant::share(merchant)` in the same PTB.
+/// Consume the `Loyalty` bundle from `loyalty::create` and return the `Merchant`.
+///
+/// Bootstrap-only: the `Loyalty` linear resource is the gating mechanism;
+/// subsequent admin operations are gated by `MerchantRole` /
+/// `CatalogManagerRole` / `CashierRole` via `AccessControl<MERCHANT>`. Caller is
+/// expected to follow up with `merchant::share(merchant)` in the same PTB.
+///
+/// #### Generics
+/// - `C`: The stablecoin currency this merchant accepts; captured as
+///   `accepted_payment_type` and pinned for the merchant's lifetime.
+///
+/// #### Parameters
+/// - `loyalty`: The `Loyalty` bundle from `loyalty::create`.
+/// - `config`: The loyalty-mint + expiry `Config`.
+/// - `name`: Display name. Must be non-empty.
+/// - `logo_url`: Optional logo URL.
+/// - `payout_address`: Address that receives customer stablecoin on settlement.
+/// - `ctx`: Transaction context.
+///
+/// #### Returns
+/// - The constructed `Merchant` (caller must `share` it).
+///
+/// #### Aborts
+/// - `EEmptyName` if `name` is empty.
 public fun create<C>(
     loyalty: Loyalty,
     config: Config,
@@ -199,16 +219,35 @@ public fun loyalty(self: &Merchant): &Loyalty { &self.loyalty }
 /// Current loyalty-mint `Config` (numerator / denominator / cap).
 public fun config(self: &Merchant): &Config { &self.config }
 
-/// Look up a stored `Listing` by ID. Aborts with `EListingNotFound` if absent.
+/// Look up a stored `Listing` by ID.
+///
+/// #### Parameters
+/// - `self`: The merchant to read.
+/// - `id`: ID of the listing to look up.
+///
+/// #### Returns
+/// - Reference to the matching `Listing`.
+///
+/// #### Aborts
+/// - `EListingNotFound` if no listing with `id` is stored.
 public fun listing(self: &Merchant, id: ID): &Listing {
     assert!(self.listings.contains(id), EListingNotFound);
 
     self.listings.borrow(id)
 }
 
-/// Resolve a listing variant from the catalog by ID, going through `variant_index` to
-/// find its parent listing. Aborts with `EVariantNotFound` if the variant is
-/// not registered.
+/// Resolve a listing variant from the catalog by ID, going through
+/// `variant_index` to find its parent listing.
+///
+/// #### Parameters
+/// - `self`: The merchant to read.
+/// - `listing_variant_id`: ID of the variant to resolve.
+///
+/// #### Returns
+/// - Reference to the matching `Variant`.
+///
+/// #### Aborts
+/// - `EVariantNotFound` if the variant is not registered.
 public fun listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
     assert!(self.variant_index.contains(*listing_variant_id), EVariantNotFound);
 
@@ -216,12 +255,23 @@ public fun listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
     self.listings.borrow(listing_id).variant(listing_variant_id)
 }
 
-/// Like `listing_variant`, but additionally asserts the parent listing is
-/// `active`. Used at issuance time by `payment::new` / `redemption::new` (via
-/// `receipt::new_item` / `new_loyalty_item`) so inactive listings can't be
-/// sold or redeemed against. Aborts with `EVariantNotFound` or
-/// `EListingInactive`. Also useful to clients for pre-flight checks before
+/// Like `listing_variant`, but additionally asserts the parent listing is `active`.
+///
+/// Used at issuance time by `payment::new` / `redemption::new` (via
+/// `receipt::new_item` / `new_loyalty_item`) so inactive listings can't be sold
+/// or redeemed against. Also useful to clients for pre-flight checks before
 /// submitting an issuance call.
+///
+/// #### Parameters
+/// - `self`: The merchant to read.
+/// - `listing_variant_id`: ID of the variant to resolve.
+///
+/// #### Returns
+/// - Reference to the matching `Variant` on an active listing.
+///
+/// #### Aborts
+/// - `EVariantNotFound` if the variant is not registered.
+/// - `EListingInactive` if the parent listing is not active.
 public fun active_listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
     assert!(self.variant_index.contains(*listing_variant_id), EVariantNotFound);
 
@@ -235,9 +285,17 @@ public fun active_listing_variant(self: &Merchant, listing_variant_id: &ID): &Va
 
 // === Admin Functions ===
 
-/// Rotate the address that receives customer stablecoin payments. Aborts with
-/// `EPayoutAddressUnchanged` if `addr` already matches the current payout.
+/// Rotate the address that receives customer stablecoin payments.
+///
 /// Gated by `MerchantRole`. Emits `PayoutAddressChanged`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+/// - `addr`: The new payout address.
+///
+/// #### Aborts
+/// - `EPayoutAddressUnchanged` if `addr` already matches the current payout.
 public fun set_payout_address(self: &mut Merchant, _auth: &Auth<MerchantRole>, addr: address) {
     assert!(self.payout_address != addr, EPayoutAddressUnchanged);
 
@@ -246,13 +304,22 @@ public fun set_payout_address(self: &mut Merchant, _auth: &Auth<MerchantRole>, a
     events::emit_payout_address_changed();
 }
 
-/// Rotate the merchant's accepted stablecoin currency. The new `C` is captured
-/// from the type parameter and pinned as `accepted_payment_type`. Aborts with
-/// `EPaymentTypeUnchanged` if `C` matches the current value. Gated by
-/// `MerchantRole`. Emits `PaymentTypeChanged`.
+/// Rotate the merchant's accepted stablecoin currency.
 ///
-/// Note: in-flight invoices are unaffected — each invoice snapshots its
-/// `payment_type` at issuance, so rotating here only affects future invoices.
+/// The new `C` is captured from the type parameter and pinned as
+/// `accepted_payment_type`. Gated by `MerchantRole`. Emits `PaymentTypeChanged`.
+/// In-flight invoices are unaffected — each invoice snapshots its `payment_type`
+/// at issuance, so rotating here only affects future invoices.
+///
+/// #### Generics
+/// - `C`: The new accepted stablecoin currency.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+///
+/// #### Aborts
+/// - `EPaymentTypeUnchanged` if `C` already matches the current accepted type.
 public fun set_payment_type<C>(self: &mut Merchant, _auth: &Auth<MerchantRole>) {
     let new_type = type_name::with_defining_ids<C>();
     assert!(self.accepted_payment_type != new_type, EPaymentTypeUnchanged);
@@ -262,9 +329,19 @@ public fun set_payment_type<C>(self: &mut Merchant, _auth: &Auth<MerchantRole>) 
     events::emit_payment_type_changed();
 }
 
-/// Update display name and logo URL. Aborts with `EEmptyName` if `name` is
-/// empty, or with `EDisplayUnchanged` if both `name` and `logo` already match
-/// the current values. Gated by `MerchantRole`. Emits `DisplayChanged`.
+/// Update display name and logo URL.
+///
+/// Gated by `MerchantRole`. Emits `DisplayChanged`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+/// - `name`: The new display name. Must be non-empty.
+/// - `logo`: The new optional logo URL.
+///
+/// #### Aborts
+/// - `EEmptyName` if `name` is empty.
+/// - `EDisplayUnchanged` if both `name` and `logo` already match the current values.
 public fun set_display(
     self: &mut Merchant,
     _auth: &Auth<MerchantRole>,
@@ -280,11 +357,20 @@ public fun set_display(
     events::emit_display_changed();
 }
 
-/// Replace the merchant's loyalty mint `Config`. Build the new value via
-/// `config::new(...)` and pass it in. The replacement is effective for
-/// subsequent settlements only; invoices already issued keep their snapshot
-/// `amount` and `loyalty` values and are unaffected. Aborts with
-/// `EConfigUnchanged` if the new config equals the current one.
+/// Replace the merchant's loyalty mint `Config`.
+///
+/// Build the new value via `config::new(...)` and pass it in. The replacement is
+/// effective for subsequent settlements only; invoices already issued keep their
+/// snapshot `amount` and `loyalty` values and are unaffected. Gated by
+/// `MerchantRole`. Emits `ConfigUpdated`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+/// - `config`: The replacement `Config`.
+///
+/// #### Aborts
+/// - `EConfigUnchanged` if the new config equals the current one.
 public fun set_config(self: &mut Merchant, _auth: &Auth<MerchantRole>, config: Config) {
     assert!(&self.config != &config, EConfigUnchanged);
 
@@ -294,9 +380,22 @@ public fun set_config(self: &mut Merchant, _auth: &Auth<MerchantRole>, config: C
 }
 
 /// Take ownership of a caller-built `Listing` and store it under its own ID.
+///
 /// Every variant already on the listing is registered in `variant_index` so
-/// checkout can resolve it from the variant ID alone. Aborts if the listing
-/// ID or any of its variant IDs already exist on the merchant.
+/// checkout can resolve it from the variant ID alone. Gated by
+/// `CatalogManagerRole`. Emits `ListingAdded`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `CatalogManagerRole` authorization.
+/// - `listing`: The listing to store.
+///
+/// #### Returns
+/// - The stored listing's ID.
+///
+/// #### Aborts
+/// - Aborts (via `Table::add`) if the listing ID or any of its variant IDs
+///   already exist on the merchant.
 public fun add_listing(
     self: &mut Merchant,
     _auth: &Auth<CatalogManagerRole>,
@@ -315,8 +414,18 @@ public fun add_listing(
     id
 }
 
-/// Pull a `Listing` out of the merchant. Every variant on the removed listing
-/// is also dropped from `variant_index`.
+/// Pull a `Listing` out of the merchant.
+///
+/// Every variant on the removed listing is also dropped from `variant_index`.
+/// Gated by `CatalogManagerRole`. Emits `ListingRemoved`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `CatalogManagerRole` authorization.
+/// - `id`: ID of the listing to remove.
+///
+/// #### Aborts
+/// - `EListingNotFound` if no listing with `id` is stored.
 public fun remove_listing(self: &mut Merchant, _auth: &Auth<CatalogManagerRole>, id: ID) {
     assert!(self.listings.contains(id), EListingNotFound);
 
@@ -330,9 +439,19 @@ public fun remove_listing(self: &mut Merchant, _auth: &Auth<CatalogManagerRole>,
     events::emit_listing_removed(id);
 }
 
-/// Toggle a listing's `active` flag. Aborts if the listing does not exist, or
-/// if `active` already matches the listing's current state (no-op guard from
-/// `listing::set_active`).
+/// Toggle a listing's `active` flag.
+///
+/// Gated by `CatalogManagerRole`. Emits `ListingStatusChanged`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `CatalogManagerRole` authorization.
+/// - `listing_id`: ID of the listing to toggle.
+/// - `active`: The new active state.
+///
+/// #### Aborts
+/// - `EListingNotFound` if no listing with `listing_id` is stored.
+/// - `EActiveStateUnchanged` if `active` already matches the listing's state.
 public fun set_listing_status(
     self: &mut Merchant,
     _auth: &Auth<CatalogManagerRole>,
@@ -346,9 +465,23 @@ public fun set_listing_status(
     events::emit_listing_status_changed(listing_id, active);
 }
 
-/// Insert a variant into an existing listing and return its ID. The new variant
-/// is also registered in `variant_index`. Aborts if the listing does not exist
-/// or if the variant's `id` already exists.
+/// Insert a variant into an existing listing and return its ID.
+///
+/// The new variant is also registered in `variant_index`. Gated by
+/// `CatalogManagerRole`. Emits `VariantAdded`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `CatalogManagerRole` authorization.
+/// - `listing_id`: ID of the parent listing.
+/// - `variant`: The variant to insert.
+///
+/// #### Returns
+/// - The inserted variant's ID.
+///
+/// #### Aborts
+/// - `EListingNotFound` if no listing with `listing_id` is stored.
+/// - Aborts (via `vec_map::insert`) if the variant's `id` already exists.
 public fun add_listing_variant(
     self: &mut Merchant,
     _auth: &Auth<CatalogManagerRole>,
@@ -366,9 +499,19 @@ public fun add_listing_variant(
     id
 }
 
-/// Remove a variant by ID from its listing. The owning listing is resolved
-/// via `variant_index` — no separate `listing_id` argument needed. Aborts
-/// with `EVariantNotFound` if the variant is not registered.
+/// Remove a variant by ID from its listing.
+///
+/// The owning listing is resolved via `variant_index` — no separate
+/// `listing_id` argument needed. Gated by `CatalogManagerRole`. Emits
+/// `VariantRemoved`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `CatalogManagerRole` authorization.
+/// - `variant_id`: ID of the variant to remove.
+///
+/// #### Aborts
+/// - `EVariantNotFound` if the variant is not registered.
 public fun remove_listing_variant(
     self: &mut Merchant,
     _auth: &Auth<CatalogManagerRole>,

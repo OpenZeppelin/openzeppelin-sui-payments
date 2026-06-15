@@ -43,11 +43,26 @@ public struct Config has drop, store {
 
 // === Public Functions ===
 
-/// Construct a new `Config`. `mint_denominator`, `invoice_ttl_ms`, and
-/// `voucher_ttl_ms` must all be non-zero; `mint_numerator = 0` and/or
-/// `max_mint_per_payment = 0` are permitted (loyalty mint becomes a no-op).
-/// Pass the returned value to `merchant::create` (initial setup) or
-/// `merchant::set_config` (replacement).
+/// Construct a new `Config`.
+///
+/// `mint_numerator = 0` and/or `max_mint_per_payment = 0` are permitted —
+/// loyalty mint becomes a no-op. Pass the returned value to `merchant::create`
+/// (initial setup) or `merchant::set_config` (replacement).
+///
+/// #### Parameters
+/// - `mint_numerator`: Numerator of the loyalty mint ratio.
+/// - `mint_denominator`: Denominator of the loyalty mint ratio. Must be non-zero.
+/// - `max_mint_per_payment`: Hard cap on minted LOYALTY per payment.
+/// - `invoice_ttl_ms`: Invoice lifetime in milliseconds. Must be > 0.
+/// - `voucher_ttl_ms`: Voucher lifetime in milliseconds. Must be > 0.
+///
+/// #### Returns
+/// - The constructed `Config`.
+///
+/// #### Aborts
+/// - `EZeroMintDenominator` if `mint_denominator` is zero.
+/// - `EZeroInvoiceTtl` if `invoice_ttl_ms` is zero.
+/// - `EZeroVoucherTtl` if `voucher_ttl_ms` is zero.
 public fun new(
     mint_numerator: u64,
     mint_denominator: u64,
@@ -68,9 +83,18 @@ public fun new(
     }
 }
 
-/// Compute the loyalty amount earned on a `payment_amount` under this config:
+/// Compute the loyalty amount earned on a `payment_amount` under this config.
 ///
-///     `loyalty = min(payment_amount * mint_numerator / mint_denominator, max_mint_per_payment)`
+/// `loyalty = min(payment_amount * mint_numerator / mint_denominator, max_mint_per_payment)`,
+/// rounding down. If the intermediate product overflows, the result clamps to
+/// `max_mint_per_payment` rather than aborting.
+///
+/// #### Parameters
+/// - `self`: The merchant's loyalty `Config`.
+/// - `payment_amount`: The settled stablecoin amount to reward against.
+///
+/// #### Returns
+/// - The loyalty units earned, capped at `max_mint_per_payment`.
 public fun compute_loyalty(self: &Config, payment_amount: u64): u64 {
     oz_u64::mul_div(
         payment_amount,

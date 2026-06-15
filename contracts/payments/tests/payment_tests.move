@@ -20,7 +20,7 @@ use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::account::{Self, Account};
 use pas::e2e;
 use pas::policy;
-use std::unit_test::destroy;
+use std::unit_test::{assert_eq, destroy};
 use sui::balance;
 use sui::clock;
 use sui::coin;
@@ -125,11 +125,11 @@ fun payment_happy_path() {
         // Verify the soulbound receipt landed in the customer's owned objects.
         scenario.next_tx(CUSTOMER);
         let r = scenario.take_from_sender<Receipt<Payment>>();
-        assert!(receipt::amount(&r) == 500, 0);
-        assert!(receipt::loyalty(&r) == 50, 0); // 500 * 1/10 = 50, under cap.
-        assert!(receipt::payout_address(&r) == PAYOUT, 0);
-        assert!(receipt::order_ref(&r) == b"order-001", 0);
-        assert!(receipt::timestamp_ms(&r) == 1_000_000, 0);
+        assert_eq!(receipt::amount(&r), 500);
+        assert_eq!(receipt::loyalty(&r), 50); // 500 * 1/10 = 50, under cap.
+        assert_eq!(receipt::payout_address(&r), PAYOUT);
+        assert_eq!(*receipt::order_ref(&r), b"order-001");
+        assert_eq!(receipt::timestamp_ms(&r), 1_000_000);
 
         // Cleanup.
         destroy(r);
@@ -772,8 +772,8 @@ fun pay_clamps_loyalty_to_max() {
         scenario.next_tx(CUSTOMER);
         let r = scenario.take_from_sender<Receipt<Payment>>();
         // Uncapped would be 500 / 10 = 50; cap clamps to 30.
-        assert!(receipt::amount(&r) == 500, 0);
-        assert!(receipt::loyalty(&r) == 30, 0);
+        assert_eq!(receipt::amount(&r), 500);
+        assert_eq!(receipt::loyalty(&r), 30);
 
         destroy(r);
         test_setup::return_test_usd_policy(test_usd_policy);

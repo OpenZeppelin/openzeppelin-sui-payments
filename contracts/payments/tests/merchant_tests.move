@@ -9,7 +9,7 @@ use openzeppelin_payments::listing;
 use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, MerchantRole, CatalogManagerRole};
 use openzeppelin_payments::test_setup;
 use pas::e2e;
-use std::unit_test::destroy;
+use std::unit_test::{assert_eq, destroy};
 use sui::test_scenario;
 
 const ADMIN: address = @0xA;
@@ -28,11 +28,11 @@ fun merchant_create_and_share() {
         scenario.next_tx(ADMIN);
         let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
 
-        assert!(merchant.name() == b"Test Shop".to_string(), 0);
-        assert!(merchant.payout_address() == PAYOUT, 0);
-        assert!(merchant.config().mint_numerator() == 1, 0);
-        assert!(merchant.config().mint_denominator() == 10, 0);
-        assert!(merchant.config().invoice_ttl_ms() == 600_000, 0);
+        assert_eq!(*merchant.name(), b"Test Shop".to_string());
+        assert_eq!(merchant.payout_address(), PAYOUT);
+        assert_eq!(merchant.config().mint_numerator(), 1);
+        assert_eq!(merchant.config().mint_denominator(), 10);
+        assert_eq!(merchant.config().invoice_ttl_ms(), 600_000);
 
         test_scenario::return_shared(merchant);
         destroy(test_usd_cap);
@@ -67,11 +67,11 @@ fun add_listing_with_variants() {
         let listing_id = merchant.add_listing(&catalog_auth, listing);
 
         let stored = merchant.listing(listing_id);
-        assert!(stored.name() == b"Coffee".to_string(), 0);
-        assert!(stored.variants().contains(&vid), 0);
+        assert_eq!(*stored.name(), b"Coffee".to_string());
+        assert!(stored.variants().contains(&vid));
 
         let v_ref = merchant.listing_variant(&vid);
-        assert!(v_ref.price() == 500, 0);
+        assert_eq!(v_ref.price(), 500);
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -163,8 +163,8 @@ fun add_listing_variant_via_merchant() {
         let vid = merchant.add_listing_variant(&catalog_auth, listing_id, variant);
 
         let v_ref = merchant.listing_variant(&vid);
-        assert!(v_ref.price() == 700, 0);
-        assert!(*v_ref.loyalty_price().borrow() == 70, 0);
+        assert_eq!(v_ref.price(), 700);
+        assert_eq!(*v_ref.loyalty_price().borrow(), 70);
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -203,7 +203,7 @@ fun remove_listing_variant_via_merchant() {
         merchant.remove_listing_variant(&catalog_auth, vid);
 
         let stored = merchant.listing(listing_id);
-        assert!(!stored.variants().contains(&vid), 0);
+        assert!(!stored.variants().contains(&vid));
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -231,13 +231,13 @@ fun set_listing_status_toggles() {
 
         let listing_id = merchant.add_listing(&catalog_auth, listing);
 
-        assert!(merchant.listing(listing_id).active(), 0);
+        assert!(merchant.listing(listing_id).active());
 
         merchant.set_listing_status(&catalog_auth, listing_id, false);
-        assert!(!merchant.listing(listing_id).active(), 0);
+        assert!(!merchant.listing(listing_id).active());
 
         merchant.set_listing_status(&catalog_auth, listing_id, true);
-        assert!(merchant.listing(listing_id).active(), 0);
+        assert!(merchant.listing(listing_id).active());
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -293,11 +293,11 @@ fun set_config_updates_values() {
         let new_cfg = config::new(2, 20, 500_000, 300_000, 300_000);
         merchant.set_config(&merchant_auth, new_cfg);
 
-        assert!(merchant.config().mint_numerator() == 2, 0);
-        assert!(merchant.config().mint_denominator() == 20, 0);
-        assert!(merchant.config().max_mint_per_payment() == 500_000, 0);
-        assert!(merchant.config().invoice_ttl_ms() == 300_000, 0);
-        assert!(merchant.config().voucher_ttl_ms() == 300_000, 0);
+        assert_eq!(merchant.config().mint_numerator(), 2);
+        assert_eq!(merchant.config().mint_denominator(), 20);
+        assert_eq!(merchant.config().max_mint_per_payment(), 500_000);
+        assert_eq!(merchant.config().invoice_ttl_ms(), 300_000);
+        assert_eq!(merchant.config().voucher_ttl_ms(), 300_000);
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -348,7 +348,7 @@ fun set_payout_address_rotates_payout() {
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
         merchant.set_payout_address(&merchant_auth, @0xC0FFEE);
-        assert!(merchant.payout_address() == @0xC0FFEE, 0);
+        assert_eq!(merchant.payout_address(), @0xC0FFEE);
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -402,8 +402,8 @@ fun set_display_updates_name_and_logo() {
             b"Renamed Shop".to_string(),
             std::option::some(b"https://example.com/logo.png".to_string()),
         );
-        assert!(merchant.name() == b"Renamed Shop".to_string(), 0);
-        assert!(merchant.logo_url().borrow() == b"https://example.com/logo.png".to_string(), 0);
+        assert_eq!(*merchant.name(), b"Renamed Shop".to_string());
+        assert_eq!(*merchant.logo_url().borrow(), b"https://example.com/logo.png".to_string());
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);

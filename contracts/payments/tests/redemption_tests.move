@@ -12,7 +12,7 @@ use openzeppelin_payments::redemption::{Self, Voucher};
 use openzeppelin_payments::test_setup;
 use pas::account::{Self, Account};
 use pas::e2e;
-use std::unit_test::destroy;
+use std::unit_test::{assert_eq, destroy};
 use sui::balance;
 use sui::clock;
 use sui::coin;
@@ -108,8 +108,8 @@ fun redemption_happy_path() {
         // Customer receives the RedemptionReceipt.
         scenario.next_tx(CUSTOMER);
         let r = scenario.take_from_sender<Receipt<Redemption>>();
-        assert!(receipt::amount(&r) == 50, 0);
-        assert!(receipt::timestamp_ms(&r) == 1_000_000, 0);
+        assert_eq!(receipt::amount(&r), 50);
+        assert_eq!(receipt::timestamp_ms(&r), 1_000_000);
 
         destroy(r);
         test_setup::return_loyalty_policy(loyalty_policy);

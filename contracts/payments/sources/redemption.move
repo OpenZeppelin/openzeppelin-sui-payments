@@ -80,11 +80,33 @@ public struct Voucher has key {
 
 // === Public Functions ===
 
-/// Customer creates a voucher. Extracts the LOYALTY balance via the unlock request
-/// (which the customer built using their PAS `Auth`), resolves it through the
-/// merchant's loyalty `Policy` with our package-private `RedeemUnlockApproval`
-/// witness, and stashes the resulting `Balance<LOYALTY>` inside the Voucher.
-/// `expires_at_ms` is derived from the merchant's `Config.voucher_ttl_ms`.
+/// Customer creates a voucher.
+///
+/// Extracts the LOYALTY balance via the unlock request (which the customer built
+/// using their PAS `Auth`), resolves it through the merchant's loyalty `Policy`
+/// with the package-private `RedeemUnlockApproval` witness, and stashes the
+/// resulting `Balance<LOYALTY>` inside the Voucher. `expires_at_ms` is derived
+/// from the merchant's `Config.voucher_ttl_ms`. Emits `VoucherCreated`.
+///
+/// #### Parameters
+/// - `merchant`: The merchant whose catalog and config are read.
+/// - `unlock_req`: The customer's `UnlockFunds<Balance<LOYALTY>>` request.
+/// - `policy_loyalty`: The PAS policy governing `Balance<LOYALTY>`.
+/// - `listing_variant_ids`: Variant IDs being redeemed.
+/// - `quantities`: Per-variant quantities, parallel to `listing_variant_ids`.
+/// - `clock`: Clock used to compute `expires_at_ms`.
+/// - `ctx`: Transaction context.
+///
+/// #### Returns
+/// - The constructed `Voucher` (caller must `share` it).
+///
+/// #### Aborts
+/// - `ENoItems` if `listing_variant_ids` is empty.
+/// - `ELengthMismatch` if the two vectors differ in length.
+/// - `EZeroAmount` if the unlocked amount is zero.
+/// - `EInvalidAmount` if the unlocked amount differs from the items' total.
+/// - `ENoLoyaltyPrice` / `EVariantNotFound` / `EListingInactive` (via
+///   `receipt::new_loyalty_item`) for catalog/price problems.
 public fun new(
     merchant: &Merchant,
     mut unlock_req: Request<UnlockFunds<Balance<LOYALTY>>>,
@@ -131,9 +153,21 @@ public fun share(voucher: Voucher) {
     transfer::share_object(voucher);
 }
 
-/// Merchant redeems the voucher: burns the locked `Balance<LOYALTY>` via the
-/// merchant's `TreasuryCap<LOYALTY>`, destroys the voucher, mints a soulbound
-/// `Receipt<Redemption>` for the customer, and emits `VoucherRedeemed`.
+/// Merchant redeems the voucher.
+///
+/// Burns the locked `Balance<LOYALTY>` via the merchant's `TreasuryCap<LOYALTY>`,
+/// destroys the voucher, mints a soulbound `Receipt<Redemption>` for the
+/// customer, and emits `VoucherRedeemed`. Gated by `CashierRole`.
+///
+/// #### Parameters
+/// - `voucher`: The voucher to redeem (consumed).
+/// - `_auth`: `CashierRole` authorization.
+/// - `merchant`: The merchant (mutated to burn supply).
+/// - `clock`: Clock used to validate expiry and stamp the receipt.
+/// - `ctx`: Transaction context.
+///
+/// #### Aborts
+/// - `EVoucherExpired` if the voucher has expired.
 public fun redeem(
     voucher: Voucher,
     _auth: &Auth<CashierRole>,
@@ -161,9 +195,20 @@ public fun redeem(
     events::emit_voucher_redeemed(voucher_id, customer, amount, now);
 }
 
-/// Permissionless cleanup after expiry — deposits the locked balance back into the
-/// customer's PAS Account. Prevents griefing by an inactive merchant (whose refusal
-/// to redeem would otherwise strand the customer's loyalty until expiry).
+/// Permissionless cleanup after expiry — deposits the locked balance back into
+/// the customer's PAS Account.
+///
+/// Prevents griefing by an inactive merchant (whose refusal to redeem would
+/// otherwise strand the customer's loyalty until expiry). Emits `VoucherCanceled`.
+///
+/// #### Parameters
+/// - `voucher`: The expired voucher to cancel (consumed).
+/// - `customer_loyalty_account`: The customer's PAS account to refund into.
+/// - `clock`: Clock used to verify the voucher has expired.
+///
+/// #### Aborts
+/// - `ENotExpired` if the voucher has not yet expired.
+/// - `EWrongCustomer` if the account owner is not the voucher's customer.
 public fun cancel(voucher: Voucher, customer_loyalty_account: &Account, clock: &Clock) {
     assert!(clock.timestamp_ms() >= voucher.expires_at_ms, ENotExpired);
     assert!(customer_loyalty_account.owner() == voucher.customer, EWrongCustomer);

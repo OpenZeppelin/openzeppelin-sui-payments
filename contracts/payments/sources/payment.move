@@ -88,13 +88,33 @@ public struct Invoice has key {
 
 // === Public Functions ===
 
-/// Merchant issues an Invoice from parallel `listing_variant_ids` + `quantities`
-/// vectors; each pair is resolved into an `Item` by snapshotting the variant's
-/// current price from the merchant's catalog. The total `amount` is computed
-/// from those items, and `expires_at_ms` uses the merchant's `Config.invoice_ttl_ms`.
-/// Aborts if the vectors are empty (`ENoItems`), if their lengths differ
-/// (`ELengthMismatch`), if the computed total is 0 (`EZeroAmount`), or if any
-/// variant ID is not registered in the merchant's catalog.
+/// Merchant issues an Invoice from parallel `listing_variant_ids` + `quantities`.
+///
+/// Each pair is resolved into an `Item` by snapshotting the variant's current
+/// price from the merchant's catalog. The total `amount` is computed from those
+/// items, the `loyalty` reward and `payment_type` are snapshotted from the
+/// merchant, and `expires_at_ms` uses the merchant's `Config.invoice_ttl_ms`.
+/// Gated by `CashierRole`. Emits `InvoiceCreated`.
+///
+/// #### Parameters
+/// - `merchant`: The merchant issuing the invoice.
+/// - `_auth`: `CashierRole` authorization.
+/// - `listing_variant_ids`: Variant IDs to bill for.
+/// - `quantities`: Per-variant quantities, parallel to `listing_variant_ids`.
+/// - `order_ref`: Opaque merchant order tag carried to the receipt and events.
+/// - `clock`: Clock used to compute `expires_at_ms`.
+/// - `ctx`: Transaction context.
+///
+/// #### Returns
+/// - The constructed `Invoice` (caller must `share` it).
+///
+/// #### Aborts
+/// - `ENoItems` if `listing_variant_ids` is empty.
+/// - `ELengthMismatch` if the two vectors differ in length.
+/// - `EZeroAmount` if the computed total is zero.
+/// - `EVariantNotFound` / `EListingInactive` (via `receipt::new_item`) if a
+///   variant is unregistered or its parent listing is inactive.
+/// - `EZeroQuantity` (via `receipt::new_item`) if any quantity is zero.
 public fun new(
     merchant: &Merchant,
     _auth: &Auth<CashierRole>,
@@ -140,11 +160,32 @@ public fun share(invoice: Invoice) {
     transfer::share_object(invoice);
 }
 
-/// Customer settles the invoice. Resolves the customer's already-approved stablecoin
-/// `send_funds` request (transfers `Balance<S>` from customer's PAS Account to the
-/// merchant's), mints loyalty rewards into the customer's PAS `Account<LOYALTY>`,
-/// destroys the Invoice, mints a soulbound `Receipt<Payment>` for the customer, and
-/// emits `InvoicePaid`.
+/// Customer settles the invoice.
+///
+/// Resolves the customer's already-approved stablecoin `send_funds` request
+/// (transfers `Balance<S>` from the customer's PAS Account to the merchant's),
+/// mints loyalty rewards into the customer's PAS `Account<LOYALTY>`, destroys the
+/// Invoice, mints a soulbound `Receipt<Payment>` for the customer, and emits
+/// `InvoicePaid`. Permissionless — anyone holding a matching send request can pay.
+///
+/// #### Generics
+/// - `S`: The settlement coin type; must match the invoice's `payment_type`.
+///
+/// #### Parameters
+/// - `invoice`: The invoice to settle (consumed).
+/// - `merchant`: The merchant (mutated to mint loyalty).
+/// - `send_request`: The customer's approved `SendFunds<Balance<S>>` request.
+/// - `policy_s`: The PAS policy governing `Balance<S>`.
+/// - `customer_loyalty_account`: The payer's PAS account for the minted loyalty.
+/// - `clock`: Clock used to validate expiry and stamp the receipt.
+/// - `ctx`: Transaction context.
+///
+/// #### Aborts
+/// - `EInvoiceExpired` if the invoice has expired.
+/// - `EWrongPaymentType` if `S` does not match the invoice's `payment_type`.
+/// - `EWrongRecipient` if the send request's recipient is not the payout address.
+/// - `EAmountMismatch` if the sent amount is not the invoice amount.
+/// - `EWrongLoyaltyRecipient` if the loyalty account owner is not the sender.
 public fun pay<S>(
     invoice: Invoice,
     merchant: &mut Merchant,
@@ -221,9 +262,17 @@ public fun pay<S>(
     );
 }
 
-/// Permissionless cleanup of an expired Invoice. No balance is held by the Invoice
-/// (customer balance stays in their Account until settlement), so this is just
-/// object destruction.
+/// Permissionless cleanup of an expired Invoice.
+///
+/// No balance is held by the Invoice (customer balance stays in their Account
+/// until settlement), so this is just object destruction. Emits `InvoiceCanceled`.
+///
+/// #### Parameters
+/// - `invoice`: The expired invoice to destroy (consumed).
+/// - `clock`: Clock used to verify the invoice has expired.
+///
+/// #### Aborts
+/// - `ENotExpired` if the invoice has not yet expired.
 public fun cancel(invoice: Invoice, clock: &Clock) {
     assert!(clock.timestamp_ms() >= invoice.expires_at_ms, ENotExpired);
 

@@ -52,10 +52,21 @@ public struct Variant has drop, store {
 
 // === Public Functions ===
 
-/// Construct a Listing with a freshly-generated `ID` (via
-/// `tx_context::fresh_object_address`) and no variants. Variants are added
-/// post-construction via `add_variant`. The ID is used both as the Table key
-/// on `Merchant.listings` and stored on the listing itself for convenience.
+/// Construct a Listing with a freshly-generated `ID` and no variants.
+///
+/// The ID (from `tx_context::fresh_object_address`) is used both as the `Table`
+/// key on `Merchant.listings` and stored on the listing itself for convenience.
+/// Variants are added post-construction via `add_variant`.
+///
+/// #### Parameters
+/// - `name`: Display name (e.g. "Black Coffee"). Must be non-empty.
+/// - `ctx`: Transaction context.
+///
+/// #### Returns
+/// - The constructed `Listing`, marked `active`.
+///
+/// #### Aborts
+/// - `EEmptyName` if `name` is empty.
 public fun new(name: String, ctx: &mut TxContext): Listing {
     assert!(!name.is_empty(), EEmptyName);
 
@@ -64,8 +75,21 @@ public fun new(name: String, ctx: &mut TxContext): Listing {
 }
 
 /// Construct a `Variant` with a freshly-generated `ID` stored inside it (used
-/// as the key when inserted into a Listing via `add_variant`). `name` must be
-/// non-empty; `price` must be > 0; `loyalty_price`, if Some, must also be > 0.
+/// as the key when inserted into a Listing via `add_variant`).
+///
+/// #### Parameters
+/// - `name`: Display name (e.g. "Small"). Must be non-empty.
+/// - `price`: Stablecoin price in token units. Must be > 0.
+/// - `loyalty_price`: Optional LOYALTY price. If `Some`, must be > 0; `None`
+///   means the variant cannot be redeemed for loyalty.
+/// - `ctx`: Transaction context.
+///
+/// #### Returns
+/// - The constructed `Variant`.
+///
+/// #### Aborts
+/// - `EEmptyName` if `name` is empty.
+/// - `EZeroPrice` if `price` is zero, or if `loyalty_price` is `Some(0)`.
 public fun new_variant(
     name: String,
     price: u64,
@@ -93,7 +117,17 @@ public fun name(self: &Listing): &String { &self.name }
 /// All variants on this listing, keyed by variant ID.
 public fun variants(self: &Listing): &VecMap<ID, Variant> { &self.variants }
 
-/// Look up a variant by ID. Aborts if not present.
+/// Look up a variant by ID.
+///
+/// #### Parameters
+/// - `self`: The listing to read.
+/// - `variant`: ID of the variant to look up.
+///
+/// #### Returns
+/// - Reference to the matching `Variant`.
+///
+/// #### Aborts
+/// - `EVariantNotFound` if no variant with `variant` exists on this listing.
 public fun variant(self: &Listing, variant: &ID): &Variant {
     assert!(self.variants.contains(variant), EVariantNotFound);
 
@@ -114,23 +148,46 @@ public fun loyalty_price(self: &Variant): Option<u64> { self.loyalty_price }
 
 // === Package Functions ===
 
-/// Insert a variant and return its ID. Aborts if the variant's `id` already
-/// exists in this listing.
+/// Insert a variant and return its ID.
+///
+/// #### Parameters
+/// - `self`: The listing to mutate.
+/// - `variant`: The variant to insert.
+///
+/// #### Returns
+/// - The inserted variant's ID.
+///
+/// #### Aborts
+/// - Aborts (via `vec_map::insert`) if the variant's `id` already exists in
+///   this listing.
 public(package) fun add_variant(self: &mut Listing, variant: Variant): ID {
     let id = variant.id;
     self.variants.insert(id, variant);
     id
 }
 
-/// Remove a variant by ID. Aborts if the variant does not exist.
+/// Remove a variant by ID.
+///
+/// #### Parameters
+/// - `self`: The listing to mutate.
+/// - `variant_id`: ID of the variant to remove.
+///
+/// #### Aborts
+/// - `EVariantNotFound` if no variant with `variant_id` exists on this listing.
 public(package) fun remove_variant(self: &mut Listing, variant_id: ID) {
     assert!(self.variants.contains(&variant_id), EVariantNotFound);
 
     let (_, _) = self.variants.remove(&variant_id);
 }
 
-/// Toggle whether this listing is purchasable. Aborts if `active` matches the
-/// current state (no-op guard).
+/// Toggle whether this listing is purchasable.
+///
+/// #### Parameters
+/// - `self`: The listing to mutate.
+/// - `active`: The new active state.
+///
+/// #### Aborts
+/// - `EActiveStateUnchanged` if `active` already matches the current state.
 public(package) fun set_active(self: &mut Listing, active: bool) {
     assert!(self.active != active, EActiveStateUnchanged);
 

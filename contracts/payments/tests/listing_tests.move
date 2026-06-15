@@ -6,7 +6,7 @@
 module openzeppelin_payments::listing_tests;
 
 use openzeppelin_payments::listing;
-use std::unit_test::destroy;
+use std::unit_test::{assert_eq, destroy};
 use sui::test_scenario;
 
 #[test]
@@ -14,9 +14,9 @@ fun new_listing_starts_empty_and_active() {
     let mut scenario = test_scenario::begin(@0xA);
 
     let listing = listing::new(b"Coffee".to_string(), scenario.ctx());
-    assert!(listing.name() == b"Coffee".to_string(), 0);
-    assert!(listing.active(), 0);
-    assert!(listing.variants().is_empty(), 0);
+    assert_eq!(*listing.name(), b"Coffee".to_string());
+    assert!(listing.active());
+    assert!(listing.variants().is_empty());
 
     destroy(listing);
     scenario.end();
@@ -43,11 +43,11 @@ fun add_variant_inserts_and_returns_id() {
     );
     let vid = listing.add_variant(variant);
 
-    assert!(listing.variants().contains(&vid), 0);
+    assert!(listing.variants().contains(&vid));
     let v = listing.variant(&vid);
-    assert!(v.variant_name() == b"Small".to_string(), 0);
-    assert!(v.price() == 500, 0);
-    assert!(v.loyalty_price().is_none(), 0);
+    assert_eq!(*v.variant_name(), b"Small".to_string());
+    assert_eq!(v.price(), 500);
+    assert!(v.loyalty_price().is_none());
 
     destroy(listing);
     scenario.end();
@@ -66,10 +66,10 @@ fun add_multiple_variants() {
     let id_m = listing.add_variant(v_m);
     let id_l = listing.add_variant(v_l);
 
-    assert!(listing.variants().length() == 3, 0);
-    assert!(listing.variant(&id_s).price() == 300, 0);
-    assert!(listing.variant(&id_m).price() == 500, 0);
-    assert!(listing.variant(&id_l).price() == 700, 0);
+    assert_eq!(listing.variants().length(), 3);
+    assert_eq!(listing.variant(&id_s).price(), 300);
+    assert_eq!(listing.variant(&id_m).price(), 500);
+    assert_eq!(listing.variant(&id_l).price(), 700);
 
     destroy(listing);
     scenario.end();
@@ -88,8 +88,8 @@ fun remove_variant_drops_entry() {
     let vid = listing.add_variant(variant);
 
     listing.remove_variant(vid);
-    assert!(!listing.variants().contains(&vid), 0);
-    assert!(listing.variants().is_empty(), 0);
+    assert!(!listing.variants().contains(&vid));
+    assert!(listing.variants().is_empty());
 
     destroy(listing);
     scenario.end();
@@ -111,13 +111,13 @@ fun remove_unknown_variant_aborts() {
 fun set_active_toggles() {
     let mut scenario = test_scenario::begin(@0xA);
     let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
-    assert!(listing.active(), 0);
+    assert!(listing.active());
 
     listing.set_active(false);
-    assert!(!listing.active(), 0);
+    assert!(!listing.active());
 
     listing.set_active(true);
-    assert!(listing.active(), 0);
+    assert!(listing.active());
 
     destroy(listing);
     scenario.end();

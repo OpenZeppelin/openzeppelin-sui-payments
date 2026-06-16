@@ -6,4 +6,4 @@ edition = "2024.beta"
 ptb = { local = "../ptb" }
 
 [environments]
-test-publish = "46b6270d"
+test-publish = "7cb5afa4"

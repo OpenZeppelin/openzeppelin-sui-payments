@@ -8,11 +8,18 @@ openzeppelin_access = { r.mvr = "@openzeppelin-move/access" }
 openzeppelin_math = { r.mvr = "@openzeppelin-move/integer-math" }
 
 [environments]
-test-publish = "46b6270d"
+# `test-publish` doubles as our unit-test env AND our devnet-publish env.
+# Chain id matches the Sui devnet identifier; refresh this when devnet rotates
+# (curl https://fullnode.devnet.sui.io:443 → sui_getChainIdentifier). Unit
+# tests don't touch chain state, so the value is irrelevant for them.
+#
+# To publish: name your Sui CLI env `test-publish` and point it at devnet RPC
+#   sui client new-env --alias test-publish --rpc https://fullnode.devnet.sui.io:443
+test-publish = "7cb5afa4"
 
+# Deps via git/vendor — OZ + pas aren't published on devnet. The vendored pas
+# adds an `[environments]` table so Move's env-compat check accepts this env.
 [dep-replacements.test-publish]
-# The vendored copy under `vendor/pas/` keeps the same edition but adds an
-# `[environments]` table declaring `test-publish`, which satisfies the build.
 pas = { local = "../../vendor/pas/packages/pas" }
 openzeppelin_access = { git = "https://github.com/OpenZeppelin/contracts-sui.git", subdir = "contracts/access", rev = "v1.2.0" }
 openzeppelin_math = { git = "https://github.com/OpenZeppelin/contracts-sui.git", subdir = "math/core", rev = "v1.1.0" }

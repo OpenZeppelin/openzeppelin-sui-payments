@@ -14,8 +14,7 @@ use openzeppelin_payments::merchant::{
     CatalogManagerRole,
     MerchantRole
 };
-use openzeppelin_payments::payment::{Self, Invoice};
-use openzeppelin_payments::receipt::{Self, Receipt, Payment};
+use openzeppelin_payments::receipt;
 use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::account::{Self, Account};
 use pas::e2e;
@@ -79,8 +78,7 @@ fun payment_happy_path() {
         // Merchant POS: issue invoice for 1 × Small Coffee.
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = payment::new(
-            &merchant,
+        let invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -88,12 +86,9 @@ fun payment_happy_path() {
             &test_clock,
             scenario.ctx(),
         );
-        let invoice_id = object::id(&inv);
-        payment::share(inv);
 
         // Customer flow: take shared things, build send_funds, approve, pay.
         scenario.next_tx(CUSTOMER);
-        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
             customer_account_id,
         );
@@ -109,30 +104,26 @@ fun payment_happy_path() {
         );
         test_setup::approve_test_usd(&mut send_req);
 
-        payment::pay<TEST_USD>(
-            inv_shared,
-            &mut merchant,
+        merchant.pay<TEST_USD>(
+            invoice_id,
             send_req,
             &test_usd_policy,
             &customer_account_shared,
             &test_clock,
-            scenario.ctx(),
         );
 
         // `InvoicePaid` was emitted.
         assert!(event::events_by_type<InvoicePaid>().length() == 1, 0);
 
-        // Verify the soulbound receipt landed in the customer's owned objects.
-        scenario.next_tx(CUSTOMER);
-        let r = scenario.take_from_sender<Receipt<Payment>>();
-        assert_eq!(receipt::amount(&r), 500);
-        assert_eq!(receipt::loyalty(&r), 50); // 500 * 1/10 = 50, under cap.
-        assert_eq!(receipt::payout_address(&r), PAYOUT);
-        assert_eq!(*receipt::order_ref(&r), b"order-001");
-        assert_eq!(receipt::timestamp_ms(&r), 1_000_000);
+        // The receipt is stored in the merchant's receipt table, keyed by invoice id.
+        let r = merchant.invoice_receipt(invoice_id);
+        assert_eq!(receipt::amount(r), 500);
+        assert_eq!(receipt::loyalty(r), 50); // 500 * 1/10 = 50, under cap.
+        assert_eq!(receipt::payout_address(r), PAYOUT);
+        assert_eq!(*receipt::order_ref(r), b"order-001");
+        assert_eq!(receipt::timestamp_ms(r), 1_000_000);
 
         // Cleanup.
-        destroy(r);
         test_setup::return_test_usd_policy(test_usd_policy);
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -143,7 +134,7 @@ fun payment_happy_path() {
     });
 }
 
-#[test, expected_failure(abort_code = payment::EInvoiceExpired)]
+#[test, expected_failure(abort_code = merchant::EInvoiceExpired)]
 fun pay_after_expiry_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -182,8 +173,7 @@ fun pay_after_expiry_aborts() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = payment::new(
-            &merchant,
+        let invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -191,14 +181,11 @@ fun pay_after_expiry_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        let invoice_id = object::id(&inv);
-        payment::share(inv);
 
         // Advance clock past invoice_ttl_ms (600_000).
         test_clock.set_for_testing(2_000_000);
 
         scenario.next_tx(CUSTOMER);
-        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
             customer_account_id,
         );
@@ -214,14 +201,12 @@ fun pay_after_expiry_aborts() {
         );
         test_setup::approve_test_usd(&mut send_req);
 
-        payment::pay<TEST_USD>(
-            inv_shared,
-            &mut merchant,
+        merchant.pay<TEST_USD>(
+            invoice_id,
             send_req,
             &test_usd_policy,
             &customer_account_shared,
             &test_clock,
-            scenario.ctx(),
         );
 
         // Unreachable cleanup.
@@ -266,8 +251,7 @@ fun cancel_after_expiry_destroys_invoice() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = payment::new(
-            &merchant,
+        let invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -275,14 +259,11 @@ fun cancel_after_expiry_destroys_invoice() {
             &test_clock,
             scenario.ctx(),
         );
-        let invoice_id = object::id(&inv);
-        payment::share(inv);
 
         // Move past expiry, then cancel permissionlessly.
         test_clock.set_for_testing(2_000_000);
         scenario.next_tx(@0xDEAD);
-        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
-        payment::cancel(inv_shared, &test_clock);
+        merchant.cancel_invoice(invoice_id, &test_clock);
 
         // `InvoiceCanceled` was emitted.
         assert!(event::events_by_type<InvoiceCanceled>().length() == 1, 0);
@@ -294,7 +275,7 @@ fun cancel_after_expiry_destroys_invoice() {
     });
 }
 
-#[test, expected_failure(abort_code = payment::ENotExpired)]
+#[test, expected_failure(abort_code = merchant::ENotExpired)]
 fun cancel_before_expiry_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -325,8 +306,7 @@ fun cancel_before_expiry_aborts() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = payment::new(
-            &merchant,
+        let invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -334,13 +314,10 @@ fun cancel_before_expiry_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        let invoice_id = object::id(&inv);
-        payment::share(inv);
 
         // Try to cancel while the invoice is still live — must abort.
         scenario.next_tx(@0xDEAD);
-        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
-        payment::cancel(inv_shared, &test_clock);
+        merchant.cancel_invoice(invoice_id, &test_clock);
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);
@@ -384,8 +361,7 @@ fun payment_inactive_listing_aborts() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // Aborts with `merchant::EListingInactive`.
-        let inv = payment::new(
-            &merchant,
+        let _invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -393,7 +369,6 @@ fun payment_inactive_listing_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        payment::share(inv);
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);
@@ -403,7 +378,7 @@ fun payment_inactive_listing_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = payment::EWrongRecipient)]
+#[test, expected_failure(abort_code = merchant::EWrongRecipient)]
 fun pay_wrong_recipient_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -445,8 +420,7 @@ fun pay_wrong_recipient_aborts() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = payment::new(
-            &merchant,
+        let invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -454,11 +428,8 @@ fun pay_wrong_recipient_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        let invoice_id = object::id(&inv);
-        payment::share(inv);
 
         scenario.next_tx(CUSTOMER);
-        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
             customer_account_id,
         );
@@ -474,15 +445,13 @@ fun pay_wrong_recipient_aborts() {
         );
         test_setup::approve_test_usd(&mut send_req);
 
-        // Aborts with `payment::EWrongRecipient`.
-        payment::pay<TEST_USD>(
-            inv_shared,
-            &mut merchant,
+        // Aborts with `merchant::EWrongRecipient`.
+        merchant.pay<TEST_USD>(
+            invoice_id,
             send_req,
             &test_usd_policy,
             &customer_account_shared,
             &test_clock,
-            scenario.ctx(),
         );
 
         // Unreachable cleanup.
@@ -496,7 +465,7 @@ fun pay_wrong_recipient_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = payment::EAmountMismatch)]
+#[test, expected_failure(abort_code = merchant::EAmountMismatch)]
 fun pay_amount_mismatch_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -535,8 +504,7 @@ fun pay_amount_mismatch_aborts() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = payment::new(
-            &merchant,
+        let invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -544,11 +512,8 @@ fun pay_amount_mismatch_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        let invoice_id = object::id(&inv);
-        payment::share(inv);
 
         scenario.next_tx(CUSTOMER);
-        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
             customer_account_id,
         );
@@ -564,15 +529,13 @@ fun pay_amount_mismatch_aborts() {
         );
         test_setup::approve_test_usd(&mut send_req);
 
-        // Aborts with `payment::EAmountMismatch`.
-        payment::pay<TEST_USD>(
-            inv_shared,
-            &mut merchant,
+        // Aborts with `merchant::EAmountMismatch`.
+        merchant.pay<TEST_USD>(
+            invoice_id,
             send_req,
             &test_usd_policy,
             &customer_account_shared,
             &test_clock,
-            scenario.ctx(),
         );
 
         // Unreachable cleanup.
@@ -586,7 +549,7 @@ fun pay_amount_mismatch_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = payment::EWrongLoyaltyRecipient)]
+#[test, expected_failure(abort_code = merchant::EWrongLoyaltyRecipient)]
 fun pay_wrong_loyalty_recipient_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -630,8 +593,7 @@ fun pay_wrong_loyalty_recipient_aborts() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = payment::new(
-            &merchant,
+        let invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -639,11 +601,8 @@ fun pay_wrong_loyalty_recipient_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        let invoice_id = object::id(&inv);
-        payment::share(inv);
 
         scenario.next_tx(CUSTOMER);
-        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
             customer_account_id,
         );
@@ -661,15 +620,13 @@ fun pay_wrong_loyalty_recipient_aborts() {
         test_setup::approve_test_usd(&mut send_req);
 
         // Loyalty recipient account owner is OTHER, not CUSTOMER (the sender) —
-        // aborts with `payment::EWrongLoyaltyRecipient`.
-        payment::pay<TEST_USD>(
-            inv_shared,
-            &mut merchant,
+        // aborts with `merchant::EWrongLoyaltyRecipient`.
+        merchant.pay<TEST_USD>(
+            invoice_id,
             send_req,
             &test_usd_policy,
             &other_account_shared,
             &test_clock,
-            scenario.ctx(),
         );
 
         // Unreachable cleanup.
@@ -730,8 +687,7 @@ fun pay_clamps_loyalty_to_max() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = payment::new(
-            &merchant,
+        let invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -739,11 +695,8 @@ fun pay_clamps_loyalty_to_max() {
             &test_clock,
             scenario.ctx(),
         );
-        let invoice_id = object::id(&inv);
-        payment::share(inv);
 
         scenario.next_tx(CUSTOMER);
-        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
             customer_account_id,
         );
@@ -759,23 +712,19 @@ fun pay_clamps_loyalty_to_max() {
         );
         test_setup::approve_test_usd(&mut send_req);
 
-        payment::pay<TEST_USD>(
-            inv_shared,
-            &mut merchant,
+        merchant.pay<TEST_USD>(
+            invoice_id,
             send_req,
             &test_usd_policy,
             &customer_account_shared,
             &test_clock,
-            scenario.ctx(),
         );
 
-        scenario.next_tx(CUSTOMER);
-        let r = scenario.take_from_sender<Receipt<Payment>>();
+        let r = merchant.invoice_receipt(invoice_id);
         // Uncapped would be 500 / 10 = 50; cap clamps to 30.
-        assert_eq!(receipt::amount(&r), 500);
-        assert_eq!(receipt::loyalty(&r), 30);
+        assert_eq!(receipt::amount(r), 500);
+        assert_eq!(receipt::loyalty(r), 30);
 
-        destroy(r);
         test_setup::return_test_usd_policy(test_usd_policy);
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -787,7 +736,7 @@ fun pay_clamps_loyalty_to_max() {
 }
 
 #[test]
-fun destroy_payment_receipt_succeeds() {
+fun payment_receipt_stored_in_merchant() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
@@ -825,8 +774,7 @@ fun destroy_payment_receipt_succeeds() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = payment::new(
-            &merchant,
+        let invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -834,11 +782,8 @@ fun destroy_payment_receipt_succeeds() {
             &test_clock,
             scenario.ctx(),
         );
-        let invoice_id = object::id(&inv);
-        payment::share(inv);
 
         scenario.next_tx(CUSTOMER);
-        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
             customer_account_id,
         );
@@ -854,20 +799,20 @@ fun destroy_payment_receipt_succeeds() {
         );
         test_setup::approve_test_usd(&mut send_req);
 
-        payment::pay<TEST_USD>(
-            inv_shared,
-            &mut merchant,
+        merchant.pay<TEST_USD>(
+            invoice_id,
             send_req,
             &test_usd_policy,
             &customer_account_shared,
             &test_clock,
-            scenario.ctx(),
         );
 
-        // Customer voluntarily discards their receipt.
-        scenario.next_tx(CUSTOMER);
-        let r = scenario.take_from_sender<Receipt<Payment>>();
-        receipt::destroy(r);
+        // The receipt is stored in the merchant's receipt table (not owned by
+        // the customer). Read it back and verify it records the payment.
+        let r = merchant.invoice_receipt(invoice_id);
+        assert_eq!(receipt::amount(r), 500);
+        assert_eq!(receipt::loyalty(r), 50);
+        assert_eq!(receipt::invoice_id(r), invoice_id);
 
         test_setup::return_test_usd_policy(test_usd_policy);
         test_scenario::return_shared(merchant);
@@ -879,7 +824,7 @@ fun destroy_payment_receipt_succeeds() {
     });
 }
 
-#[test, expected_failure(abort_code = payment::EWrongPaymentType)]
+#[test, expected_failure(abort_code = merchant::EWrongPaymentType)]
 fun pay_wrong_currency_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -931,8 +876,7 @@ fun pay_wrong_currency_aborts() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = payment::new(
-            &merchant,
+        let invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -940,11 +884,8 @@ fun pay_wrong_currency_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        let invoice_id = object::id(&inv);
-        payment::share(inv);
 
         scenario.next_tx(CUSTOMER);
-        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
             customer_account_id,
         );
@@ -962,16 +903,14 @@ fun pay_wrong_currency_aborts() {
         );
         // No approve — `EWrongPaymentType` fires before send_request is read.
 
-        // Aborts with `payment::EWrongPaymentType` — invoice expects TEST_USD,
+        // Aborts with `merchant::EWrongPaymentType` — invoice expects TEST_USD,
         // customer is paying in WRONG_USD.
-        payment::pay<WRONG_USD>(
-            inv_shared,
-            &mut merchant,
+        merchant.pay<WRONG_USD>(
+            invoice_id,
             send_req,
             &wrong_usd_policy_shared,
             &customer_account_shared,
             &test_clock,
-            scenario.ctx(),
         );
 
         // Unreachable cleanup.
@@ -986,7 +925,7 @@ fun pay_wrong_currency_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = payment::ENoItems)]
+#[test, expected_failure(abort_code = merchant::ENoItems)]
 fun new_no_items_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -997,7 +936,7 @@ fun new_no_items_aborts() {
         );
 
         scenario.next_tx(ADMIN);
-        let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
         let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
@@ -1005,8 +944,7 @@ fun new_no_items_aborts() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // Empty vectors — aborts on `ENoItems`.
-        let inv = payment::new(
-            &merchant,
+        let _invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[],
             vector[],
@@ -1014,7 +952,6 @@ fun new_no_items_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        payment::share(inv);
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);
@@ -1024,7 +961,7 @@ fun new_no_items_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = payment::ELengthMismatch)]
+#[test, expected_failure(abort_code = merchant::ELengthMismatch)]
 fun new_length_mismatch_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -1056,8 +993,7 @@ fun new_length_mismatch_aborts() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // 1 variant id, 2 quantities — aborts on `ELengthMismatch`.
-        let inv = payment::new(
-            &merchant,
+        let _invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1, 2],
@@ -1065,7 +1001,6 @@ fun new_length_mismatch_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        payment::share(inv);
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);
@@ -1086,7 +1021,7 @@ fun new_variant_not_found_aborts() {
         );
 
         scenario.next_tx(ADMIN);
-        let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
         let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
@@ -1096,8 +1031,7 @@ fun new_variant_not_found_aborts() {
         // Variant ID that doesn't exist in the merchant's catalog — aborts via
         // `merchant::active_listing_variant`'s `EVariantNotFound`.
         let phantom = object::id_from_address(@0xDEADBEEF);
-        let inv = payment::new(
-            &merchant,
+        let _invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[phantom],
             vector[1],
@@ -1105,7 +1039,6 @@ fun new_variant_not_found_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        payment::share(inv);
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);
@@ -1160,8 +1093,7 @@ fun pay_zero_loyalty_no_mint() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let inv = payment::new(
-            &merchant,
+        let invoice_id = merchant.create_invoice(
             &cashier_auth,
             vector[variant_id],
             vector[1],
@@ -1169,14 +1101,11 @@ fun pay_zero_loyalty_no_mint() {
             &test_clock,
             scenario.ctx(),
         );
-        let invoice_id = object::id(&inv);
-        payment::share(inv);
 
         // Capture LOYALTY supply before pay so we can assert no mint occurred.
         let supply_before = coin::total_supply(merchant.loyalty().treasury_cap());
 
         scenario.next_tx(CUSTOMER);
-        let inv_shared = scenario.take_shared_by_id<Invoice>(invoice_id);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
             customer_account_id,
         );
@@ -1192,25 +1121,21 @@ fun pay_zero_loyalty_no_mint() {
         );
         test_setup::approve_test_usd(&mut send_req);
 
-        payment::pay<TEST_USD>(
-            inv_shared,
-            &mut merchant,
+        merchant.pay<TEST_USD>(
+            invoice_id,
             send_req,
             &test_usd_policy,
             &customer_account_shared,
             &test_clock,
-            scenario.ctx(),
         );
 
         // Receipt records loyalty = 0 and the supply didn't move.
-        scenario.next_tx(CUSTOMER);
-        let r = scenario.take_from_sender<Receipt<Payment>>();
-        assert!(receipt::amount(&r) == 500, 0);
-        assert!(receipt::loyalty(&r) == 0, 0);
+        let r = merchant.invoice_receipt(invoice_id);
+        assert!(receipt::amount(r) == 500, 0);
+        assert!(receipt::loyalty(r) == 0, 0);
         let supply_after = coin::total_supply(merchant.loyalty().treasury_cap());
         assert!(supply_before == supply_after, 0);
 
-        destroy(r);
         test_setup::return_test_usd_policy(test_usd_policy);
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);

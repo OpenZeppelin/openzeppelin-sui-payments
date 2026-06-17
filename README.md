@@ -21,6 +21,8 @@ flows.
   carrying line items and the snapshotted loyalty reward; it's stored in the `Merchant` and
   surfaced by ID (off-chain QR). Customer scans, sends stablecoin via PAS through
   `merchant::pay`, earns LOYALTY balance, and a `Receipt` is recorded in the `Merchant`.
+  For open-loop settlement with a plain (non-PAS) `Coin<S>`, `merchant::pay_with_coin`
+  transfers the coin directly to the payout address; same loyalty + receipt outcome.
 - **Voucher → Redeem** — customer locks LOYALTY balance in a voucher via
   `merchant::create_voucher` (stored in the `Merchant`, surfaced by ID for the QR);
   merchant scans + `merchant::redeem`s, the balance burns, and a `Receipt` is recorded.

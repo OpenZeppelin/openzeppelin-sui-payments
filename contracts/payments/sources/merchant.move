@@ -59,7 +59,7 @@ use std::string::String;
 use std::type_name::{Self, TypeName};
 use sui::balance::{Self, Balance};
 use sui::clock::Clock;
-use sui::coin;
+use sui::coin::{Self, Coin};
 use sui::table::{Self, Table};
 
 // === Errors ===
@@ -264,12 +264,15 @@ public fun share(m: Merchant) {
     transfer::share_object(m);
 }
 
-/// Customer settles an open invoice.
+/// Customer settles an open invoice with a permissioned (PAS) stablecoin.
 ///
-/// Resolves the customer's approved stablecoin `send_funds` request, mints the
-/// snapshotted loyalty into the customer's PAS account, removes the invoice,
-/// stores a `Receipt` keyed by `invoice_id`, and emits `InvoicePaid`.
+/// Resolves the customer's approved `send_funds` request (moving the
+/// `Balance<S>` into the merchant's payout PAS Account), mints the snapshotted
+/// loyalty into the customer's PAS account, removes the invoice, stores a
+/// `Receipt<Payment>` keyed by `invoice_id`, and emits `InvoicePaid`.
 /// Permissionless — anyone holding a matching send request can pay.
+///
+/// For settling with a plain, unrestricted coin instead, see `pay_with_coin`.
 ///
 /// #### Generics
 /// - `S`: The settlement coin type; must match the invoice's `payment_type`.
@@ -303,12 +306,10 @@ public fun pay<S>(
     // settle in junk tokens.
     assert!(type_name::with_defining_ids<S>() == payment_type, EWrongPaymentType);
 
-    // Validate send request.
+    // Validate PaS send request.
     let data = send_request.data();
     assert!(data.recipient() == payout_address, EWrongRecipient);
     assert!(data.funds().value() == amount, EAmountMismatch);
-
-    // Mint loyalty to payer's account.
     let sender = data.sender();
     assert!(customer_loyalty_account.owner() == sender, EWrongLoyaltyRecipient);
 
@@ -336,6 +337,79 @@ public fun pay<S>(
     self.invoice_receipts.add(invoice_id, receipt);
 
     events::emit_invoice_paid(invoice_id, order_ref, sender, amount, loyalty, now);
+}
+
+/// Customer settles an open invoice with a plain, unrestricted `Coin<S>`.
+///
+/// The open-loop counterpart to `pay`: instead of a PAS `send_funds` request,
+/// the caller hands over a regular coin, which the merchant transfers in full to
+/// the invoice's `payout_address` (as an owned `Coin<S>`, NOT into a PAS Account).
+/// Loyalty is still minted into `customer_loyalty_account`, and that account's
+/// owner is recorded as the receipt's `customer`. Permissionless.
+///
+/// NOTE: unlike `pay`, there is no `send_funds` sender to bind the payer's
+/// identity — the caller designates the loyalty recipient, and the receipt's
+/// `customer` is that account's owner. This is safe (loyalty is a reward, so
+/// directing it is gifting, not taking), but the `customer` is "whoever was
+/// named," not a cryptographically-proven payer.
+///
+/// #### Generics
+/// - `S`: The settlement coin type; must match the invoice's `payment_type`.
+///
+/// #### Aborts
+/// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
+/// - `EInvoiceExpired` if the invoice has expired.
+/// - `EWrongPaymentType` if `S` does not match the invoice's `payment_type`.
+/// - `EAmountMismatch` if `coin.value()` is not the invoice amount.
+public fun pay_with_coin<S>(
+    self: &mut Merchant,
+    invoice_id: ID,
+    coin: Coin<S>,
+    customer_loyalty_account: &Account,
+    clock: &Clock,
+) {
+    assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
+    let now = clock.timestamp_ms();
+
+    let (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms) = self
+        .invoices
+        .remove(invoice_id)
+        .unpack();
+
+    // Validate invoice expiration time.
+    assert!(now < expires_at_ms, EInvoiceExpired);
+    // Validate currency type. Otherwise a customer could mint their own coin and
+    // settle in junk tokens.
+    assert!(type_name::with_defining_ids<S>() == payment_type, EWrongPaymentType);
+
+    // Exact payment; the merchant routes the coin to the payout address.
+    assert!(coin.value() == amount, EAmountMismatch);
+    transfer::public_transfer(coin, payout_address);
+
+    // No send-request sender here: the loyalty account's owner is the customer.
+    let customer = customer_loyalty_account.owner();
+
+    // Mint the loyalty tokens snapshotted at issuance.
+    if (loyalty > 0) {
+        loyalty::mint_to(self.loyalty.treasury_cap_mut(), customer_loyalty_account, loyalty);
+    };
+
+    // Store the receipt under the invoice's issuance ID: a fresh, single-use ID
+    // removed from `invoices` above, so `invoice_receipts.add` can never collide.
+    let receipt = receipt::new_payment(
+        customer,
+        items,
+        amount,
+        now,
+        invoice_id,
+        payout_address,
+        payment_type,
+        loyalty,
+        order_ref,
+    );
+    self.invoice_receipts.add(invoice_id, receipt);
+
+    events::emit_invoice_paid(invoice_id, order_ref, customer, amount, loyalty, now);
 }
 
 /// Permissionless cleanup of an expired invoice.

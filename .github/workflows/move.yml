@@ -60,10 +60,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sui
       - name: Lint ${{ matrix.package }}
-        run: sui move build --lint --build-env test-publish
+        run: sui move build --lint --build-env testnet
         working-directory: ./contracts/${{ matrix.package }}
       - name: Lint tests for ${{ matrix.package }}
-        run: sui move build --test --lint --build-env test-publish
+        run: sui move build --test --lint --build-env testnet
         working-directory: ./contracts/${{ matrix.package }}
 
   move-tests:
@@ -81,7 +81,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sui
       - name: Run Move tests for ${{ matrix.package }}
-        run: sui move test --coverage --build-env test-publish
+        run: sui move test --coverage --build-env testnet
         working-directory: ./contracts/${{ matrix.package }}
       - name: Generate coverage summary for ${{ matrix.package }}
         run: |

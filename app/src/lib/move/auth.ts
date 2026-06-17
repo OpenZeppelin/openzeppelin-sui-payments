@@ -10,16 +10,17 @@ export type RoleName = "MerchantRole" | "CatalogManagerRole" | "CashierRole";
  * resulting `Auth<Role>` value as a PTB argument that can be passed into any
  * role-gated entry point.
  *
- * Note: when `openzeppelin_access` is bundled into our publish via
- * `--with-unpublished-dependencies`, it inherits the payments package's
- * address. So the call lives at `<paymentsPkg>::access_control::new_auth`,
- * not at a separate OZ-access package id.
+ * `new_auth` lives in the openzeppelin_access package; the MERCHANT OTW and
+ * the `Role` phantom marker types live in our payments package.
  */
 export function buildAcAuth(tx: Transaction, role: RoleName): TransactionResult {
-  const pkg = deployment.packageId;
+  const payments = deployment.packageId;
   return tx.moveCall({
-    target: `${pkg}::access_control::new_auth`,
-    typeArguments: [`${pkg}::merchant::MERCHANT`, `${pkg}::merchant::${role}`],
+    target: `${deployment.ozAccessPackageId}::access_control::new_auth`,
+    typeArguments: [
+      `${payments}::merchant::MERCHANT`,
+      `${payments}::merchant::${role}`,
+    ],
     arguments: [tx.object(deployment.accessControlId)],
   });
 }

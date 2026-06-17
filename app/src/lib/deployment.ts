@@ -74,6 +74,13 @@ export const deployment = {
   get namespaceId(): string {
     return required("NEXT_PUBLIC_NAMESPACE_ID", process.env.NEXT_PUBLIC_NAMESPACE_ID);
   },
+  /** openzeppelin_access package — hosts `access_control::{new_auth,grant_role}`. */
+  get ozAccessPackageId(): string {
+    return required(
+      "NEXT_PUBLIC_OZ_ACCESS_PACKAGE_ID",
+      process.env.NEXT_PUBLIC_OZ_ACCESS_PACKAGE_ID,
+    );
+  },
 };
 
 /** Enoki public API key. Optional — when missing, sponsored tx still works server-side. */

@@ -1,38 +1,50 @@
 /**
- * Bootstrap — end-to-end onboarding of the Move packages onto a clean chain.
+ * Bootstrap — end-to-end onboarding of the two payments packages onto whatever
+ * network the Sui CLI is pointed at. Two code paths, picked automatically from
+ * `sui client active-env`:
  *
- *   1. Wipe stale `Published.toml` (so re-runs against a fresh localnet
- *      don't trip "package already published" errors).
- *   2. Publish in dependency order:
- *        pas  (bundles ptb via --with-unpublished-dependencies)
- *        payments  (links to the now-published pas)
- *        stablecoin-mock  (links to the same pas — critical for namespace
- *                          sharing with payments)
- *   3. Run a single PTB that:
- *        a. stablecoin_mock::setup(ns, &mut test_usd_cap)   → policy + cap
- *        b. loyalty::create(ns, loyalty_cap)                → Loyalty bundle
- *        c. config::new(...)                                → Config
- *        d. merchant::create<STABLE>(loyalty, cfg, ...)     → Merchant
- *        e. merchant::share(merchant)
- *        f. ac.grant_role × 3 (MerchantRole/CatalogManagerRole/CashierRole)
- *      and captures Merchant + loyalty Policy + stablecoin Policy IDs.
- *   4. Patch `.env.local` with every NEXT_PUBLIC_* deployment id.
+ *   System env (testnet / mainnet)
+ *   ──────────────────────────────
+ *     • pas is already published on chain at its MVR-canonical address; its
+ *       Namespace shared object exists and is already wired to its UpgradeCap.
+ *     • Resolve pas via `mvr resolve @pas/pas`; walk pas's publish-tx for the
+ *       Namespace id.
+ *     • Publish payments + stablecoin-mock with `sui client publish`.
+ *     • Run one PTB:
+ *         stablecoin_mock::setup
+ *         loyalty::create
+ *         config::new
+ *         merchant::create<C>(...) + merchant::share
+ *         access_control::grant_role × 3
  *
- * Assumes:
- *   - `sui client active-env` points at the target chain
- *   - The active address has gas (use `sui client faucet` first)
- *   - Move.toml `[environments]` declares the env name matching CLI active env
+ *   Anything else (localnet / ephemeral)
+ *   ────────────────────────────────────
+ *     • pas isn't on chain. Use `sui client test-publish --build-env testnet
+ *       --publish-unpublished-deps --pubfile-path <file>`: the build resolves
+ *       MVR deps to testnet bytecode, then the same bytecode is republished
+ *       onto the current network alongside payments.
+ *     • Find pas pkg, fresh Namespace, and pas UpgradeCap from the publish-tx
+ *       objectChanges.
+ *     • Republish stablecoin-mock with --pubfile-path pointing at the same
+ *       file so it links to the freshly-published pas.
+ *     • PTB prepends `namespace::setup(&mut ns, &UpgradeCap)` before the
+ *       system-env steps to wire pas to its UpgradeCap on this fresh chain.
+ *
+ * The active address must hold gas. On localnet:
+ *   sui start --with-faucet --force-regenesis     # in another terminal
+ *   sui client switch --env local
+ *   sui client faucet
  */
 
-import { spawnSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
-import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
-import { execSync } from "node:child_process";
+
+type ObjectChange = Record<string, unknown>;
 
 type PublishObject = {
   type?: string;
@@ -41,19 +53,29 @@ type PublishObject = {
   owner?: unknown;
 };
 
+type PublishedEntry = { packageId: string; modules: string[] };
+
 type PublishResult = {
   packageId?: string;
   createdObjects: PublishObject[];
+  publishedEntries: PublishedEntry[];
+  objectChanges: ObjectChange[];
 };
 
 const REPO_ROOT = resolve(__dirname, "..", "..");
 const APP_ENV = resolve(__dirname, "..", ".env.local");
+// Shared pubfile used by every package's test-publish call. Per-package
+// pubfiles would let the second publish miss pas's address from the first.
+const PUBFILE_LOCAL_PATH = resolve(REPO_ROOT, "Pubfile.local.toml");
 
-// Names of objects we care about (suffix-matched against `objectType`).
-const TYPE_NAMESPACE = "::namespace::Namespace";
-const TYPE_ACCESS_CONTROL = "::access_control::AccessControl<";
-const TYPE_TREASURY_CAP_LOYALTY = "TreasuryCap<%PAYMENTS_PKG%::loyalty::LOYALTY>";
-const TYPE_TREASURY_CAP_STABLE = "TreasuryCap<%STABLE_PKG%::stablecoin_mock::STABLECOIN_MOCK>";
+const TYPE_NAMESPACE_SUFFIX = "::namespace::Namespace";
+const TYPE_AC_PREFIX = "::access_control::AccessControl<";
+
+const SYSTEM_ENVS = new Set(["testnet", "mainnet"]);
+
+function isSystemEnv(envAlias: string): boolean {
+  return SYSTEM_ENVS.has(envAlias);
+}
 
 function run(cmd: string, args: string[], cwd: string): string {
   const result = spawnSync(cmd, args, { cwd, encoding: "utf8" });
@@ -65,22 +87,32 @@ function run(cmd: string, args: string[], cwd: string): string {
   return result.stdout;
 }
 
-function clearPublishedToml(pkgRel: string) {
-  const path = resolve(REPO_ROOT, pkgRel, "Published.toml");
-  if (existsSync(path)) {
-    unlinkSync(path);
-    console.log(`  cleared ${pkgRel}/Published.toml`);
+function clearFile(absPath: string, label: string) {
+  if (existsSync(absPath)) {
+    unlinkSync(absPath);
+    console.log(`  cleared ${label}`);
   }
 }
 
-function publish(pkgRel: string, withUnpublished: boolean): PublishResult {
-  const flag = withUnpublished ? " (bundling unpublished deps)" : "";
-  console.log(`\n→ publishing ${pkgRel}${flag}`);
-  const args = ["client", "publish", "--json", "--gas-budget", "1000000000"];
-  if (withUnpublished) args.splice(2, 0, "--with-unpublished-dependencies");
+function publishPackage(
+  pkgRel: string,
+  opts: {
+    testPublish?: boolean;
+    pubfilePath?: string;
+    buildEnv?: string;
+    publishUnpublishedDeps?: boolean;
+  } = {},
+): PublishResult {
+  const subcmd = opts.testPublish ? "test-publish" : "publish";
+  console.log(`\n→ ${subcmd} ${pkgRel}`);
+  const args = ["client", subcmd, "--json", "--gas-budget", "1000000000"];
+  if (opts.pubfilePath) args.push("--pubfile-path", opts.pubfilePath);
+  if (opts.buildEnv) args.push("--build-env", opts.buildEnv);
+  if (opts.publishUnpublishedDeps) args.push("--publish-unpublished-deps");
+
   const out = run("sui", args, resolve(REPO_ROOT, pkgRel));
   const json = JSON.parse(out);
-  const objectChanges = (json.objectChanges ?? []) as Array<Record<string, unknown>>;
+  const objectChanges = (json.objectChanges ?? []) as ObjectChange[];
   const createdObjects: PublishObject[] = objectChanges
     .filter((c) => c.type === "created")
     .map((c) => ({
@@ -89,8 +121,30 @@ function publish(pkgRel: string, withUnpublished: boolean): PublishResult {
       objectType: c.objectType as string | undefined,
       owner: c.owner,
     }));
-  const published = objectChanges.find((c) => c.type === "published");
-  return { packageId: published?.packageId as string | undefined, createdObjects };
+  const publishedEntries: PublishedEntry[] = objectChanges
+    .filter((c) => c.type === "published")
+    .map((c) => ({
+      packageId: c.packageId as string,
+      modules: (c.modules as string[] | undefined) ?? [],
+    }));
+
+  // For non-test-publish, only one `published` entry exists and it's our package.
+  // For test-publish with --publish-unpublished-deps, the main pkg is the entry
+  // whose modules match the package name (e.g. `openzeppelin_payments`,
+  // `local_mock_stablecoin`). Picking it heuristically:
+  //   - prefer the entry that has `merchant` (payments) or `stablecoin_mock` (stablecoin-mock)
+  //   - else fall back to the last `published` entry (deps publish before main pkg)
+  const tag = pkgRel.endsWith("payments") ? "merchant" : "stablecoin_mock";
+  const own =
+    publishedEntries.find((e) => e.modules.includes(tag)) ??
+    publishedEntries[publishedEntries.length - 1];
+
+  return {
+    packageId: own?.packageId,
+    createdObjects,
+    publishedEntries,
+    objectChanges,
+  };
 }
 
 function findCreated(r: PublishResult, p: (o: PublishObject) => boolean): string | null {
@@ -118,36 +172,145 @@ function getActiveAddress(): string {
   return execSync("sui client active-address", { encoding: "utf8" }).trim();
 }
 
-function getActiveRpcUrl(): string {
+function getActiveEnvAlias(): string {
+  return execSync("sui client active-env", { encoding: "utf8" }).trim();
+}
+
+function getActiveRpcUrl(envAlias: string): string {
   const out = execSync("sui client envs --json", { encoding: "utf8" });
   const data = JSON.parse(out) as Array<{ alias: string; rpc: string }>[];
   const envs = data[0];
-  const active = data[1] as unknown as string; // 2nd element is active env alias
-  const match = envs.find((e) => e.alias === active);
-  if (!match) throw new Error("could not resolve active CLI env's RPC url");
+  const match = envs.find((e) => e.alias === envAlias);
+  if (!match) throw new Error(`could not resolve RPC for env "${envAlias}"`);
   return match.rpc;
 }
 
-/** Export the deployer's keypair from the sui keystore via `sui keytool`. */
+/**
+ * System-env path — pas is already on chain. Resolve its address via MVR and
+ * walk its publish-tx to find the existing Namespace shared object.
+ */
+async function discoverPasContextFromMVR(
+  client: SuiClient,
+  network: string,
+): Promise<{ packageId: string; namespaceId: string }> {
+  const cachedPkg = process.env.NEXT_PUBLIC_PAS_PACKAGE_ID;
+  const cachedNs = process.env.NEXT_PUBLIC_NAMESPACE_ID;
+  if (cachedPkg && cachedNs) {
+    console.log(`  using cached pas context (pkg ${cachedPkg.slice(0, 10)}…)`);
+    return { packageId: cachedPkg, namespaceId: cachedNs };
+  }
+
+  console.log(`  resolving pas via MVR for network=${network}`);
+  const out = execSync("mvr resolve @pas/pas --json", {
+    encoding: "utf8",
+    env: { ...process.env, MVR_FALLBACK_NETWORK: network },
+  });
+  const mvr = JSON.parse(out) as { package_address: string };
+  const packageId = mvr.package_address;
+
+  const pkgObj = await client.getObject({
+    id: packageId,
+    options: { showPreviousTransaction: true },
+  });
+  const publishDigest = pkgObj.data?.previousTransaction;
+  if (!publishDigest) throw new Error(`could not find publishing tx for pas ${packageId}`);
+  const tx = await client.getTransactionBlock({
+    digest: publishDigest,
+    options: { showObjectChanges: true },
+  });
+  const ns = (tx.objectChanges ?? []).find(
+    (c): c is Extract<typeof c, { type: "created" }> =>
+      c.type === "created" && c.objectType?.endsWith(TYPE_NAMESPACE_SUFFIX) === true,
+  );
+  if (!ns) throw new Error(`could not find Namespace in pas publish tx ${publishDigest}`);
+  return { packageId, namespaceId: ns.objectId };
+}
+
+function resolveMVR(name: string, network: string): string {
+  const out = execSync(`mvr resolve ${name} --json`, {
+    encoding: "utf8",
+    env: { ...process.env, MVR_FALLBACK_NETWORK: network },
+  });
+  return (JSON.parse(out) as { package_address: string }).package_address;
+}
+
+function readPubfilePackageId(pubfileAbsPath: string, sourceSuffix: string): string {
+  const raw = readFileSync(pubfileAbsPath, "utf8");
+  const blocks = raw.split("[[published]]").slice(1);
+  for (const b of blocks) {
+    const src = b.match(/source\s*=\s*\{\s*local\s*=\s*"([^"]+)"/)?.[1] ?? "";
+    if (src.endsWith(sourceSuffix)) {
+      const pkg = b.match(/published-at\s*=\s*"(0x[0-9a-fA-F]+)"/)?.[1];
+      if (pkg) return pkg;
+    }
+  }
+  throw new Error(`no entry ending in "${sourceSuffix}" in ${pubfileAbsPath}`);
+}
+
+/**
+ * Local-env path — pas was just republished by `--publish-unpublished-deps` in
+ * a sub-transaction of test-publish. The Sui CLI records every published dep
+ * (package id + UpgradeCap id) in the pubfile; pas's Namespace is created by
+ * pas::init in that sub-tx, so we walk pas's previous-tx to find it.
+ */
+async function discoverPasContextFromPubfile(
+  client: SuiClient,
+  pubfileAbsPath: string,
+): Promise<{ packageId: string; namespaceId: string; upgradeCapId: string }> {
+  const raw = readFileSync(pubfileAbsPath, "utf8");
+  // Split into `[[published]]` blocks and find the one whose source ends in
+  // `/packages/pas`. Each block carries `published-at` + `upgrade-capability`.
+  const blocks = raw.split("[[published]]").slice(1);
+  let pasBlock: string | undefined;
+  for (const b of blocks) {
+    const src = b.match(/source\s*=\s*\{\s*local\s*=\s*"([^"]+)"/)?.[1] ?? "";
+    if (src.endsWith("/packages/pas")) {
+      pasBlock = b;
+      break;
+    }
+  }
+  if (!pasBlock) throw new Error(`could not find pas entry in ${pubfileAbsPath}`);
+
+  const packageId = pasBlock.match(/published-at\s*=\s*"(0x[0-9a-fA-F]+)"/)?.[1];
+  const upgradeCapId = pasBlock.match(/upgrade-capability\s*=\s*"(0x[0-9a-fA-F]+)"/)?.[1];
+  if (!packageId || !upgradeCapId) {
+    throw new Error(`pas block in pubfile is missing published-at or upgrade-capability`);
+  }
+
+  // Walk pas's publish tx to find its fresh Namespace shared object.
+  const pkgObj = await client.getObject({
+    id: packageId,
+    options: { showPreviousTransaction: true },
+  });
+  const publishDigest = pkgObj.data?.previousTransaction;
+  if (!publishDigest) throw new Error(`could not find publish tx for pas ${packageId}`);
+  const tx = await client.getTransactionBlock({
+    digest: publishDigest,
+    options: { showObjectChanges: true },
+  });
+  const ns = (tx.objectChanges ?? []).find(
+    (c): c is Extract<typeof c, { type: "created" }> =>
+      c.type === "created" && c.objectType?.endsWith(TYPE_NAMESPACE_SUFFIX) === true,
+  );
+  if (!ns) throw new Error(`could not find Namespace in pas publish tx ${publishDigest}`);
+
+  return { packageId, namespaceId: ns.objectId, upgradeCapId };
+}
+
 function deployerKeypair(address: string): Ed25519Keypair {
   const out = execSync(`sui keytool export --key-identity ${address} --json`, {
     encoding: "utf8",
   });
   const parsed = JSON.parse(out) as { exportedPrivateKey: string };
-  if (!parsed.exportedPrivateKey?.startsWith("suiprivkey")) {
-    throw new Error(`unexpected keytool export shape: ${out.slice(0, 120)}`);
-  }
-  const { schema, secretKey } = decodeSuiPrivateKey(parsed.exportedPrivateKey);
-  if (schema !== "ED25519") {
-    throw new Error(`deployer key schema is "${schema}"; only ED25519 is supported here`);
-  }
-  return Ed25519Keypair.fromSecretKey(secretKey);
+  // fromSecretKey accepts a bech32 string directly and throws if the
+  // embedded schema is not ED25519.
+  return Ed25519Keypair.fromSecretKey(parsed.exportedPrivateKey);
 }
 
 async function postPublishPTB({
   rpcUrl,
   pasPkg,
-  pasUpgradeCapId,
+  ozAccessPkg,
   paymentsPkg,
   stablecoinPkg,
   stablecoinType,
@@ -157,10 +320,11 @@ async function postPublishPTB({
   accessControlId,
   payoutAddress,
   deployer,
+  pasUpgradeCapId,
 }: {
   rpcUrl: string;
   pasPkg: string;
-  pasUpgradeCapId: string;
+  ozAccessPkg: string;
   paymentsPkg: string;
   stablecoinPkg: string;
   stablecoinType: string;
@@ -170,6 +334,7 @@ async function postPublishPTB({
   accessControlId: string;
   payoutAddress: string;
   deployer: string;
+  pasUpgradeCapId?: string;
 }): Promise<{
   merchantId: string;
   loyaltyPolicyId: string;
@@ -178,20 +343,19 @@ async function postPublishPTB({
   console.log(`\n→ running post-publish PTB`);
 
   const keypair = deployerKeypair(deployer);
-
   const client = new SuiClient({ url: rpcUrl });
   const tx = new Transaction();
 
-  // (0) pas::namespace::setup(&mut Namespace, &UpgradeCap)
-  //     Links the pas Namespace singleton to its UpgradeCap — required before
-  //     any policy operation (namespace::uid_mut asserts EUpgradeCapNotSet).
-  tx.moveCall({
-    target: `${pasPkg}::namespace::setup`,
-    arguments: [tx.object(namespaceId), tx.object(pasUpgradeCapId)],
-  });
+  // (0) On a fresh chain only — wire pas's Namespace to its UpgradeCap.
+  // On testnet/mainnet pas is already published and this step has already run.
+  if (pasUpgradeCapId) {
+    tx.moveCall({
+      target: `${pasPkg}::namespace::setup`,
+      arguments: [tx.object(namespaceId), tx.object(pasUpgradeCapId)],
+    });
+  }
 
   // (a) stablecoin_mock::setup(&mut Namespace, &mut TreasuryCap<STABLE>)
-  //     → creates Policy<Balance<STABLE>> as shared, registers TransferApproval.
   tx.moveCall({
     target: `${stablecoinPkg}::stablecoin_mock::setup`,
     arguments: [tx.object(namespaceId), tx.object(stablecoinCapId)],
@@ -223,22 +387,18 @@ async function postPublishPTB({
       loyaltyBundle,
       cfg,
       tx.pure.string("Demo Merchant"),
-      // Option<String>::none() — encoded as an empty vector of String, length=0
       tx.pure.option("string", null),
       tx.pure.address(payoutAddress),
     ],
   });
-
   // (e) merchant::share(merchant)
-  tx.moveCall({
-    target: `${paymentsPkg}::merchant::share`,
-    arguments: [merchant],
-  });
+  tx.moveCall({ target: `${paymentsPkg}::merchant::share`, arguments: [merchant] });
 
-  // (f) grant the deployer all three operational roles
+  // (f) grant the deployer all three operational roles. grant_role lives in
+  // openzeppelin_access::access_control, so target the OZ package, not ours.
   for (const role of ["MerchantRole", "CatalogManagerRole", "CashierRole"]) {
     tx.moveCall({
-      target: `${paymentsPkg}::access_control::grant_role`,
+      target: `${ozAccessPkg}::access_control::grant_role`,
       typeArguments: [
         `${paymentsPkg}::merchant::MERCHANT`,
         `${paymentsPkg}::merchant::${role}`,
@@ -251,27 +411,24 @@ async function postPublishPTB({
   const result = await client.signAndExecuteTransaction({
     transaction: tx,
     signer: keypair,
-    options: {
-      showEffects: true,
-      showObjectChanges: true,
-    },
+    options: { showEffects: true, showObjectChanges: true },
   });
 
   if (result.effects?.status?.status !== "success") {
     throw new Error(`bootstrap PTB failed: ${JSON.stringify(result.effects)}`);
   }
-
-  // Wait for the indexer to catch up then re-fetch to surface object changes.
   await client.waitForTransaction({ digest: result.digest });
 
   const created = (result.objectChanges ?? []).filter(
     (c): c is Extract<typeof c, { type: "created" }> => c.type === "created",
   );
-  const merchantId = created.find((c) => c.objectType?.endsWith("::merchant::Merchant"))?.objectId;
-  // pas Policy types look like `<pasPkg>::policy::Policy<...LOYALTY>` /
-  // `<pasPkg>::policy::Policy<...STABLECOIN_MOCK>` — match on the type tag.
+  const merchantId = created.find((c) =>
+    c.objectType?.endsWith("::merchant::Merchant"),
+  )?.objectId;
   const loyaltyPolicyId = created.find(
-    (c) => c.objectType?.includes("::policy::Policy<") && c.objectType?.includes("::loyalty::LOYALTY"),
+    (c) =>
+      c.objectType?.includes("::policy::Policy<") &&
+      c.objectType?.includes("::loyalty::LOYALTY"),
   )?.objectId;
   const stablecoinPolicyId = created.find(
     (c) =>
@@ -280,7 +437,7 @@ async function postPublishPTB({
   )?.objectId;
 
   if (!merchantId || !loyaltyPolicyId || !stablecoinPolicyId) {
-    console.error("\nCreated objects in PTB effects:");
+    console.error("\nCreated objects:");
     for (const c of created) console.error(`  ${c.objectId} -> ${c.objectType}`);
     if (!merchantId) throw new Error("Merchant object not found in PTB effects");
     if (!loyaltyPolicyId) throw new Error("LOYALTY Policy object not found in PTB effects");
@@ -295,103 +452,148 @@ async function postPublishPTB({
 }
 
 async function main() {
-  // 1. Wipe stale Published.toml so we publish fresh into the active chain.
-  clearPublishedToml("vendor/pas/packages/ptb");
-  clearPublishedToml("vendor/pas/packages/pas");
-  clearPublishedToml("contracts/payments");
-  clearPublishedToml("contracts/stablecoin-mock");
-
-  // 2. Publish in dependency order. ptb is the only Move dep with no further
-  //    deps of its own, so it goes first and stands alone. Then pas (links to
-  //    the now-published ptb). Then payments + stablecoin-mock — they need
-  //    --with-unpublished-dependencies because their `openzeppelin_access` /
-  //    `openzeppelin_math` git-resolved deps don't have on-chain publications
-  //    (pas will link via its Published.toml, only the OZ packages get bundled).
-  publish("vendor/pas/packages/ptb", false);
-
-  const pas = publish("vendor/pas/packages/pas", false);
-  if (!pas.packageId) throw new Error("pas publish did not return a packageId");
-  const namespaceId = findCreated(
-    pas,
-    (o) => Boolean(o.objectType?.endsWith(TYPE_NAMESPACE)),
-  );
-  if (!namespaceId) throw new Error("pas publish did not create a Namespace object");
-  // Each publish creates exactly one UpgradeCap, transferred to the deployer.
-  const pasUpgradeCapId = findCreated(
-    pas,
-    (o) => o.objectType === "0x2::package::UpgradeCap",
-  );
-  if (!pasUpgradeCapId) throw new Error("pas publish did not create an UpgradeCap");
-
-  const payments = publish("contracts/payments", true);
-  if (!payments.packageId) throw new Error("payments publish did not return a packageId");
-  const accessControlId = findCreated(
-    payments,
-    (o) => Boolean(o.objectType?.includes(TYPE_ACCESS_CONTROL)),
-  );
-  if (!accessControlId) throw new Error("payments publish did not create AccessControl");
-
-  const stable = publish("contracts/stablecoin-mock", true);
-  if (!stable.packageId) throw new Error("stablecoin-mock publish did not return packageId");
-
-  // 3. Find the deployer-owned TreasuryCaps (transferred during init of each pkg).
+  const envAlias = getActiveEnvAlias();
+  const rpcUrl = getActiveRpcUrl(envAlias);
   const deployer = getActiveAddress();
-  const rpcUrl = getActiveRpcUrl();
   const client = new SuiClient({ url: rpcUrl });
+  const ephemeral = !isSystemEnv(envAlias);
+
+  console.log(`active env: ${envAlias} (${rpcUrl})  ${ephemeral ? "[ephemeral]" : ""}`);
+  console.log(`active address: ${deployer}`);
+
+  let pasPackageId: string;
+  let namespaceId: string;
+  let pasUpgradeCapId: string | undefined;
+  let ozAccessPkg: string;
+  let payments: PublishResult;
+  let stable: PublishResult;
+  let accessControlId: string | null;
+
+  if (ephemeral) {
+    // ─── local / ephemeral chain ───────────────────────────────────────────
+    // Fresh chain each genesis → clear the local pubfile so test-publish
+    // re-publishes pas + OZ deps from scratch instead of pointing at addresses
+    // from a previous chain. Both packages share one absolute pubfile so the
+    // second publish sees pas's freshly-published address from the first.
+    clearFile(PUBFILE_LOCAL_PATH, PUBFILE_LOCAL_PATH);
+    clearFile(
+      resolve(REPO_ROOT, "contracts/payments/Published.toml"),
+      "contracts/payments/Published.toml",
+    );
+    clearFile(
+      resolve(REPO_ROOT, "contracts/stablecoin-mock/Published.toml"),
+      "contracts/stablecoin-mock/Published.toml",
+    );
+
+    // Publish payments with --publish-unpublished-deps so pas + ptb + OZ get
+    // republished here. Build against testnet's MVR records.
+    payments = publishPackage("contracts/payments", {
+      testPublish: true,
+      pubfilePath: PUBFILE_LOCAL_PATH,
+      buildEnv: "testnet",
+      publishUnpublishedDeps: true,
+    });
+    if (!payments.packageId) throw new Error("payments publish returned no packageId");
+
+    accessControlId = findCreated(payments, (o) =>
+      Boolean(o.objectType?.includes(TYPE_AC_PREFIX)),
+    );
+    if (!accessControlId) throw new Error("payments publish did not create AccessControl");
+
+    // Mine pas info out of the pubfile (pas was published as a sub-tx of
+    // test-publish; its package id + UpgradeCap id live in Pubfile.local.toml).
+    const pasCtx = await discoverPasContextFromPubfile(client, PUBFILE_LOCAL_PATH);
+    pasPackageId = pasCtx.packageId;
+    namespaceId = pasCtx.namespaceId;
+    pasUpgradeCapId = pasCtx.upgradeCapId;
+
+    // Stablecoin-mock now links to the freshly-published pas via the same pubfile.
+    stable = publishPackage("contracts/stablecoin-mock", {
+      testPublish: true,
+      pubfilePath: PUBFILE_LOCAL_PATH,
+      buildEnv: "testnet",
+    });
+    if (!stable.packageId) throw new Error("stablecoin-mock publish returned no packageId");
+
+    ozAccessPkg = readPubfilePackageId(PUBFILE_LOCAL_PATH, "/contracts/access");
+  } else {
+    // ─── testnet / mainnet ─────────────────────────────────────────────────
+    const ctx = await discoverPasContextFromMVR(client, envAlias);
+    pasPackageId = ctx.packageId;
+    namespaceId = ctx.namespaceId;
+    ozAccessPkg = resolveMVR("@openzeppelin-move/access", envAlias);
+
+    clearFile(
+      resolve(REPO_ROOT, "contracts/payments/Published.toml"),
+      "contracts/payments/Published.toml",
+    );
+    clearFile(
+      resolve(REPO_ROOT, "contracts/stablecoin-mock/Published.toml"),
+      "contracts/stablecoin-mock/Published.toml",
+    );
+
+    payments = publishPackage("contracts/payments");
+    if (!payments.packageId) throw new Error("payments publish returned no packageId");
+    accessControlId = findCreated(payments, (o) =>
+      Boolean(o.objectType?.includes(TYPE_AC_PREFIX)),
+    );
+    if (!accessControlId) throw new Error("payments publish did not create AccessControl");
+
+    stable = publishPackage("contracts/stablecoin-mock");
+    if (!stable.packageId) throw new Error("stablecoin-mock publish returned no packageId");
+  }
+
+  console.log(`  pas package    ${pasPackageId}`);
+  console.log(`  Namespace      ${namespaceId}`);
+  if (pasUpgradeCapId) console.log(`  pas UpgradeCap ${pasUpgradeCapId}`);
+
+  // Discover deployer-owned TreasuryCaps after both publishes.
   const { data: ownedAfter } = await client.getOwnedObjects({
     owner: deployer,
     options: { showType: true },
   });
-  const expectedLoyaltyType = TYPE_TREASURY_CAP_LOYALTY.replace(
-    "%PAYMENTS_PKG%",
-    payments.packageId,
-  );
-  const expectedStableType = TYPE_TREASURY_CAP_STABLE.replace(
-    "%STABLE_PKG%",
-    stable.packageId,
-  );
-  const loyaltyCapId = ownedAfter.find((o) => o.data?.type?.includes(expectedLoyaltyType))
-    ?.data?.objectId;
-  const stablecoinCapId = ownedAfter.find((o) => o.data?.type?.includes(expectedStableType))
-    ?.data?.objectId;
-  if (!loyaltyCapId) throw new Error(`Could not find ${expectedLoyaltyType} owned by deployer`);
-  if (!stablecoinCapId)
-    throw new Error(`Could not find ${expectedStableType} owned by deployer`);
+  const wantLoyalty = `TreasuryCap<${payments.packageId}::loyalty::LOYALTY>`;
+  const wantStable = `TreasuryCap<${stable.packageId}::stablecoin_mock::STABLECOIN_MOCK>`;
+  const loyaltyCapId = ownedAfter.find((o) => o.data?.type?.includes(wantLoyalty))?.data?.objectId;
+  const stablecoinCapId = ownedAfter.find((o) => o.data?.type?.includes(wantStable))?.data
+    ?.objectId;
+  if (!loyaltyCapId) throw new Error(`Could not find ${wantLoyalty} owned by deployer`);
+  if (!stablecoinCapId) throw new Error(`Could not find ${wantStable} owned by deployer`);
 
   const stablecoinType = `${stable.packageId}::stablecoin_mock::STABLECOIN_MOCK`;
 
-  // 4. Run the post-publish PTB to instantiate Merchant + policies.
   const { merchantId, loyaltyPolicyId, stablecoinPolicyId } = await postPublishPTB({
     rpcUrl,
-    pasPkg: pas.packageId,
-    pasUpgradeCapId,
-    paymentsPkg: payments.packageId,
-    stablecoinPkg: stable.packageId,
+    pasPkg: pasPackageId,
+    ozAccessPkg,
+    paymentsPkg: payments.packageId!,
+    stablecoinPkg: stable.packageId!,
     stablecoinType,
     namespaceId,
     loyaltyCapId,
     stablecoinCapId,
-    accessControlId,
+    accessControlId: accessControlId!,
     payoutAddress: deployer,
     deployer,
+    pasUpgradeCapId,
   });
 
-  // 5. Patch .env.local with every id.
   patchEnv({
-    NEXT_PUBLIC_PACKAGE_ID: payments.packageId,
+    NEXT_PUBLIC_PACKAGE_ID: payments.packageId!,
     NEXT_PUBLIC_MERCHANT_ID: merchantId,
-    NEXT_PUBLIC_ACCESS_CONTROL_ID: accessControlId,
+    NEXT_PUBLIC_ACCESS_CONTROL_ID: accessControlId!,
     NEXT_PUBLIC_LOYALTY_POLICY_ID: loyaltyPolicyId,
-    NEXT_PUBLIC_STABLECOIN_PACKAGE_ID: stable.packageId,
+    NEXT_PUBLIC_STABLECOIN_PACKAGE_ID: stable.packageId!,
     NEXT_PUBLIC_STABLECOIN_POLICY_ID: stablecoinPolicyId,
     NEXT_PUBLIC_STABLECOIN_TYPE: stablecoinType,
     NEXT_PUBLIC_NAMESPACE_ID: namespaceId,
-    NEXT_PUBLIC_PAS_PACKAGE_ID: pas.packageId,
+    NEXT_PUBLIC_PAS_PACKAGE_ID: pasPackageId,
+    NEXT_PUBLIC_OZ_ACCESS_PACKAGE_ID: ozAccessPkg,
   });
 
   console.log(`\n✓ Bootstrap complete. .env.local patched.\n`);
-  console.log(`  pas package          ${pas.packageId}`);
-  console.log(`  Namespace (shared)   ${namespaceId}`);
+  console.log(`  pas package          ${pasPackageId}`);
+  console.log(`  Namespace            ${namespaceId}`);
   console.log(`  payments package     ${payments.packageId}`);
   console.log(`  stablecoin package   ${stable.packageId}`);
   console.log(`  AccessControl        ${accessControlId}`);

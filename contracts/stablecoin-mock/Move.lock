@@ -4,44 +4,14 @@
 [move]
 version = 4
 
-[pinned.test-publish.MoveStdlib]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
-use_environment = "test-publish"
-manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
-deps = {}
-
-[pinned.test-publish.Sui]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
-use_environment = "test-publish"
-manifest_digest = "7B6E5525FC0BFAECA61725298C425266BB21D456122669E3B2D3A4151A705F69"
-deps = { MoveStdlib = "MoveStdlib" }
-
-[pinned.test-publish.local_mock_stablecoin]
-source = { root = true }
-use_environment = "test-publish"
-manifest_digest = "1007F6820A08077E7D06C559CF54BCAD296D8CD9B13900E96CD17D5437957C1D"
-deps = { pas = "pas", std = "MoveStdlib", sui = "Sui" }
-
-[pinned.test-publish.pas]
-source = { local = "../../vendor/pas/packages/pas" }
-use_environment = "test-publish"
-manifest_digest = "17258CB0D3D0AACE7EAD0FE83E6ECB40F90008AF52EE3E24148AA0825E5C1F6A"
-deps = { ptb = "ptb", std = "MoveStdlib", sui = "Sui" }
-
-[pinned.test-publish.ptb]
-source = { local = "../../vendor/pas/packages/ptb" }
-use_environment = "test-publish"
-manifest_digest = "2963D6B4689ED068546E86F8453FBCA51DCDF68A1C96D681328D2CDACE14B5CF"
-deps = { std = "MoveStdlib", sui = "Sui" }
-
 [pinned.testnet.MoveStdlib]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "718ae563a42fb4ba0d055588f81c704dcef58c25" }
 use_environment = "testnet"
 manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
 deps = {}
 
 [pinned.testnet.Sui]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "c2428b3aaf9c24270b609001e56d96cb10c76d28" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "718ae563a42fb4ba0d055588f81c704dcef58c25" }
 use_environment = "testnet"
 manifest_digest = "7AFB66695545775FBFBB2D3078ADFD084244D5002392E837FDE21D9EA1C6D01C"
 deps = { MoveStdlib = "MoveStdlib" }
@@ -49,17 +19,17 @@ deps = { MoveStdlib = "MoveStdlib" }
 [pinned.testnet.local_mock_stablecoin]
 source = { root = true }
 use_environment = "testnet"
-manifest_digest = "960FB8429E0C1EFB5AA7E4EA96A3C1201560315DA6E12E4BEB0E99EB16DA14B6"
+manifest_digest = "BFB305DFAD49F408D4B5A6817BEE4E4B56F8B3F44CBC6BB57EE149013650DD23"
 deps = { pas = "pas", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.testnet.pas]
-source = { local = "../../vendor/pas/packages/pas" }
+source = { git = "https://github.com/MystenLabs/pas", subdir = "packages/pas", rev = "b710e43a555bb66ec6d5288441a25b41c2d339f2" }
 use_environment = "testnet"
 manifest_digest = "38AA62656ABE7551C444DA427ADBAA7751CB67250663D39FCDE36E938138EA7D"
 deps = { ptb = "ptb", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.testnet.ptb]
-source = { local = "../../vendor/pas/packages/ptb" }
+source = { git = "https://github.com/MystenLabs/pas", subdir = "packages/ptb", rev = "b710e43a555bb66ec6d5288441a25b41c2d339f2" }
 use_environment = "testnet"
 manifest_digest = "5745706258F61D6CE210904B3E6AE87A73CE9D31A6F93BE4718C442529332A87"
 deps = { std = "MoveStdlib", sui = "Sui" }

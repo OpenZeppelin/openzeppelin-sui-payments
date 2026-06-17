@@ -43,13 +43,36 @@ app/
    ```bash
    pnpm install
    ```
-2. **Publish the Move packages** and have IDs written to `.env.local`:
+2. **Publish the Move packages** and have IDs written to `.env.local`. The
+   script picks its publish strategy from `sui client active-env`:
    ```bash
-   # from this directory — uses whatever your `sui client active-env` is.
-   # Make sure Move.toml [environments] declares that env (devnet / testnet / mainnet).
-   pnpm bootstrap
+   # Option A — testnet / mainnet (pas + OZ deps are already on chain).
+   sui client switch --env testnet
+   sui client faucet           # fund active address + sponsor address
+   pnpm bootstrap              # uses `sui client publish`; MVR resolves deps
+
+   # Option B — localnet (everything starts empty).
+   sui start --with-faucet --force-regenesis     # in another terminal
+   sui client switch --env local
+   sui client faucet
+   pnpm bootstrap              # uses `sui client test-publish
+                               # --publish-unpublished-deps`: republishes pas
+                               # + ptb + OZ deps onto the fresh chain alongside
+                               # payments, recording addresses in
+                               # `contracts/*/Pubfile.local.toml` (gitignored).
    ```
-   This publishes both `contracts/payments/` and `contracts/stablecoin-mock/` and patches `app/.env.local` with `NEXT_PUBLIC_PACKAGE_ID`, `NEXT_PUBLIC_STABLECOIN_PACKAGE_ID`, etc. The Merchant object itself must be instantiated by a follow-up PTB (`merchant::create<C>(...)` consuming the `Loyalty` bundle) — see the bootstrap script output for the warning.
+   In either mode, `bootstrap.ts`:
+   - resolves (or freshly publishes) pas + its Namespace,
+   - publishes `contracts/payments/` and `contracts/stablecoin-mock/`,
+   - runs one PTB to wire up the stablecoin policy, mint the loyalty bundle,
+     create + share a Merchant, and grant the deployer the three operational
+     roles (on localnet it also prepends `pas::namespace::setup` to link
+     the fresh Namespace to its UpgradeCap),
+   - patches `app/.env.local` with every `NEXT_PUBLIC_*` id.
+
+   When re-bootstrapping localnet after `--force-regenesis`, the stale
+   `Pubfile.local.toml` files are cleared automatically — no manual cleanup
+   needed.
 3. **Add your Enoki *public* API key** to `.env.local`:
    ```
    NEXT_PUBLIC_ENOKI_API_KEY=enoki_public_...

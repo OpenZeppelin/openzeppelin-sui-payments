@@ -1,6 +1,0 @@
-[package]
-name = "ptb"
-edition = "2024"
-
-[environments]
-test-publish = "7cb5afa4"

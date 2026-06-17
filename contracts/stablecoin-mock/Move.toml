@@ -3,7 +3,4 @@ name = "local_mock_stablecoin"
 edition = "2024"
 
 [dependencies]
-pas = { local = "../../vendor/pas/packages/pas" }
-
-[environments]
-test-publish = "7cb5afa4"
+pas = { r.mvr = "@pas/pas" }

@@ -39,10 +39,12 @@ cold-storage admin keys stay out of daily POS operations.
 ```text
 contracts/
 ├── payments/         # The template (8 modules + 5 test files)
-└── stablecoin-mock/  # Devnet-only mock PAS stablecoin (for end-to-end tests)
-vendor/
-└── pas/              # Vendored Permissioned Asset Standard
+└── stablecoin-mock/  # Testnet/local-only mock PAS stablecoin (for end-to-end tests)
 ```
+
+Both packages resolve `@pas/pas` and `@openzeppelin-move/*` via MVR — no
+vendored deps. Builds require `--build-env testnet` (or `mainnet`) so MVR
+knows which network to resolve against.
 
 ## Security
 

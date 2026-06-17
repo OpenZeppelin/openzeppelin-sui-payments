@@ -976,6 +976,55 @@ public fun redeem(self: &mut Merchant, _auth: &Auth<CashierRole>, voucher_id: ID
     events::emit_voucher_redeemed(voucher_id, customer, amount, now);
 }
 
+/// Reclaim storage by pruning the listed payment receipts.
+///
+/// Receipts are redundant with the permanent `InvoicePaid` event stream, so
+/// pruning loses no canonical history — it only frees the merchant's storage
+/// deposit (refunded to the caller). The merchant computes which receipts to drop
+/// off-chain (a `Table` can't be iterated on-chain) and passes their `ids`. Gated
+/// by `MerchantRole`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+/// - `ids`: Receipt IDs (settled invoice IDs) to prune.
+///
+/// #### Aborts
+/// - `EReceiptNotFound` if any `id` has no stored payment receipt.
+public fun prune_invoice_receipts(
+    self: &mut Merchant,
+    _auth: &Auth<MerchantRole>,
+    ids: vector<ID>,
+) {
+    ids.do!(|id| {
+        assert!(self.invoice_receipts.contains(id), EReceiptNotFound);
+        self.invoice_receipts.remove(id).destroy();
+    });
+}
+
+/// Reclaim storage by pruning the listed redemption receipts.
+///
+/// Mirror of `prune_invoice_receipts` for the `VoucherRedeemed` side. Gated by
+/// `MerchantRole`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+/// - `ids`: Receipt IDs (redeemed voucher IDs) to prune.
+///
+/// #### Aborts
+/// - `EReceiptNotFound` if any `id` has no stored redemption receipt.
+public fun prune_voucher_receipts(
+    self: &mut Merchant,
+    _auth: &Auth<MerchantRole>,
+    ids: vector<ID>,
+) {
+    ids.do!(|id| {
+        assert!(self.voucher_receipts.contains(id), EReceiptNotFound);
+        self.voucher_receipts.remove(id).destroy();
+    });
+}
+
 // === Private Functions ===
 
 /// Price one stablecoin line by snapshotting the variant's current price from

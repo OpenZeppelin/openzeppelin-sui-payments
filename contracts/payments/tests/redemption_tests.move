@@ -6,7 +6,14 @@ use openzeppelin_access::access_control::AccessControl;
 use openzeppelin_payments::events::{VoucherRedeemed, VoucherCanceled};
 use openzeppelin_payments::listing;
 use openzeppelin_payments::loyalty::LOYALTY;
-use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, CashierRole, CatalogManagerRole};
+use openzeppelin_payments::merchant::{
+    Self,
+    Merchant,
+    MERCHANT,
+    CashierRole,
+    CatalogManagerRole,
+    MerchantRole
+};
 use openzeppelin_payments::receipt;
 use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::account::{Self, Account};
@@ -940,6 +947,108 @@ fun redemption_amount_mismatch_aborts() {
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
         test_scenario::return_shared(customer_account_shared);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EReceiptNotFound)]
+fun prune_voucher_receipts_removes_receipt() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        // Fund LOYALTY by paying a real invoice first (mints 50 at the 1/10 rate).
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.deposit_balance(balance::create_for_testing<TEST_USD>(10_000));
+        customer_account.share();
+
+        let payout_account_id = ns.account_address(PAYOUT).to_id();
+        account::create_and_share(ns, PAYOUT);
+
+        let mut listing = listing::new(b"Free Drink".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"Small".to_string(),
+            500,
+            std::option::some(50),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+        let invoice_id = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            b"fund",
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        scenario.next_tx(CUSTOMER);
+        let mut customer_account_shared = scenario.take_shared_by_id<Account>(customer_account_id);
+        let payout_account_shared = scenario.take_shared_by_id<Account>(payout_account_id);
+        let test_usd_policy = test_setup::take_test_usd_policy(scenario);
+        let loyalty_policy = test_setup::take_loyalty_policy(scenario);
+
+        let pay_auth = account::new_auth(scenario.ctx());
+        let mut send_req = customer_account_shared.send_balance<TEST_USD>(
+            &pay_auth,
+            &payout_account_shared,
+            500,
+            scenario.ctx(),
+        );
+        test_setup::approve_test_usd(&mut send_req);
+        merchant.pay<TEST_USD>(
+            invoice_id,
+            send_req,
+            &test_usd_policy,
+            &customer_account_shared,
+            &test_clock,
+        );
+
+        // Customer locks the 50 LOYALTY into a voucher.
+        let customer_auth = account::new_auth(scenario.ctx());
+        let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
+            &customer_auth,
+            50,
+            scenario.ctx(),
+        );
+        let voucher_id = merchant.create_voucher(
+            unlock_req,
+            &loyalty_policy,
+            vector[variant_id],
+            vector[1],
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Merchant redeems, then prunes the receipt; reading it aborts `EReceiptNotFound`.
+        scenario.next_tx(ADMIN);
+        merchant.redeem(&cashier_auth, voucher_id, &test_clock);
+        merchant.prune_voucher_receipts(&merchant_auth, vector[voucher_id]);
+        let _ = merchant.voucher_receipt(voucher_id);
+
+        // Unreachable cleanup.
+        test_setup::return_loyalty_policy(loyalty_policy);
+        test_setup::return_test_usd_policy(test_usd_policy);
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        test_scenario::return_shared(payout_account_shared);
         destroy(test_usd_cap);
         destroy(test_clock);
     });

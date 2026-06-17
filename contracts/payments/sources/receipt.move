@@ -56,7 +56,7 @@ public struct Receipt<T: store> has store {
 }
 
 /// Payment-flow payload (carried inside `Receipt<Payment>`).
-public struct Payment has store {
+public struct Payment has drop, store {
     /// ID of the `Invoice` this receipt settled.
     invoice_id: ID,
     /// Payout address that received the stablecoin.
@@ -70,7 +70,7 @@ public struct Payment has store {
 }
 
 /// Redemption-flow payload (carried inside `Receipt<Redemption>`).
-public struct Redemption has store {
+public struct Redemption has drop, store {
     /// ID of the `Voucher` this receipt settled.
     voucher_id: ID,
 }
@@ -195,4 +195,12 @@ public(package) fun new_redemption(
         timestamp_ms,
         data: Redemption { voucher_id },
     }
+}
+
+/// Destroy a receipt, reclaiming its storage. The `Payment` / `Redemption`
+/// payload is `drop`, so the value is consumed here by destructure. Used by the
+/// merchant's receipt-prune path; the canonical record lives on as the
+/// originating `InvoicePaid` / `VoucherRedeemed` event.
+public(package) fun destroy<T: store + drop>(receipt: Receipt<T>) {
+    let Receipt { customer: _, items: _, amount: _, timestamp_ms: _, data: _ } = receipt;
 }

@@ -34,10 +34,10 @@ public struct Config has drop, store {
     /// Hard cap on minted LOYALTY per payment.
     max_mint_per_payment: u64,
     /// Lifetime in milliseconds applied to merchant-issued invoices
-    /// (`invoice.expires_at_ms = clock + invoice_ttl_ms`). Must be > 0.
+    /// (`invoice.expires_at_ms = clock + invoice_ttl_ms`). Must be non-zero.
     invoice_ttl_ms: u64,
     /// Lifetime in milliseconds applied to customer-issued vouchers
-    /// (`voucher.expires_at_ms = clock + voucher_ttl_ms`). Must be > 0.
+    /// (`voucher.expires_at_ms = clock + voucher_ttl_ms`). Must be non-zero.
     voucher_ttl_ms: u64,
 }
 
@@ -53,8 +53,8 @@ public struct Config has drop, store {
 /// - `mint_numerator`: Numerator of the loyalty mint ratio.
 /// - `mint_denominator`: Denominator of the loyalty mint ratio. Must be non-zero.
 /// - `max_mint_per_payment`: Hard cap on minted LOYALTY per payment.
-/// - `invoice_ttl_ms`: Invoice lifetime in milliseconds. Must be > 0.
-/// - `voucher_ttl_ms`: Voucher lifetime in milliseconds. Must be > 0.
+/// - `invoice_ttl_ms`: Invoice lifetime in milliseconds. Must be non-zero.
+/// - `voucher_ttl_ms`: Voucher lifetime in milliseconds. Must be non-zero.
 ///
 /// #### Returns
 /// - The constructed `Config`.
@@ -70,7 +70,7 @@ public fun new(
     invoice_ttl_ms: u64,
     voucher_ttl_ms: u64,
 ): Config {
-    assert!(mint_denominator != 0, EZeroMintDenominator);
+    assert!(mint_denominator > 0, EZeroMintDenominator);
     assert!(invoice_ttl_ms > 0, EZeroInvoiceTtl);
     assert!(voucher_ttl_ms > 0, EZeroVoucherTtl);
 

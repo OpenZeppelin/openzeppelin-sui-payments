@@ -13,16 +13,26 @@ A merchant deploys this template to accept stablecoin payments, automatically mi
 soulbound loyalty currency (`LOYALTY`) on each settlement, and let customers redeem that
 loyalty for goods later — all on-chain, with PAS handling the balance/policy layer.
 
-Two settlement flows, mirroring real-world POS:
+Two settlement flows, mirroring real-world POS. The `Merchant` shared object is the hub:
+it stores open invoices, open vouchers, and settlement receipts in tables and owns both
+flows.
 
-- **Invoice → Pay** — merchant issues an `Invoice` (cap-gated) carrying line items and
-  the snapshotted loyalty reward. Customer scans, sends stablecoin via PAS, gets a
-  soulbound `Receipt<Payment>` and earns LOYALTY balance.
-- **Voucher → Redeem** — customer locks LOYALTY balance in a `Voucher` (off-chain QR),
-  merchant scans + redeems, balance burns and customer gets a `Receipt<Redemption>`.
+- **Invoice → Pay** — merchant issues an invoice via `merchant::create_invoice` (cap-gated)
+  carrying line items and the snapshotted loyalty reward; it's stored in the `Merchant` and
+  surfaced by ID (off-chain QR). Customer scans, sends stablecoin via PAS through
+  `merchant::pay`, earns LOYALTY balance, and a `Receipt` is recorded in the `Merchant`.
+  For open-loop settlement with a plain (non-PAS) `Coin<S>`, `merchant::pay_with_coin`
+  transfers the coin directly to the payout address; same loyalty + receipt outcome.
+- **Voucher → Redeem** — customer locks LOYALTY balance in a voucher via
+  `merchant::create_voucher` (stored in the `Merchant`, surfaced by ID for the QR);
+  merchant scans + `merchant::redeem`s, the balance burns, and a `Receipt` is recorded.
 
 Both invoices and vouchers carry the same `Item` type (variant_id + quantity + snapshot
-unit_price), so the on-chain accounting is symmetric.
+unit_price), so the on-chain accounting is symmetric. Receipts use a generic `Receipt<T>`
+with a flow-specific payload — `Receipt<Payment>` and `Receipt<Redemption>` — stored in the
+`Merchant` in separate `invoice_receipts` / `voucher_receipts` tables keyed by the settling
+invoice/voucher ID; per-customer history is served off-chain from the `InvoicePaid` /
+`VoucherRedeemed` event stream.
 
 Access control uses a single `AccessControl<MERCHANT>` registry with three operational
 roles:
@@ -39,10 +49,12 @@ cold-storage admin keys stay out of daily POS operations.
 ```text
 contracts/
 ├── payments/         # The template (8 modules + 5 test files)
-└── stablecoin-mock/  # Devnet-only mock PAS stablecoin (for end-to-end tests)
-vendor/
-└── pas/              # Vendored Permissioned Asset Standard
+└── stablecoin-mock/  # Testnet/local-only mock PAS stablecoin (for end-to-end tests)
 ```
+
+Both packages resolve `@pas/pas` and `@openzeppelin-move/*` via MVR — no
+vendored deps. Builds require `--build-env testnet` (or `mainnet`) so MVR
+knows which network to resolve against.
 
 ## Security
 

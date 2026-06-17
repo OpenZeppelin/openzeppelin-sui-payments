@@ -79,8 +79,8 @@ public fun new(name: String, ctx: &mut TxContext): Listing {
 ///
 /// #### Parameters
 /// - `name`: Display name (e.g. "Small"). Must be non-empty.
-/// - `price`: Stablecoin price in token units. Must be > 0.
-/// - `loyalty_price`: Optional LOYALTY price. If `Some`, must be > 0; `None`
+/// - `price`: Stablecoin price in token units. Must be non-zero.
+/// - `loyalty_price`: Optional LOYALTY price. If `Some`, Must be non-zero; `None`
 ///   means the variant cannot be redeemed for loyalty.
 /// - `ctx`: Transaction context.
 ///

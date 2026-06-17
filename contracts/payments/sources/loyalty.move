@@ -30,8 +30,8 @@ public struct LOYALTY has drop {}
 /// cannot exist as a top-level on-chain object.
 public struct Loyalty has store {
     /// Mint/burn authority for `LOYALTY`. Mutably accessed only via
-    /// `treasury_cap_mut` (package-private) to mint on `payment::pay` and burn
-    /// on `redemption::redeem`.
+    /// `treasury_cap_mut` (package-private) to mint on `merchant::pay` and burn
+    /// on `merchant::redeem`.
     treasury_cap: TreasuryCap<LOYALTY>,
     /// PAS authority over `Policy<Balance<LOYALTY>>`. Held but never exposed
     /// mutably — the policy is locked once registered in `create`.
@@ -116,13 +116,14 @@ public fun policy_id(self: &Loyalty): ID { self.policy_id }
 
 // === Package Functions ===
 
-/// Mutable accessor for the treasury cap. Used by `payment::pay` (mint) and
-/// `redemption::redeem` (burn) via `merchant::loyalty_mut`.
+/// Mutable accessor for the treasury cap. Used by `merchant::pay` (mint) and
+/// `merchant::redeem` (burn), which reach it through the merchant's `loyalty`
+/// field.
 public(package) fun treasury_cap_mut(self: &mut Loyalty): &mut TreasuryCap<LOYALTY> {
     &mut self.treasury_cap
 }
 
-/// Mint LOYALTY into the customer's PAS Account. Called by `payment::pay`.
+/// Mint LOYALTY into the customer's PAS Account. Called by `merchant::pay`.
 ///
 /// `deposit_balance` is unrestricted in PAS (no `Auth` needed), so the customer
 /// doesn't have to sign for the loyalty-side leg — only for their stablecoin spend.

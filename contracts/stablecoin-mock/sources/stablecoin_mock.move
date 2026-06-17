@@ -21,7 +21,7 @@ use pas::policy;
 use pas::request::Request;
 use pas::send_funds::SendFunds;
 use sui::balance::Balance;
-use sui::coin::TreasuryCap;
+use sui::coin::{Self, Coin, TreasuryCap};
 use sui::coin_registry;
 
 // === Init ===
@@ -82,6 +82,21 @@ public fun faucet(
     amount: u64,
 ) {
     recipient_account.deposit_balance(cap.mint_balance(amount));
+}
+
+/// Deployer-only coin faucet — mints `amount` mock USD as a plain, owned
+/// `Coin<STABLECOIN_MOCK>` and returns it. This is the open-loop counterpart to
+/// `faucet`: the coin is meant to be spent directly via `merchant::pay_with_coin`
+/// (or `public_transfer`-ed to a customer), not held in a PAS Account. Requires
+/// the holder of `TreasuryCap<STABLECOIN_MOCK>` (owned by the deployer after
+/// `init`) to call; not a permissionless tap. For a real permissionless faucet,
+/// wrap the cap inside a shared object with rate-limiting. Devnet only.
+public fun faucet_coin(
+    cap: &mut TreasuryCap<STABLECOIN_MOCK>,
+    amount: u64,
+    ctx: &mut TxContext,
+): Coin<STABLECOIN_MOCK> {
+    coin::mint(cap, amount, ctx)
 }
 
 /// Permissive transfer approval — stamps the `TransferApproval` witness on a pending

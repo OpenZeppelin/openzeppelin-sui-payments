@@ -10,13 +10,13 @@ use sui::event;
 
 // === Events ===
 
-/// Emitted when a merchant issues a fresh `Invoice` via `payment::new`.
+/// Emitted when a merchant issues a fresh `Invoice` via `merchant::create_invoice`.
 public struct InvoiceCreated has copy, drop {
     /// ID of the newly-shared `Invoice` object.
     invoice_id: ID,
 }
 
-/// Emitted when a customer creates a fresh `Voucher` via `redemption::new`.
+/// Emitted when a customer creates a fresh `Voucher` via `merchant::create_voucher`.
 public struct VoucherCreated has copy, drop {
     /// ID of the newly-shared `Voucher` object.
     voucher_id: ID,
@@ -29,7 +29,7 @@ public struct InvoicePaid has copy, drop {
     invoice_id: ID,
     /// Merchant-supplied order reference carried over from the invoice.
     order_ref: vector<u8>,
-    /// Address that paid (and received the soulbound `Receipt<Payment>`).
+    /// Address that paid (recorded as `customer` on the stored `Receipt`).
     customer: address,
     /// Stablecoin amount settled.
     amount: u64,
@@ -52,7 +52,7 @@ public struct VoucherRedeemed has copy, drop {
     timestamp_ms: u64,
 }
 
-/// Emitted when an expired `Invoice` is cleaned up via `payment::cancel`.
+/// Emitted when an expired `Invoice` is cleaned up via `merchant::cancel_invoice`.
 public struct InvoiceCanceled has copy, drop {
     /// ID of the canceled `Invoice` (now destroyed).
     invoice_id: ID,
@@ -66,7 +66,7 @@ public struct InvoiceCanceled has copy, drop {
     order_ref: vector<u8>,
 }
 
-/// Emitted when an expired `Voucher` is cleaned up via `redemption::cancel`.
+/// Emitted when an expired `Voucher` is cleaned up via `merchant::cancel_voucher`.
 /// The locked LOYALTY balance has been returned to `customer`.
 public struct VoucherCanceled has copy, drop {
     /// ID of the canceled `Voucher` (now destroyed).

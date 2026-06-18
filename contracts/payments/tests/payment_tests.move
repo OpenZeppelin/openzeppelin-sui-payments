@@ -19,6 +19,7 @@ use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::account::{Self, Account};
 use pas::e2e;
 use pas::policy;
+use std::type_name;
 use std::unit_test::{assert_eq, destroy};
 use sui::balance;
 use sui::clock;
@@ -87,6 +88,12 @@ fun payment_happy_path() {
             scenario.ctx(),
         );
 
+        // The accepted currency is pinned onto the invoice at issuance.
+        assert_eq!(
+            merchant.invoice(invoice_id).payment_type(),
+            type_name::with_defining_ids<TEST_USD>(),
+        );
+
         // Customer flow: take shared things, build send_funds, approve, pay.
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -120,6 +127,7 @@ fun payment_happy_path() {
         assert_eq!(receipt::amount(r), 500);
         assert_eq!(receipt::loyalty(r), 50); // 500 * 1/10 = 50, under cap.
         assert_eq!(receipt::payout_address(r), PAYOUT);
+        assert_eq!(receipt::payment_type(r), type_name::with_defining_ids<TEST_USD>());
         assert_eq!(*receipt::order_ref(r), b"order-001");
         assert_eq!(receipt::timestamp_ms(r), 1_000_000);
 
@@ -1507,5 +1515,49 @@ fun prune_invoice_receipts_unknown_id_aborts() {
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
         destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EZeroQuantity)]
+fun new_zero_quantity_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // Quantity 0 — aborts on `EZeroQuantity`.
+        let _ = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[0],
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
     });
 }

@@ -7,13 +7,17 @@ use openzeppelin_access::access_control::AccessControl;
 use openzeppelin_payments::config;
 use openzeppelin_payments::listing;
 use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, MerchantRole, CatalogManagerRole};
-use openzeppelin_payments::test_setup;
+use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::e2e;
+use std::type_name;
 use std::unit_test::{assert_eq, destroy};
 use sui::test_scenario;
 
 const ADMIN: address = @0xA;
 const PAYOUT: address = @0xB;
+
+/// Second mock currency used to exercise `set_payment_type` rotation.
+public struct OTHER_USD has drop {}
 
 #[test]
 fun merchant_create_and_share() {
@@ -430,6 +434,51 @@ fun set_display_unchanged_aborts() {
         // Same as setup_merchant defaults (name="Test Shop", logo=None) — must abort.
         merchant.set_display(&merchant_auth, b"Test Shop".to_string(), std::option::none());
 
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test]
+fun set_payment_type_rotates() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        // setup_merchant pins TEST_USD; rotate to OTHER_USD.
+        assert_eq!(merchant.accepted_payment_type(), type_name::with_defining_ids<TEST_USD>());
+        merchant.set_payment_type<OTHER_USD>(&merchant_auth);
+        assert_eq!(merchant.accepted_payment_type(), type_name::with_defining_ids<OTHER_USD>());
+
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EPaymentTypeUnchanged)]
+fun set_payment_type_unchanged_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        // Already TEST_USD — setting it to the same currency aborts.
+        merchant.set_payment_type<TEST_USD>(&merchant_auth);
+
+        // Unreachable cleanup.
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
         destroy(test_usd_cap);

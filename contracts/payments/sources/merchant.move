@@ -284,6 +284,10 @@ public fun share(m: Merchant) {
 /// - `EWrongRecipient` if the send request's recipient is not the payout address.
 /// - `EAmountMismatch` if the sent amount is not the invoice amount.
 /// - `EWrongLoyaltyRecipient` if the loyalty account owner is not the sender.
+/// - Propagates from `send_funds::resolve_balance` if the request's approvals do
+///   not satisfy the stablecoin `Policy<Balance<S>>`.
+/// - Propagates from `loyalty::mint_to` if minting `loyalty` would overflow the
+///   `LOYALTY` total supply.
 public fun pay<S>(
     self: &mut Merchant,
     invoice_id: ID,
@@ -361,6 +365,8 @@ public fun pay<S>(
 /// - `EInvoiceExpired` if the invoice has expired.
 /// - `EWrongPaymentType` if `S` does not match the invoice's `payment_type`.
 /// - `EAmountMismatch` if `coin.value()` is not the invoice amount.
+/// - Propagates from `loyalty::mint_to` if minting `loyalty` would overflow the
+///   `LOYALTY` total supply.
 public fun pay_with_coin<S>(
     self: &mut Merchant,
     invoice_id: ID,

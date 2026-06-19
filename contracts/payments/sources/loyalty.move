@@ -48,11 +48,20 @@ public struct RedeemUnlockApproval() has drop;
 
 // === Init ===
 
-/// Module init - creates the standard Sui currency and freezes its metadata.
+/// Module init - registers the standard Sui currency and hands the deployer its
+/// `TreasuryCap` and `MetadataCap`.
 ///
 /// Policy creation happens in `create` (the second deployer tx) because
 /// `policy::new_for_currency` requires `&mut Namespace`, which `init` cannot
 /// take.
+///
+/// The `MetadataCap` is transferred to the deployer (owned), NOT frozen. Freezing
+/// it would be unsafe: `coin_registry::set_name`/`set_description`/`set_icon_url`
+/// take the cap by *immutable* reference, so a frozen (publicly readable) cap
+/// would let anyone rewrite the shared `Currency<LOYALTY>` metadata. Keeping it
+/// owned means only the deployer can update metadata; to make metadata permanently
+/// immutable, the deployer can later `coin_registry::delete_metadata_cap` once it
+/// holds a `&mut Currency<LOYALTY>` (post `finalize_registration`).
 ///
 /// #### Parameters
 /// - `otw`: The `LOYALTY` one-time witness, consumed to register the currency.
@@ -67,8 +76,8 @@ fun init(otw: LOYALTY, ctx: &mut TxContext) {
         b"".to_string(),
         ctx,
     );
-    let metadata = initializer.finalize(ctx);
-    transfer::public_freeze_object(metadata);
+    let metadata_cap = initializer.finalize(ctx);
+    transfer::public_transfer(metadata_cap, ctx.sender());
     transfer::public_transfer(cap, ctx.sender());
 }
 

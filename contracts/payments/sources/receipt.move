@@ -1,4 +1,4 @@
-/// Receipts — on-chain proof of settlement, stored in the `Merchant`.
+/// Receipts - on-chain proof of settlement, stored in the `Merchant`.
 ///
 /// `Receipt<Payment>` is built at the end of `merchant::pay` and stored in
 /// `Merchant.invoice_receipts`; `Receipt<Redemption>` is built at the end of
@@ -10,7 +10,7 @@
 /// "wrong receipt kind" checks).
 ///
 /// This module also hosts the shared `Item` line type and the merchant-agnostic
-/// helpers `new_item` (dumb constructor — pricing is resolved by `merchant`) and
+/// helpers `new_item` (dumb constructor - pricing is resolved by `merchant`) and
 /// `compute_total`. It has no dependency on `merchant`, so `merchant` can store
 /// `Receipt` values without creating a dependency cycle.
 module openzeppelin_payments::receipt;
@@ -24,7 +24,7 @@ const EAmountOverflow: vector<u8> = "Amount exceeds u64 range";
 
 // === Structs ===
 
-/// One line on an `Invoice` or a `Voucher` — a quantity of a specific listing
+/// One line on an `Invoice` or a `Voucher` - a quantity of a specific listing
 /// variant at a snapshotted unit price. The price is in stablecoin units for
 /// invoices and `LOYALTY` units for vouchers; the type is the same so it can
 /// be reused across both flows. Snapshot pricing decouples the order from

@@ -1,11 +1,11 @@
-/// Invoice — merchant-issued payment intent, stored as a value in `Merchant`.
+/// Invoice - merchant-issued payment intent, stored as a value in `Merchant`.
 ///
 /// This module only defines the `Invoice` data type plus a merchant-agnostic
 /// constructor (`new`) and destructurer (`unpack`). It deliberately has NO
 /// dependency on `merchant`: since `Merchant` stores `Table<ID, Invoice>` (so
 /// `merchant` depends on `payment`), the reverse dependency would form an
-/// illegal cycle. All merchant-aware logic — catalog pricing, issuance,
-/// settlement (`pay`), and cancellation — therefore lives in `merchant`.
+/// illegal cycle. All merchant-aware logic - catalog pricing, issuance,
+/// settlement (`pay`), and cancellation - therefore lives in `merchant`.
 module openzeppelin_payments::payment;
 
 use openzeppelin_payments::receipt::Item;

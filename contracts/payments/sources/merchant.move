@@ -916,7 +916,6 @@ public fun remove_listing_variant(
 /// - `ENoItems` if `listing_variant_ids` is empty.
 /// - `ELengthMismatch` if the two vectors differ in length.
 /// - `EZeroQuantity` if any quantity is zero.
-/// - `EZeroAmount` if the computed total is zero.
 /// - `EVariantNotFound` / `EListingInactive` if a variant is unregistered or its
 ///   parent listing is inactive.
 public fun create_invoice(
@@ -932,8 +931,8 @@ public fun create_invoice(
     assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
 
     let items = listing_variant_ids.zip_map!(quantities, |vid, qty| self.price_item(vid, qty));
+    // Amount should not be zero, since individual prices and quantities enforced to be non-zero.
     let amount = receipt::compute_total(&items);
-    assert!(amount > 0, EZeroAmount);
     let loyalty = self.config.compute_loyalty(amount);
     let expires_at_ms = clock.timestamp_ms() + self.config.invoice_ttl_ms();
 

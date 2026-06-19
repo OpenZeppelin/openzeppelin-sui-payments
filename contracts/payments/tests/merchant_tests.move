@@ -6,11 +6,13 @@ module openzeppelin_payments::merchant_tests;
 use openzeppelin_access::access_control::AccessControl;
 use openzeppelin_payments::config;
 use openzeppelin_payments::listing;
+use openzeppelin_payments::loyalty::{Self, LOYALTY};
 use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, MerchantRole, CatalogManagerRole};
 use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::e2e;
 use std::type_name;
 use std::unit_test::{assert_eq, destroy};
+use sui::coin;
 use sui::test_scenario;
 
 const ADMIN: address = @0xA;
@@ -477,6 +479,195 @@ fun set_payment_type_unchanged_aborts() {
 
         // Already TEST_USD — setting it to the same currency aborts.
         merchant.set_payment_type<TEST_USD>(&merchant_auth);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EListingNotFound)]
+fun remove_listing_unknown_id_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        merchant.remove_listing(&catalog_auth, phantom);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EListingNotFound)]
+fun set_listing_status_unknown_id_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        merchant.set_listing_status(&catalog_auth, phantom, false);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EListingNotFound)]
+fun add_listing_variant_unknown_id_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        let v = listing::new_variant(b"S".to_string(), 500, std::option::none(), scenario.ctx());
+        let _vid = merchant.add_listing_variant(&catalog_auth, phantom, v);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EVariantNotFound)]
+fun remove_listing_variant_unknown_id_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        merchant.remove_listing_variant(&catalog_auth, phantom);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EListingNotFound)]
+fun listing_getter_unknown_id_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        let _ = merchant.listing(phantom);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EInvoiceNotFound)]
+fun invoice_getter_unknown_id_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        let _ = merchant.invoice(phantom);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EVoucherNotFound)]
+fun voucher_getter_unknown_id_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        let _ = merchant.voucher(phantom);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EEmptyName)]
+fun create_empty_name_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+
+        // Build the LOYALTY bundle + config inline (mirror of `setup_merchant`),
+        // then create a Merchant with an empty name — aborts on `EEmptyName`.
+        let loyalty_cap = coin::create_treasury_cap_for_testing<LOYALTY>(scenario.ctx());
+        let loyalty_bundle = loyalty::create(ns, loyalty_cap);
+        let cfg = config::new(1, 10, 1_000_000, 600_000, 600_000);
+
+        let _m = merchant::create<TEST_USD>(
+            loyalty_bundle,
+            cfg,
+            b"".to_string(),
+            std::option::none(),
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        // Unreachable.
+        merchant::share(_m);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EEmptyName)]
+fun set_display_empty_name_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        merchant.set_display(&merchant_auth, b"".to_string(), std::option::none());
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);

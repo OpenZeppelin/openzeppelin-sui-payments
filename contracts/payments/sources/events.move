@@ -235,3 +235,47 @@ public(package) fun emit_payment_type_changed() {
 public(package) fun emit_display_changed() {
     event::emit(DisplayChanged {});
 }
+
+// === Test-Only Helpers ===
+
+#[test_only]
+public fun invoice_paid_for_testing(
+    invoice_id: ID,
+    order_ref: vector<u8>,
+    customer: address,
+    amount: u64,
+    loyalty: u64,
+    timestamp_ms: u64,
+): InvoicePaid {
+    InvoicePaid { invoice_id, order_ref, customer, amount, loyalty, timestamp_ms }
+}
+
+#[test_only]
+public fun voucher_redeemed_for_testing(
+    voucher_id: ID,
+    customer: address,
+    amount: u64,
+    timestamp_ms: u64,
+): VoucherRedeemed {
+    VoucherRedeemed { voucher_id, customer, amount, timestamp_ms }
+}
+
+#[test_only]
+public fun invoice_canceled_for_testing(
+    invoice_id: ID,
+    payout_address: address,
+    payment_type: TypeName,
+    amount: u64,
+    order_ref: vector<u8>,
+): InvoiceCanceled {
+    InvoiceCanceled { invoice_id, payout_address, payment_type, amount, order_ref }
+}
+
+#[test_only]
+public fun voucher_canceled_for_testing(
+    voucher_id: ID,
+    customer: address,
+    amount: u64,
+): VoucherCanceled {
+    VoucherCanceled { voucher_id, customer, amount }
+}

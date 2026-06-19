@@ -155,3 +155,10 @@ fun new_variant_zero_loyalty_price_aborts() {
     destroy(v);
     scenario.end();
 }
+
+#[test, expected_failure(abort_code = listing::EEmptyName)]
+fun new_variant_empty_name_aborts() {
+    let mut scenario = test_scenario::begin(@0xA);
+    let _ = listing::new_variant(b"".to_string(), 500, std::option::none(), scenario.ctx());
+    scenario.end();
+}

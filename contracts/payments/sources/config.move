@@ -45,7 +45,7 @@ public struct Config has drop, store {
 
 /// Construct a new `Config`.
 ///
-/// `mint_numerator = 0` and/or `max_mint_per_payment = 0` are permitted —
+/// `mint_numerator = 0` and/or `max_mint_per_payment = 0` are permitted -
 /// loyalty mint becomes a no-op. Pass the returned value to `merchant::create`
 /// (initial setup) or `merchant::set_config` (replacement).
 ///

@@ -1,4 +1,4 @@
-/// Redemption — customer-issued `Voucher` with locked `Balance<LOYALTY>` + merchant
+/// Redemption - customer-issued `Voucher` with locked `Balance<LOYALTY>` + merchant
 /// settles by burning.
 ///
 /// Customer creates the voucher first: their LOYALTY balance is extracted from their
@@ -15,11 +15,11 @@
 ///
 /// Merchant POS flow (after scanning the customer's QR):
 ///   redemption::redeem(voucher, &auth, merchant, &clock, ctx)
-///   — gated by `Auth<CashierRole>`.
+///   - gated by `Auth<CashierRole>`.
 ///
 /// Cleanup (permissionless after expiry):
 ///   redemption::cancel(voucher, customer_LOY_account, &clock)
-///   — balance returns to the customer's Account.
+///   - balance returns to the customer's Account.
 module openzeppelin_payments::redemption;
 
 use openzeppelin_access::access_control::Auth;
@@ -195,7 +195,7 @@ public fun redeem(
     events::emit_voucher_redeemed(voucher_id, customer, amount, now);
 }
 
-/// Permissionless cleanup after expiry — deposits the locked balance back into
+/// Permissionless cleanup after expiry - deposits the locked balance back into
 /// the customer's PAS Account.
 ///
 /// Prevents griefing by an inactive merchant (whose refusal to redeem would

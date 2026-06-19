@@ -1,10 +1,10 @@
-/// Listing — merchant menu items and their priced variants.
+/// Listing - merchant menu items and their priced variants.
 ///
 /// A `Listing` represents one menu entry (e.g. "Black Coffee") and holds a map
 /// of priced `Variant`s keyed by their auto-generated `ID` (e.g. S/M/L). Each
 /// variant carries a stablecoin `price` and an optional `loyalty_price`, allowing
 /// customers to pay in either currency. Listings live as values inside
-/// `Merchant.listings` — they do not exist independently of their owning Merchant.
+/// `Merchant.listings` - they do not exist independently of their owning Merchant.
 module openzeppelin_payments::listing;
 
 use std::string::String;

@@ -1,10 +1,10 @@
-/// Receipts — soulbound on-chain proof of settlement.
+/// Receipts - soulbound on-chain proof of settlement.
 ///
 /// `Receipt<Payment>` is minted at the end of `payment::pay<S>` and transferred
 /// to the paying customer. `Receipt<Redemption>` is minted at the end of
 /// `redemption::redeem` and transferred to the voucher's customer. Both are
 /// `key`-only (no `store`), so they cannot be re-transferred or wrapped in
-/// other structs — possession by an address is the proof, and that address
+/// other structs - possession by an address is the proof, and that address
 /// keeps the receipt forever.
 ///
 /// This module also hosts the shared `Item` line type and the helpers
@@ -26,7 +26,7 @@ const ENoLoyaltyPrice: vector<u8> = "Variant is not redeemable: loyalty_price is
 
 // === Structs ===
 
-/// One line on an `Invoice` or a `Voucher` — a quantity of a specific listing
+/// One line on an `Invoice` or a `Voucher` - a quantity of a specific listing
 /// variant at a snapshotted unit price. The price is in stablecoin units for
 /// invoices and `LOYALTY` units for vouchers; the type is the same so it can
 /// be reused across both flows. Snapshot pricing decouples the order from
@@ -84,7 +84,7 @@ public struct Redemption has drop, store {
 ///
 /// Only the owner (the customer the receipt was transferred to) can call this
 /// since the receipt is `key`-only and owned. The canonical settlement record
-/// stays on-chain as the originating `InvoicePaid` / `VoucherRedeemed` event —
+/// stays on-chain as the originating `InvoicePaid` / `VoucherRedeemed` event -
 /// destroying the receipt just reclaims object storage for the customer.
 ///
 /// #### Generics
@@ -218,7 +218,7 @@ public(package) fun compute_total(items: &vector<Item>): u64 {
 
 /// Mint a `Receipt<Payment>` and transfer it to `customer`.
 ///
-/// Soulbound — the receipt cannot be re-transferred or stored anywhere else.
+/// Soulbound - the receipt cannot be re-transferred or stored anywhere else.
 ///
 /// #### Parameters
 /// - `invoice_id`: ID of the settled invoice.
@@ -255,7 +255,7 @@ public(package) fun transfer_payment_receipt(
 
 /// Mint a `Receipt<Redemption>` and transfer it to `customer`.
 ///
-/// Soulbound — the receipt cannot be re-transferred or stored anywhere else.
+/// Soulbound - the receipt cannot be re-transferred or stored anywhere else.
 ///
 /// #### Parameters
 /// - `voucher_id`: ID of the redeemed voucher.

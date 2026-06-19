@@ -1,22 +1,22 @@
 /// Merchant identity, central state, and listing CRUD. This module is the leaf for
-/// the merchant-side flows — it does NOT depend on `invoice` or `redemption`. Those
+/// the merchant-side flows - it does NOT depend on `invoice` or `redemption`. Those
 /// modules import `Merchant` from here and own the issuance + settlement flows for
-/// their respective asset sides (invoice → stablecoin payment, redemption →
+/// their respective asset sides (invoice -> stablecoin payment, redemption ->
 /// loyalty burn).
 ///
 /// Access control: `AccessControl<MERCHANT>` (from `openzeppelin_access`) is
 /// created in `init` as a shared object. The root role is the `MERCHANT` OTW
 /// itself; the deployer becomes its sole holder. Three operational roles split
 /// the admin surface:
-///   - `MerchantRole`         → merchant-level identity + treasury settings
+///   - `MerchantRole`         -> merchant-level identity + treasury settings
 ///                              (`set_payout_address`, `set_config`, `set_display`)
-///   - `CatalogManagerRole`   → catalog CRUD (`add_listing`, `remove_listing`,
+///   - `CatalogManagerRole`   -> catalog CRUD (`add_listing`, `remove_listing`,
 ///                              `set_listing_status`, `add_listing_variant`,
 ///                              `remove_listing_variant`)
-///   - `CashierRole`          → settlement (`payment::new`, `redemption::redeem`)
+///   - `CashierRole`          -> settlement (`payment::new`, `redemption::redeem`)
 /// Each role's default admin is the root role, so the root holder can
 /// grant/revoke via `access_control::grant_role` / `revoke_role`. None of the
-/// operational roles are auto-granted by `init` — the deployer (root holder)
+/// operational roles are auto-granted by `init` - the deployer (root holder)
 /// is expected to grant them explicitly in the bootstrap PTB, which also lets
 /// them assign roles to different addresses (cold-storage root, hot-wallet
 /// operator) from the outset.
@@ -72,7 +72,7 @@ const ROOT_TRANSFER_DELAY_MS: u64 = 86_400_000;
 
 // === Structs ===
 
-/// One-time witness — struct name == module name uppercased. Consumed once
+/// One-time witness - struct name == module name uppercased. Consumed once
 /// in `init` to mint the package's `AccessControl<MERCHANT>` registry.
 public struct MERCHANT has drop {}
 
@@ -107,7 +107,7 @@ public struct Merchant has key {
     /// only accessible via `loyalty()` / `loyalty_mut()`.
     loyalty: Loyalty,
     /// Loyalty mint configuration (numerator/denominator/cap). Replaceable via
-    /// `set_config` — note that changing the rate alters "$1 = X points" for
+    /// `set_config` - note that changing the rate alters "$1 = X points" for
     /// future settlements; existing invoices already snapshot both their
     /// stablecoin `amount` and `loyalty` values at issuance, so they're unaffected.
     config: Config,
@@ -123,11 +123,11 @@ public struct Merchant has key {
 
 // === Init ===
 
-/// Module init — runs once on package publish. Creates the
+/// Module init - runs once on package publish. Creates the
 /// `AccessControl<MERCHANT>` shared registry and shares it. The root role is
 /// granted to the deployer by `access_control::new`. Operational roles
 /// (`MerchantRole`, `CatalogManagerRole`, `CashierRole`) are NOT pre-granted
-/// here — the deployer grants them explicitly in the bootstrap PTB (typically
+/// here - the deployer grants them explicitly in the bootstrap PTB (typically
 /// to different addresses than the root key).
 ///
 /// #### Parameters
@@ -188,7 +188,7 @@ public fun create<C>(
 }
 
 /// Share the `Merchant`. Required because `Merchant` is `key`-only (no `store`), so
-/// `transfer::share_object` can only be called from this module — an external caller
+/// `transfer::share_object` can only be called from this module - an external caller
 /// can't share it directly. Call after `create` and any same-PTB setup.
 public fun share(m: Merchant) {
     transfer::share_object(m);
@@ -205,7 +205,7 @@ public fun name(self: &Merchant): &String { &self.name }
 /// Optional logo URL (mutable via `set_display`).
 public fun logo_url(self: &Merchant): &Option<String> { &self.logo_url }
 
-/// Payout address — where customer stablecoin lands on `payment::pay`.
+/// Payout address - where customer stablecoin lands on `payment::pay`.
 public fun payout_address(self: &Merchant): address { self.payout_address }
 
 /// `TypeName` of the only stablecoin currency this merchant accepts. Pinned
@@ -308,7 +308,7 @@ public fun set_payout_address(self: &mut Merchant, _auth: &Auth<MerchantRole>, a
 ///
 /// The new `C` is captured from the type parameter and pinned as
 /// `accepted_payment_type`. Gated by `MerchantRole`. Emits `PaymentTypeChanged`.
-/// In-flight invoices are unaffected — each invoice snapshots its `payment_type`
+/// In-flight invoices are unaffected - each invoice snapshots its `payment_type`
 /// at issuance, so rotating here only affects future invoices.
 ///
 /// #### Generics
@@ -501,7 +501,7 @@ public fun add_listing_variant(
 
 /// Remove a variant by ID from its listing.
 ///
-/// The owning listing is resolved via `variant_index` — no separate
+/// The owning listing is resolved via `variant_index` - no separate
 /// `listing_id` argument needed. Gated by `CatalogManagerRole`. Emits
 /// `VariantRemoved`.
 ///

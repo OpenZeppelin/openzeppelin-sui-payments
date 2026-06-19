@@ -1,4 +1,4 @@
-/// Invoice — merchant-issued payment intent + customer-side settlement.
+/// Invoice - merchant-issued payment intent + customer-side settlement.
 ///
 /// Merchant POS issues an `Invoice` via
 /// `payment::new(merchant, &auth, listing_variant_ids, quantities, ...)` (gated by
@@ -6,7 +6,7 @@
 /// `Item` line entries are derived inside `new` by snapshotting each variant's
 /// current price; the resulting `amount` total is the sum of `quantity * price`,
 /// and the `loyalty` to be granted on settlement is snapshotted from the
-/// merchant's `Config` at issuance — subsequent `set_config` calls do not retroactively
+/// merchant's `Config` at issuance - subsequent `set_config` calls do not retroactively
 /// affect open invoices.
 /// Merchant calls `payment::share(invoice)` and surfaces
 /// the object ID through a QR. Customer scans and calls `payment::pay<S>(...)`,
@@ -166,7 +166,7 @@ public fun share(invoice: Invoice) {
 /// (transfers `Balance<S>` from the customer's PAS Account to the merchant's),
 /// mints loyalty rewards into the customer's PAS `Account<LOYALTY>`, destroys the
 /// Invoice, mints a soulbound `Receipt<Payment>` for the customer, and emits
-/// `InvoicePaid`. Permissionless — anyone holding a matching send request can pay.
+/// `InvoicePaid`. Permissionless - anyone holding a matching send request can pay.
 ///
 /// #### Generics
 /// - `S`: The settlement coin type; must match the invoice's `payment_type`.

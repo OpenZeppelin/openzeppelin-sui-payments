@@ -1,7 +1,7 @@
 /// Event types and package-private emit helpers for the payments package.
 ///
 /// All on-chain state transitions worth indexing emit one event from this
-/// module. Indexers filter by event type (`InvoicePaid`, `VoucherRedeemed`, …)
+/// module. Indexers filter by event type (`InvoicePaid`, `VoucherRedeemed`, ...)
 /// and resolve the embedded IDs back to the relevant objects.
 module openzeppelin_payments::events;
 
@@ -23,7 +23,7 @@ public struct VoucherCreated has copy, drop {
 }
 
 /// Emitted when a customer settles an `Invoice`. Indexer resolves
-/// `invoice_id`/`order_ref` → settled.
+/// `invoice_id`/`order_ref` -> settled.
 public struct InvoicePaid has copy, drop {
     /// ID of the settled `Invoice` (now destroyed).
     invoice_id: ID,
@@ -40,7 +40,7 @@ public struct InvoicePaid has copy, drop {
 }
 
 /// Emitted when a customer redeems a `Voucher`. Indexer resolves
-/// `voucher_id` → redeemed.
+/// `voucher_id` -> redeemed.
 public struct VoucherRedeemed has copy, drop {
     /// ID of the redeemed `Voucher` (now destroyed).
     voucher_id: ID,
@@ -113,19 +113,19 @@ public struct VariantRemoved has copy, drop {
     variant_id: ID,
 }
 
-/// Emitted when a merchant replaces its loyalty mint `Config`. Pulse only —
+/// Emitted when a merchant replaces its loyalty mint `Config`. Pulse only -
 /// query `Merchant.config` for the current values.
 public struct ConfigUpdated has copy, drop {}
 
-/// Emitted when a merchant rotates its payout address. Pulse only — query
+/// Emitted when a merchant rotates its payout address. Pulse only - query
 /// `Merchant.payout_address` for the current value.
 public struct PayoutAddressChanged has copy, drop {}
 
-/// Emitted when a merchant rotates its accepted payment currency. Pulse only —
+/// Emitted when a merchant rotates its accepted payment currency. Pulse only -
 /// query `Merchant.accepted_payment_type` for the current value.
 public struct PaymentTypeChanged has copy, drop {}
 
-/// Emitted when a merchant updates its display name or logo. Pulse only —
+/// Emitted when a merchant updates its display name or logo. Pulse only -
 /// query `Merchant.name` / `Merchant.logo_url` for the current values.
 public struct DisplayChanged has copy, drop {}
 

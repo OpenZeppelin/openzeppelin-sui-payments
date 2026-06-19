@@ -1,11 +1,11 @@
-/// Voucher — customer-issued redemption intent with locked `Balance<LOYALTY>`,
+/// Voucher - customer-issued redemption intent with locked `Balance<LOYALTY>`,
 /// stored as a value in `Merchant`.
 ///
 /// This module only defines the `Voucher` data type plus a merchant-agnostic
 /// constructor (`new`) and destructurer (`unpack`). Like `payment`, it has NO
 /// dependency on `merchant` (which would cycle, since `Merchant` stores
-/// `Table<ID, Voucher>`). All merchant-aware logic — unlock resolution,
-/// redemption (burn), and cancellation (refund) — lives in `merchant`.
+/// `Table<ID, Voucher>`). All merchant-aware logic - unlock resolution,
+/// redemption (burn), and cancellation (refund) - lives in `merchant`.
 module openzeppelin_payments::redemption;
 
 use openzeppelin_payments::loyalty::LOYALTY;
@@ -19,7 +19,7 @@ use sui::balance::Balance;
 /// for the merchant to scan and redeem.
 ///
 /// `store`-only (no `key`): identity is the `Table` key, not an object UID. No
-/// `drop` either — it holds `Balance<LOYALTY>`, which is a linear resource.
+/// `drop` either - it holds `Balance<LOYALTY>`, which is a linear resource.
 public struct Voucher has store {
     /// Owner of the unlock request that funded this voucher. Recipient of the
     /// `Receipt` on `redeem` and of the returned balance on `cancel`.

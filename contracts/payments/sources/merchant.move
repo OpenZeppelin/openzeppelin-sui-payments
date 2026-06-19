@@ -1,7 +1,7 @@
 /// Merchant identity, central state, and the full settlement surface. The
 /// `Merchant` shared object stores the catalog plus open invoices, open vouchers,
 /// and settlement receipts in `Table`s, and owns the issuance + settlement flows
-/// for both asset sides (invoice → stablecoin payment, redemption → loyalty burn).
+/// for both asset sides (invoice -> stablecoin payment, redemption -> loyalty burn).
 ///
 /// `payment` and `redemption` are thin data-type modules (`Invoice` / `Voucher`
 /// plus dumb constructors); this module depends on them and on `receipt`. Because
@@ -14,15 +14,15 @@
 /// created in `init` as a shared object. The root role is the `MERCHANT` OTW
 /// itself; the deployer becomes its sole holder. Three operational roles split
 /// the admin surface:
-///   - `MerchantRole`         → merchant-level identity + treasury settings
+///   - `MerchantRole`         -> merchant-level identity + treasury settings
 ///                              (`set_payout_address`, `set_config`, `set_display`)
-///   - `CatalogManagerRole`   → catalog CRUD (`add_listing`, `remove_listing`,
+///   - `CatalogManagerRole`   -> catalog CRUD (`add_listing`, `remove_listing`,
 ///                              `set_listing_status`, `add_listing_variant`,
 ///                              `remove_listing_variant`)
-///   - `CashierRole`          → settlement (`create_invoice`, `redeem`)
+///   - `CashierRole`          -> settlement (`create_invoice`, `redeem`)
 /// Each role's default admin is the root role, so the root holder can
 /// grant/revoke via `access_control::grant_role` / `revoke_role`. None of the
-/// operational roles are auto-granted by `init` — the deployer (root holder)
+/// operational roles are auto-granted by `init` - the deployer (root holder)
 /// is expected to grant them explicitly in the bootstrap PTB, which also lets
 /// them assign roles to different addresses (cold-storage root, hot-wallet
 /// operator) from the outset.
@@ -124,7 +124,7 @@ const ROOT_TRANSFER_DELAY_MS: u64 = 86_400_000;
 
 // === Structs ===
 
-/// One-time witness — struct name == module name uppercased. Consumed once
+/// One-time witness - struct name == module name uppercased. Consumed once
 /// in `init` to mint the package's `AccessControl<MERCHANT>` registry.
 public struct MERCHANT has drop {}
 
@@ -159,7 +159,7 @@ public struct Merchant has key {
     /// (mint) and `redeem` (burn).
     loyalty: Loyalty,
     /// Loyalty mint configuration (numerator/denominator/cap). Replaceable via
-    /// `set_config` — note that changing the rate alters "$1 = X points" for
+    /// `set_config` - note that changing the rate alters "$1 = X points" for
     /// future settlements; existing invoices already snapshot both their
     /// stablecoin `amount` and `loyalty` values at issuance, so they're unaffected.
     config: Config,
@@ -178,7 +178,7 @@ public struct Merchant has key {
     /// Inserted by `create_voucher`, removed by `redeem` / `cancel_voucher`.
     vouchers: Table<ID, Voucher>,
     /// Payment receipts, keyed by the settled invoice ID. The recipient is
-    /// recorded in `Receipt.customer`. Grows monotonically — the merchant bears
+    /// recorded in `Receipt.customer`. Grows monotonically - the merchant bears
     /// the storage. Customer-scoped history is served off-chain from the
     /// `InvoicePaid` event stream.
     invoice_receipts: Table<ID, Receipt<Payment>>,
@@ -189,11 +189,11 @@ public struct Merchant has key {
 
 // === Init ===
 
-/// Module init — runs once on package publish. Creates the
+/// Module init - runs once on package publish. Creates the
 /// `AccessControl<MERCHANT>` shared registry and shares it. The root role is
 /// granted to the deployer by `access_control::new`. Operational roles
 /// (`MerchantRole`, `CatalogManagerRole`, `CashierRole`) are NOT pre-granted
-/// here — the deployer grants them explicitly in the bootstrap PTB (typically
+/// here - the deployer grants them explicitly in the bootstrap PTB (typically
 /// to different addresses than the root key).
 ///
 /// #### Parameters
@@ -258,7 +258,7 @@ public fun create<C>(
 }
 
 /// Share the `Merchant`. Required because `Merchant` is `key`-only (no `store`), so
-/// `transfer::share_object` can only be called from this module — an external caller
+/// `transfer::share_object` can only be called from this module - an external caller
 /// can't share it directly. Call after `create` and any same-PTB setup.
 public fun share(m: Merchant) {
     transfer::share_object(m);
@@ -270,7 +270,7 @@ public fun share(m: Merchant) {
 /// `Balance<S>` into the merchant's payout PAS Account), mints the snapshotted
 /// loyalty into the customer's PAS account, removes the invoice, stores a
 /// `Receipt<Payment>` keyed by `invoice_id`, and emits `InvoicePaid`.
-/// Permissionless — anyone holding a matching send request can pay.
+/// Permissionless - anyone holding a matching send request can pay.
 ///
 /// For settling with a plain, unrestricted coin instead, see `pay_with_coin`.
 ///
@@ -348,7 +348,7 @@ public fun pay<S>(
 /// owner is recorded as the receipt's `customer`. Permissionless.
 ///
 /// NOTE: unlike `pay`, there is no `send_funds` sender to bind the payer's
-/// identity — the caller designates the loyalty recipient, and the receipt's
+/// identity - the caller designates the loyalty recipient, and the receipt's
 /// `customer` is that account's owner. This is safe (loyalty is a reward, so
 /// directing it is gifting, not taking), but the `customer` is "whoever was
 /// named," not a cryptographically-proven payer.
@@ -489,7 +489,7 @@ public fun create_voucher(
     id
 }
 
-/// Permissionless cleanup after expiry — deposits the locked balance back into
+/// Permissionless cleanup after expiry - deposits the locked balance back into
 /// the customer's PAS Account. Emits `VoucherCanceled`.
 ///
 /// #### Aborts
@@ -526,7 +526,7 @@ public fun name(self: &Merchant): &String { &self.name }
 /// Optional logo URL (mutable via `set_display`).
 public fun logo_url(self: &Merchant): &Option<String> { &self.logo_url }
 
-/// Payout address — where customer stablecoin lands on `pay`.
+/// Payout address - where customer stablecoin lands on `pay`.
 public fun payout_address(self: &Merchant): address { self.payout_address }
 
 /// `TypeName` of the only stablecoin currency this merchant accepts. Pinned
@@ -626,7 +626,7 @@ public fun voucher(self: &Merchant, id: ID): &Voucher {
 
 /// Look up a stored payment `Receipt<Payment>` by the settled invoice ID.
 ///
-/// Customer-scoped history is not an on-chain query — `Receipt.customer` is a
+/// Customer-scoped history is not an on-chain query - `Receipt.customer` is a
 /// value field, not a key. Index the `InvoicePaid` event off-chain for
 /// per-customer history.
 ///
@@ -675,7 +675,7 @@ public fun set_payout_address(self: &mut Merchant, _auth: &Auth<MerchantRole>, a
 ///
 /// The new `C` is captured from the type parameter and pinned as
 /// `accepted_payment_type`. Gated by `MerchantRole`. Emits `PaymentTypeChanged`.
-/// In-flight invoices are unaffected — each invoice snapshots its `payment_type`
+/// In-flight invoices are unaffected - each invoice snapshots its `payment_type`
 /// at issuance, so rotating here only affects future invoices.
 ///
 /// #### Generics
@@ -868,7 +868,7 @@ public fun add_listing_variant(
 
 /// Remove a variant by ID from its listing.
 ///
-/// The owning listing is resolved via `variant_index` — no separate
+/// The owning listing is resolved via `variant_index` - no separate
 /// `listing_id` argument needed. Gated by `CatalogManagerRole`. Emits
 /// `VariantRemoved`.
 ///
@@ -979,7 +979,7 @@ public fun redeem(self: &mut Merchant, _auth: &Auth<CashierRole>, voucher_id: ID
 /// Reclaim storage by pruning the listed payment receipts.
 ///
 /// Receipts are redundant with the permanent `InvoicePaid` event stream, so
-/// pruning loses no canonical history — it only frees the merchant's storage
+/// pruning loses no canonical history - it only frees the merchant's storage
 /// deposit (refunded to the caller). The merchant computes which receipts to drop
 /// off-chain (a `Table` can't be iterated on-chain) and passes their `ids`. Gated
 /// by `MerchantRole`.

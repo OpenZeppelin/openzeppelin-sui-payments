@@ -19,8 +19,8 @@ deps = { MoveStdlib = "MoveStdlib" }
 [pinned.testnet.local_mock_stablecoin]
 source = { root = true }
 use_environment = "testnet"
-manifest_digest = "BFB305DFAD49F408D4B5A6817BEE4E4B56F8B3F44CBC6BB57EE149013650DD23"
-deps = { pas = "pas", std = "MoveStdlib", sui = "Sui" }
+manifest_digest = "4C5319E8A61DBAECBA0052A42628CCB61582C6794FC5CC5AA55D0CB9E8925089"
+deps = { pas = "pas", ptb = "ptb", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.testnet.pas]
 source = { git = "https://github.com/MystenLabs/pas", subdir = "packages/pas", rev = "b710e43a555bb66ec6d5288441a25b41c2d339f2" }

@@ -6,13 +6,15 @@
 /// Two-step deployment (parallels `loyalty.move`):
 ///   1. Publish → `init` creates the Sui currency + metadata, transfers `TreasuryCap` to
 ///      the deployer.
-///   2. Deployer calls `setup(&mut namespace, &mut treasury_cap, ctx)` to create
-///      `Policy<Balance<STABLECOIN_MOCK>>` and register the permissive `TransferApproval`
-///      witness for `send_funds`. PolicyCap transferred to the deployer.
+///   2. Deployer calls `setup(&mut namespace, &mut treasury_cap, &mut templates, ctx)` to
+///      create `Policy<Balance<STABLECOIN_MOCK>>`, register the permissive `TransferApproval`
+///      witness for `send_funds`, and register a PTB template (in the shared PAS
+///      `Templates` registry) for auto-resolving it. PolicyCap transferred to the deployer.
 ///
 /// Customer's payment PTB calls `stablecoin_mock::approve_transfer(&mut sf_request)` to
 /// stamp the approval witness on a `Request<SendFunds<Balance<STABLECOIN_MOCK>>>` before
-/// passing it to `payment::pay`.
+/// passing it to `payment::pay`. A PAS-aware wallet can instead read the registered PTB
+/// template and insert that call automatically.
 module local_mock_stablecoin::stablecoin_mock;
 
 use pas::account::Account;
@@ -20,6 +22,10 @@ use pas::namespace::Namespace;
 use pas::policy;
 use pas::request::Request;
 use pas::send_funds::SendFunds;
+use pas::templates::{PAS, Templates};
+use ptb::ptb;
+use std::internal;
+use std::type_name;
 use sui::balance::Balance;
 use sui::coin::{Self, Coin, TreasuryCap};
 use sui::coin_registry;
@@ -54,12 +60,16 @@ public struct TransferApproval() has drop;
 // === Public Functions ===
 
 /// Post-publish setup: create the PAS `Policy<Balance<STABLECOIN_MOCK>>`, register the
-/// permissive `TransferApproval` for `send_funds`, share the policy, and transfer the
-/// `PolicyCap` to the deployer.
+/// permissive `TransferApproval` for `send_funds`, register the PTB template that lets
+/// wallets auto-resolve that approval, share the policy, and transfer the `PolicyCap`
+/// to the deployer.
+///
+/// `templates` is the shared PAS `Templates` registry (from `pas::templates::setup`).
 #[allow(lint(self_transfer))]
 public fun setup(
     namespace: &mut Namespace,
     treasury_cap: &mut TreasuryCap<STABLECOIN_MOCK>,
+    templates: &mut Templates,
     ctx: &mut TxContext,
 ) {
     let (mut policy, policy_cap) = policy::new_for_currency(namespace, treasury_cap, false);
@@ -69,6 +79,19 @@ public fun setup(
     );
     policy::share(policy);
     transfer::public_transfer(policy_cap, ctx.sender());
+
+    // Register the PTB template for `TransferApproval` so a PAS-aware wallet can
+    // auto-resolve the `send_funds` approval: to satisfy it, call
+    // `stablecoin_mock::approve_transfer(request)`, where `request` is the
+    // send-funds request being resolved (injected by the off-chain resolver).
+    let transfer_cmd = ptb::move_call(
+        type_name::with_defining_ids<TransferApproval>().address_string().to_string(),
+        b"stablecoin_mock".to_string(),
+        b"approve_transfer".to_string(),
+        vector[ptb::ext_input<PAS>(b"request".to_string())],
+        vector[],
+    );
+    templates.set_template_command(internal::permit<TransferApproval>(), transfer_cmd);
 }
 
 /// Deployer-only faucet — mints `amount` mock USD into the recipient's PAS

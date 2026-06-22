@@ -5,9 +5,11 @@ module openzeppelin_payments::merchant_tests;
 
 use openzeppelin_access::access_control::AccessControl;
 use openzeppelin_payments::config;
+use openzeppelin_payments::events;
 use openzeppelin_payments::listing;
 use openzeppelin_payments::loyalty::{Self, LOYALTY};
 use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, MerchantRole, CatalogManagerRole};
+use openzeppelin_payments::test_helpers::assert_emitted;
 use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::e2e;
 use std::type_name;
@@ -38,7 +40,9 @@ fun merchant_create_and_share() {
         assert_eq!(merchant.payout_address(), PAYOUT);
         assert_eq!(merchant.config().mint_numerator(), 1);
         assert_eq!(merchant.config().mint_denominator(), 10);
+        assert_eq!(merchant.config().max_mint_per_payment(), 1_000_000);
         assert_eq!(merchant.config().invoice_ttl_ms(), 600_000);
+        assert_eq!(merchant.config().voucher_ttl_ms(), 600_000);
 
         test_scenario::return_shared(merchant);
         destroy(test_usd_cap);
@@ -71,6 +75,9 @@ fun add_listing_with_variants() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
         let listing_id = merchant.add_listing(&catalog_auth, listing);
+
+        // `ListingAdded` was emitted with the listing ID.
+        assert_emitted!(events::listing_added(listing_id));
 
         let stored = merchant.listing(listing_id);
         assert_eq!(*stored.name(), b"Coffee".to_string());
@@ -134,6 +141,9 @@ fun remove_listing_drops_variant_index() {
         let listing_id = merchant.add_listing(&catalog_auth, listing);
         merchant.remove_listing(&catalog_auth, listing_id);
 
+        // `ListingRemoved` was emitted with the listing ID.
+        assert_emitted!(events::listing_removed(listing_id));
+
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
         destroy(test_usd_cap);
@@ -167,6 +177,9 @@ fun add_listing_variant_via_merchant() {
             scenario.ctx(),
         );
         let vid = merchant.add_listing_variant(&catalog_auth, listing_id, variant);
+
+        // `VariantAdded` was emitted with the parent listing + new variant IDs.
+        assert_emitted!(events::variant_added(listing_id, vid));
 
         let v_ref = merchant.listing_variant(&vid);
         assert_eq!(v_ref.price(), 700);
@@ -208,6 +221,9 @@ fun remove_listing_variant_via_merchant() {
 
         merchant.remove_listing_variant(&catalog_auth, vid);
 
+        // `VariantRemoved` was emitted with the parent listing + removed variant IDs.
+        assert_emitted!(events::variant_removed(listing_id, vid));
+
         let stored = merchant.listing(listing_id);
         assert!(!stored.variants().contains(&vid));
 
@@ -241,9 +257,13 @@ fun set_listing_status_toggles() {
 
         merchant.set_listing_status(&catalog_auth, listing_id, false);
         assert!(!merchant.listing(listing_id).active());
+        // `ListingStatusChanged` was emitted for the deactivation.
+        assert_emitted!(events::listing_status_changed(listing_id, false));
 
         merchant.set_listing_status(&catalog_auth, listing_id, true);
         assert!(merchant.listing(listing_id).active());
+        // ...and for the reactivation.
+        assert_emitted!(events::listing_status_changed(listing_id, true));
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);

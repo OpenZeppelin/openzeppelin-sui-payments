@@ -15,7 +15,7 @@ use openzeppelin_payments::merchant::{
     MerchantRole
 };
 use openzeppelin_payments::receipt;
-use openzeppelin_payments::test_helpers;
+use openzeppelin_payments::test_helpers::assert_emitted;
 use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::account::{Self, Account};
 use pas::e2e;
@@ -127,6 +127,9 @@ fun redemption_happy_path() {
             scenario.ctx(),
         );
 
+        // `VoucherCreated` was emitted with the issuance ID (same tx as create_voucher).
+        assert_emitted!(events::voucher_created(voucher_id));
+
         // Merchant redeems. Capture LOYALTY supply before/after to confirm
         // the redeem path actually burns from the TreasuryCap-tracked supply.
         scenario.next_tx(ADMIN);
@@ -136,9 +139,7 @@ fun redemption_happy_path() {
         assert!(supply_before - supply_after == 50, 0);
 
         // `VoucherRedeemed` was emitted with the expected payload.
-        test_helpers::assert_emitted!(
-            events::voucher_redeemed_for_testing(voucher_id, CUSTOMER, 50, 1_000_000),
-        );
+        assert_emitted!(events::voucher_redeemed(voucher_id, CUSTOMER, 50, 1_000_000));
 
         // Receipt is stored in the merchant's receipt table, keyed by voucher id.
         let r = merchant.voucher_receipt(voucher_id);
@@ -293,9 +294,7 @@ fun cancel_voucher_returns_funds() {
         merchant.cancel_voucher(voucher_id, &customer_account_shared, &test_clock);
 
         // `VoucherCanceled` was emitted with the expected payload.
-        test_helpers::assert_emitted!(
-            events::voucher_canceled_for_testing(voucher_id, CUSTOMER, 50),
-        );
+        assert_emitted!(events::voucher_canceled(voucher_id, CUSTOMER, 50));
 
         test_setup::return_loyalty_policy(loyalty_policy);
         test_scenario::return_shared(merchant);

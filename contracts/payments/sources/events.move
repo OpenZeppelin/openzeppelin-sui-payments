@@ -239,7 +239,7 @@ public(package) fun emit_display_changed() {
 // === Test-Only Helpers ===
 
 #[test_only]
-public fun invoice_paid_for_testing(
+public fun invoice_paid(
     invoice_id: ID,
     order_ref: vector<u8>,
     customer: address,
@@ -251,7 +251,7 @@ public fun invoice_paid_for_testing(
 }
 
 #[test_only]
-public fun voucher_redeemed_for_testing(
+public fun voucher_redeemed(
     voucher_id: ID,
     customer: address,
     amount: u64,
@@ -261,7 +261,7 @@ public fun voucher_redeemed_for_testing(
 }
 
 #[test_only]
-public fun invoice_canceled_for_testing(
+public fun invoice_canceled(
     invoice_id: ID,
     payout_address: address,
     payment_type: TypeName,
@@ -272,10 +272,41 @@ public fun invoice_canceled_for_testing(
 }
 
 #[test_only]
-public fun voucher_canceled_for_testing(
-    voucher_id: ID,
-    customer: address,
-    amount: u64,
-): VoucherCanceled {
+public fun voucher_canceled(voucher_id: ID, customer: address, amount: u64): VoucherCanceled {
     VoucherCanceled { voucher_id, customer, amount }
+}
+
+#[test_only]
+public fun invoice_created(invoice_id: ID): InvoiceCreated {
+    InvoiceCreated { invoice_id }
+}
+
+#[test_only]
+public fun voucher_created(voucher_id: ID): VoucherCreated {
+    VoucherCreated { voucher_id }
+}
+
+#[test_only]
+public fun listing_added(listing_id: ID): ListingAdded {
+    ListingAdded { listing_id }
+}
+
+#[test_only]
+public fun listing_removed(listing_id: ID): ListingRemoved {
+    ListingRemoved { listing_id }
+}
+
+#[test_only]
+public fun listing_status_changed(listing_id: ID, active: bool): ListingStatusChanged {
+    ListingStatusChanged { listing_id, active }
+}
+
+#[test_only]
+public fun variant_added(listing_id: ID, variant_id: ID): VariantAdded {
+    VariantAdded { listing_id, variant_id }
+}
+
+#[test_only]
+public fun variant_removed(listing_id: ID, variant_id: ID): VariantRemoved {
+    VariantRemoved { listing_id, variant_id }
 }

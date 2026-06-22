@@ -15,7 +15,7 @@ use openzeppelin_payments::merchant::{
     MerchantRole
 };
 use openzeppelin_payments::receipt;
-use openzeppelin_payments::test_helpers;
+use openzeppelin_payments::test_helpers::assert_emitted;
 use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::account::{Self, Account};
 use pas::e2e;
@@ -94,6 +94,10 @@ fun payment_happy_path() {
             type_name::with_defining_ids<TEST_USD>(),
         );
 
+        // `InvoiceCreated` was emitted with the issuance ID (asserted in the same tx
+        // as `create_invoice`, before `next_tx`).
+        assert_emitted!(events::invoice_created(invoice_id));
+
         // Customer flow: take shared things, build send_funds, approve, pay.
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -120,8 +124,8 @@ fun payment_happy_path() {
         );
 
         // `InvoicePaid` was emitted with the expected payload.
-        test_helpers::assert_emitted!(
-            events::invoice_paid_for_testing(
+        assert_emitted!(
+            events::invoice_paid(
                 invoice_id,
                 b"order-001",
                 CUSTOMER,
@@ -283,8 +287,8 @@ fun cancel_after_expiry_destroys_invoice() {
         merchant.cancel_invoice(invoice_id, &test_clock);
 
         // `InvoiceCanceled` was emitted with the expected payload.
-        test_helpers::assert_emitted!(
-            events::invoice_canceled_for_testing(
+        assert_emitted!(
+            events::invoice_canceled(
                 invoice_id,
                 PAYOUT,
                 type_name::with_defining_ids<TEST_USD>(),
@@ -1228,8 +1232,8 @@ fun pay_with_coin_happy_path() {
             &test_clock,
         );
 
-        test_helpers::assert_emitted!(
-            events::invoice_paid_for_testing(
+        assert_emitted!(
+            events::invoice_paid(
                 invoice_id,
                 b"order-001",
                 CUSTOMER,

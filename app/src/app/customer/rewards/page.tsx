@@ -2,7 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
-import { Minus, Plus, Gift } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Minus, Plus, Gift, RotateCcw, ScanLine } from "lucide-react";
+import { toast } from "sonner";
 
 import { QrDisplay } from "@/components/shared/qr-display";
 import { Badge } from "@/components/ui/badge";
@@ -15,13 +17,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { qk, useBalances, useListings } from "@/hooks/queries";
+import { qk, useBalances, useListings, useMyOpenVouchers } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
 import { buildAccountNewAuth, buildUnlockBalance } from "@/lib/move/pas";
 import { buildCreateVoucher } from "@/lib/move/redemption";
-import { formatAmount } from "@/lib/utils";
+import { formatAmount, shortAddr } from "@/lib/utils";
+import type { Voucher } from "@/lib/move/types";
 
 interface CartLine {
   variantId: string;
@@ -36,8 +39,10 @@ export default function RewardsPage() {
   const customerPas = usePasAccount(account?.address);
   const balances = useBalances(customerPas.data ?? null, [deployment.loyaltyType]);
   const { data: listings = [], isLoading } = useListings();
+  const openVouchers = useMyOpenVouchers(account?.address);
   const [cart, setCart] = useState<Map<string, CartLine>>(new Map());
   const [voucherId, setVoucherId] = useState<string | null>(null);
+  const [showingVoucher, setShowingVoucher] = useState<string | null>(null);
 
   const redeemable = useMemo(
     () =>
@@ -132,6 +137,25 @@ export default function RewardsPage() {
           <strong>{formatAmount(loyaltyBalance, 0)} LOY</strong>
         </div>
       </header>
+
+      {openVouchers.data && openVouchers.data.length > 0 ? (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle>Your open vouchers</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="divide-y divide-[color:var(--color-border)]">
+              {openVouchers.data.map((v) => (
+                <OpenVoucherRow
+                  key={v.id}
+                  voucher={v}
+                  onShow={(id) => setShowingVoucher(id)}
+                />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {isLoading ? (
         <p className="text-sm text-[color:var(--color-muted-foreground)]">Loading listings…</p>
@@ -243,6 +267,107 @@ export default function RewardsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Re-show an already-created voucher's QR when the customer clicks Show */}
+      <Dialog open={Boolean(showingVoucher)} onOpenChange={(o) => !o && setShowingVoucher(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Voucher</DialogTitle>
+            <DialogDescription>
+              Show this to the merchant to redeem.
+            </DialogDescription>
+          </DialogHeader>
+          {showingVoucher ? <QrDisplay value={showingVoucher} label="Voucher ID" /> : null}
+          <div className="flex justify-end">
+            <Button variant="ghost" onClick={() => setShowingVoucher(null)}>
+              Done
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </section>
+  );
+}
+
+/** One row in "Your open vouchers" — expired vouchers get a Reclaim button. */
+function OpenVoucherRow({
+  voucher,
+  onShow,
+}: {
+  voucher: Voucher;
+  onShow: (voucherId: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const now = BigInt(Date.now());
+  const expired = voucher.expiresAtMs <= now;
+  const when = new Date(Number(voucher.expiresAtMs)).toLocaleString();
+
+  const reclaim = useMutation({
+    mutationFn: async (id: string) => {
+      const resp = await fetch("/api/cancel-voucher", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voucherId: id }),
+      });
+      if (!resp.ok) {
+        const err = (await resp.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(err?.error ?? `reclaim failed (${resp.status})`);
+      }
+      return (await resp.json()) as { digest: string };
+    },
+    onSuccess: async () => {
+      toast.success(`Reclaimed ${voucher.amount.toString()} LOY`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["my-open-vouchers", voucher.customer] }),
+        // Partial-key invalidation — catches any `["balances", <accountId>, ...]`
+        // regardless of the coinTypes tail.
+        queryClient.invalidateQueries({ queryKey: ["balances"] }),
+        queryClient.invalidateQueries({
+          queryKey: qk.events(`${deployment.packageId}::events::VoucherCanceled`),
+        }),
+      ]);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Reclaim failed");
+    },
+  });
+
+  return (
+    <div className="flex items-center justify-between gap-4 py-3">
+      <div className="flex items-center gap-3">
+        {expired ? (
+          <Badge variant="destructive">Expired</Badge>
+        ) : (
+          <Badge variant="accent">Open</Badge>
+        )}
+        <div>
+          <div className="text-sm font-medium">{voucher.amount.toString()} LOY locked</div>
+          <div className="text-xs text-[color:var(--color-muted-foreground)]">
+            {voucher.items.length} item{voucher.items.length === 1 ? "" : "s"} ·{" "}
+            <span className="font-mono">{shortAddr(voucher.id, 6)}</span>
+            {" · "}
+            {expired ? `expired ${when}` : `valid until ${when}`}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        {!expired ? (
+          <Button size="sm" variant="outline" onClick={() => onShow(voucher.id)}>
+            <ScanLine className="h-4 w-4" />
+            Show
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => reclaim.mutate(voucher.id)}
+            disabled={reclaim.isPending}
+          >
+            <RotateCcw className="h-4 w-4" />
+            {reclaim.isPending ? "Reclaiming…" : "Reclaim LOY"}
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }

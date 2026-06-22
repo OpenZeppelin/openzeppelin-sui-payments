@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Minus, Plus, ShoppingCart } from "lucide-react";
+import { Minus, Plus, ShoppingCart, X } from "lucide-react";
 
 import { AddListingDialog } from "@/components/merchant/add-listing-dialog";
+import { ListingActions } from "@/components/merchant/listing-actions";
 import { QrDisplay } from "@/components/shared/qr-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import { qk, useListings } from "@/hooks/queries";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { buildCreateInvoice } from "@/lib/move/payment";
+import { buildRemoveListingVariant } from "@/lib/move/merchant";
 import { deployment } from "@/lib/deployment";
 import { STABLECOIN_DECIMALS, formatAmount } from "@/lib/utils";
 
@@ -37,6 +39,13 @@ export default function CataloguePage() {
   const [cart, setCart] = useState<Map<string, CartLine>>(new Map());
   const [orderRef, setOrderRef] = useState("");
   const [invoiceId, setInvoiceId] = useState<string | null>(null);
+
+  // Single mutation reused for every variant remove (the cart entry, if any,
+  // is cleared optimistically). Sponsored so the merchant doesn't pay gas.
+  const removeVariant = useSponsoredMutation<string>(
+    (tx, variantId) => buildRemoveListingVariant(tx, variantId),
+    { invalidate: [qk.listings()], successMessage: null },
+  );
 
   function adjust(line: Omit<CartLine, "quantity">, delta: number) {
     setCart((prev) => {
@@ -110,9 +119,12 @@ export default function CataloguePage() {
           {listings.map((listing) => (
             <Card key={listing.id}>
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>{listing.name}</CardTitle>
-                  {listing.active ? null : <Badge variant="muted">Inactive</Badge>}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <CardTitle>{listing.name}</CardTitle>
+                    {listing.active ? null : <Badge variant="muted">Inactive</Badge>}
+                  </div>
+                  <ListingActions listing={listing} />
                 </div>
               </CardHeader>
               <CardContent className="flex flex-col gap-2">
@@ -176,6 +188,30 @@ export default function CataloguePage() {
                             disabled={!listing.active}
                           >
                             <Plus className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title="Remove variant"
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `Remove "${v.name}" from "${listing.name}"?`,
+                                )
+                              ) {
+                                // Clear from cart first so a stale entry can't
+                                // be checked out after the remove confirms.
+                                setCart((prev) => {
+                                  const next = new Map(prev);
+                                  next.delete(v.id);
+                                  return next;
+                                });
+                                removeVariant.mutate(v.id);
+                              }
+                            }}
+                            disabled={removeVariant.isPending}
+                          >
+                            <X className="h-4 w-4 text-[color:var(--color-destructive)]" />
                           </Button>
                         </div>
                       </div>

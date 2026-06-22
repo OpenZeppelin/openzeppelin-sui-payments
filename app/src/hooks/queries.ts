@@ -150,6 +150,88 @@ export function useVoucher(id: string | null | undefined) {
 }
 
 /**
+ * Enumerates *open* vouchers (still in `merchant.vouchers`) belonging to a
+ * specific customer address. `VoucherCreated` events only carry `voucher_id`
+ * — they don't index by customer — so we read the table and filter client-side.
+ * Cheap for demo volumes, would need indexing service at scale.
+ */
+export function useMyOpenVouchers(customerAddress: string | null | undefined) {
+  const client = useSuiClient();
+  const merchantQuery = useMerchant();
+  const vouchersTableId = merchantQuery.data?.vouchersTableId;
+  return useQuery({
+    queryKey: ["my-open-vouchers", customerAddress ?? ""],
+    enabled: Boolean(customerAddress) && Boolean(vouchersTableId),
+    queryFn: async (): Promise<Voucher[]> => {
+      const out: Voucher[] = [];
+      let cursor: string | null = null;
+      do {
+        const page = await client.getDynamicFields({
+          parentId: vouchersTableId!,
+          cursor: cursor ?? undefined,
+        });
+        const objects = await Promise.all(
+          page.data.map((f) =>
+            client.getDynamicFieldObject({
+              parentId: vouchersTableId!,
+              name: f.name,
+            }),
+          ),
+        );
+        for (const o of objects) {
+          const content = (o.data?.content ?? null) as any;
+          if (!content?.fields?.value) continue;
+          const key = content.fields.name as string;
+          const v = parseVoucher(key, { fields: content.fields.value.fields });
+          if (v.customer === customerAddress) out.push(v);
+        }
+        cursor = page.hasNextPage ? page.nextCursor : null;
+      } while (cursor);
+      out.sort((a, b) => Number(b.expiresAtMs - a.expiresAtMs));
+      return out;
+    },
+  });
+}
+
+/**
+ * Enumerates the keys (= settled invoice/voucher ids) of all receipts currently
+ * stored on the merchant. Used by the "Prune receipts" button to know how many
+ * there are and which ids to pass into `prune_*_receipts`.
+ */
+export function useStoredReceipts() {
+  const client = useSuiClient();
+  const merchantQuery = useMerchant();
+  const inv = merchantQuery.data?.invoiceReceiptsTableId;
+  const vou = merchantQuery.data?.voucherReceiptsTableId;
+  return useQuery({
+    queryKey: ["stored-receipts", inv ?? "", vou ?? ""],
+    enabled: Boolean(inv) && Boolean(vou),
+    queryFn: async (): Promise<{ invoice: string[]; voucher: string[] }> => {
+      const enumerate = async (parentId: string): Promise<string[]> => {
+        const keys: string[] = [];
+        let cursor: string | null = null;
+        do {
+          const page = await client.getDynamicFields({
+            parentId,
+            cursor: cursor ?? undefined,
+          });
+          for (const f of page.data) {
+            // For a `Table<ID, V>` the dynamic field name carries the key
+            // as `{ type: "0x2::object::ID", value: "0x.." }`.
+            const name = f.name as { value?: string } | undefined;
+            if (name?.value) keys.push(name.value);
+          }
+          cursor = page.hasNextPage ? (page.nextCursor ?? null) : null;
+        } while (cursor);
+        return keys;
+      };
+      const [invoice, voucher] = await Promise.all([enumerate(inv!), enumerate(vou!)]);
+      return { invoice, voucher };
+    },
+  });
+}
+
+/**
  * Look up the stored payment receipt for a settled invoice. Returns null when
  * no receipt is stored (invoice was canceled, not paid; or receipt was pruned).
  */

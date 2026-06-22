@@ -9,9 +9,14 @@ import { InvoiceQrButton } from "@/components/merchant/invoice-qr-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { qk, useEvents, useInvoice } from "@/hooks/queries";
+import { qk, useEvents, useInvoice, useStoredReceipts, useVoucher } from "@/hooks/queries";
+import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
+import { buildPruneInvoiceReceipts } from "@/lib/move/payment";
+import { buildPruneVoucherReceipts } from "@/lib/move/redemption";
 import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
+
+const PRUNE_BATCH_SIZE = 50;
 
 type EventName =
   | "InvoiceCreated"
@@ -68,6 +73,14 @@ export default function TransactionsPage() {
     ]);
   }, [paid.data, invCx.data]);
 
+  /** Voucher ids that have reached a terminal state (redeemed or canceled). */
+  const terminatedVoucherIds = useMemo(() => {
+    return new Set([
+      ...(redeemed.data ?? []).map((e) => e.parsed.voucher_id as string),
+      ...(vouCx.data ?? []).map((e) => e.parsed.voucher_id as string),
+    ]);
+  }, [redeemed.data, vouCx.data]);
+
   const feed = useMemo<FeedRow[]>(() => {
     const all = [
       ...rowsFrom("InvoiceCreated", invCreated.data ?? []),
@@ -91,11 +104,14 @@ export default function TransactionsPage() {
 
   return (
     <section>
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold">Transactions</h1>
-        <p className="text-sm text-[color:var(--color-muted-foreground)]">
-          On-chain events grouped by lifecycle (open / settled / canceled).
-        </p>
+      <header className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Transactions</h1>
+          <p className="text-sm text-[color:var(--color-muted-foreground)]">
+            On-chain events grouped by lifecycle (open / settled / canceled).
+          </p>
+        </div>
+        <PruneReceiptsButton />
       </header>
 
       {isLoading ? (
@@ -118,6 +134,13 @@ export default function TransactionsPage() {
                     invoiceId={row.data.invoice_id as string}
                     timestampMs={row.timestampMs}
                     terminated={terminatedInvoiceIds.has(row.data.invoice_id as string)}
+                  />
+                ) : row.name === "VoucherCreated" ? (
+                  <OpenVoucherRow
+                    key={row.digest}
+                    voucherId={row.data.voucher_id as string}
+                    timestampMs={row.timestampMs}
+                    terminated={terminatedVoucherIds.has(row.data.voucher_id as string)}
                   />
                 ) : (
                   <FeedRowView key={row.digest} row={row} />
@@ -235,6 +258,107 @@ function OpenInvoiceRow({
   );
 }
 
+/**
+ * Renders a `VoucherCreated` row enriched with live data from the Voucher stored
+ * on `merchant.vouchers`. Mirrors `OpenInvoiceRow` but with `cancel_voucher` (which
+ * needs the customer's PAS account — the server route resolves that from the
+ * voucher's `customer` field).
+ */
+function OpenVoucherRow({
+  voucherId,
+  timestampMs,
+  terminated,
+}: {
+  voucherId: string;
+  timestampMs: bigint;
+  terminated: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const voucher = useVoucher(terminated ? null : voucherId);
+
+  const now = BigInt(Date.now());
+  const expired = Boolean(voucher.data && voucher.data.expiresAtMs <= now);
+
+  const status = terminated ? "closed" : expired ? "expired" : "open";
+  const badge: { label: string; variant: "outline" | "destructive" | "accent" } =
+    status === "closed"
+      ? { label: "Voucher closed", variant: "accent" }
+      : status === "expired"
+      ? { label: "Expired", variant: "destructive" }
+      : { label: "Voucher open", variant: "outline" };
+
+  const remove = useMutation({
+    mutationFn: async (id: string) => {
+      const resp = await fetch("/api/cancel-voucher", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voucherId: id }),
+      });
+      if (!resp.ok) {
+        const err = (await resp.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(err?.error ?? `remove failed (${resp.status})`);
+      }
+      return (await resp.json()) as { digest: string };
+    },
+    onSuccess: async () => {
+      toast.success("Expired voucher canceled — LOY refunded to customer");
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: qk.events(`${deployment.packageId}::events::VoucherCanceled`),
+        }),
+        queryClient.invalidateQueries({ queryKey: qk.voucher(voucherId) }),
+      ]);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Remove failed");
+    },
+  });
+
+  const when = timestampMs ? new Date(Number(timestampMs)).toLocaleString() : "—";
+
+  return (
+    <div className="flex items-center justify-between gap-4 py-3">
+      <div className="flex items-center gap-3">
+        <Badge variant={badge.variant}>{badge.label}</Badge>
+        <div>
+          {voucher.data ? (
+            <>
+              <div className="text-sm font-medium">
+                {voucher.data.amount.toString()} LOY locked
+              </div>
+              <div className="text-xs text-[color:var(--color-muted-foreground)]">
+                {voucher.data.items.length} item
+                {voucher.data.items.length === 1 ? "" : "s"} ·{" "}
+                <span className="font-mono">{shortAddr(voucher.data.customer, 6)}</span>
+              </div>
+            </>
+          ) : voucher.isLoading ? (
+            <div className="text-sm text-[color:var(--color-muted-foreground)]">Loading…</div>
+          ) : (
+            <div className="text-sm text-[color:var(--color-muted-foreground)] font-mono">
+              {shortAddr(voucherId, 6)}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        {status === "expired" ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => remove.mutate(voucherId)}
+            disabled={remove.isPending}
+          >
+            <Trash2 className="h-4 w-4" />
+            {remove.isPending ? "Removing…" : "Remove expired"}
+          </Button>
+        ) : null}
+        <div className="text-xs text-[color:var(--color-muted-foreground)]">{when}</div>
+      </div>
+    </div>
+  );
+}
+
 /** Renders any feed row that doesn't need enrichment (events with full payload). */
 function FeedRowView({ row }: { row: FeedRow }) {
   const v = variants[row.name];
@@ -271,5 +395,56 @@ function FeedRowView({ row }: { row: FeedRow }) {
       </div>
       <div className="text-xs text-[color:var(--color-muted-foreground)]">{when}</div>
     </div>
+  );
+}
+
+/**
+ * Reads receipt-table sizes from chain, shows a "Prune N receipts" button when
+ * there's anything to clean up. One click prunes up to PRUNE_BATCH_SIZE of each
+ * kind in a single PTB — for larger backlogs the merchant clicks again.
+ */
+function PruneReceiptsButton() {
+  const stored = useStoredReceipts();
+  const queryClient = useQueryClient();
+
+  const prune = useSponsoredMutation<{ invoiceIds: string[]; voucherIds: string[] }>(
+    (tx, args) => {
+      if (args.invoiceIds.length > 0) buildPruneInvoiceReceipts(tx, args.invoiceIds);
+      if (args.voucherIds.length > 0) buildPruneVoucherReceipts(tx, args.voucherIds);
+    },
+    {
+      invalidate: [["stored-receipts"]],
+      successMessage: "Receipts pruned",
+    },
+  );
+
+  const invoiceIds = stored.data?.invoice ?? [];
+  const voucherIds = stored.data?.voucher ?? [];
+  const total = invoiceIds.length + voucherIds.length;
+  if (total === 0) return null;
+
+  // Cap each batch so we don't exceed PTB size with a backlog of hundreds.
+  const batch = {
+    invoiceIds: invoiceIds.slice(0, PRUNE_BATCH_SIZE),
+    voucherIds: voucherIds.slice(0, PRUNE_BATCH_SIZE),
+  };
+  const batchSize = batch.invoiceIds.length + batch.voucherIds.length;
+  const hasMore = total > batchSize;
+
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={() => prune.mutate(batch)}
+      disabled={prune.isPending}
+      title="Reclaim storage rebate for settled receipts. Canonical record stays in `InvoicePaid`/`VoucherRedeemed` events."
+    >
+      <Trash2 className="h-4 w-4" />
+      {prune.isPending
+        ? "Pruning…"
+        : hasMore
+        ? `Prune ${batchSize} of ${total} receipts`
+        : `Prune ${total} receipts`}
+    </Button>
   );
 }

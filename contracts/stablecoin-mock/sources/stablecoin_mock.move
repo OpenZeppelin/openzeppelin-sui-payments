@@ -1,11 +1,16 @@
+/// WARNING — DEVNET/TESTNET ONLY. Do NOT publish this package to mainnet, and never set a
+/// production `Merchant`'s `accepted_payment_type` to `STABLECOIN_MOCK`. The supply is freely
+/// mintable (`faucet` / `faucet_coin`) and transfers are freely approvable (the permissive
+/// `TransferApproval`), so settling a real invoice in this currency would be worthless.
+/// Production deployments instantiate `payment::pay<S>` with a real PAS-issued stablecoin.
+///
 /// Mock PAS-managed stablecoin for dev/testnet. The customer holds `Balance<STABLECOIN_MOCK>`
-/// in their PAS `Account` and transfers it via PAS `send_funds`. Production deployments
-/// instantiate `payment::pay<S>` with a real PAS-issued stablecoin; this mock just lets
-/// the template's payment flow be exercised end-to-end without an external issuer.
+/// in their PAS `Account` and transfers it via PAS `send_funds`. This mock just lets the
+/// template's payment flow be exercised end-to-end without an external issuer.
 ///
 /// Two-step deployment (parallels `loyalty.move`):
-///   1. Publish → `init` creates the Sui currency + metadata, transfers `TreasuryCap` to
-///      the deployer.
+///   1. Publish → `init` registers the Sui currency and transfers the `TreasuryCap` and
+///      `MetadataCap` to the deployer (the `MetadataCap` is owned, NOT frozen — see `init`).
 ///   2. Deployer calls `setup(&mut namespace, &mut treasury_cap, &mut templates, ctx)` to
 ///      create `Policy<Balance<STABLECOIN_MOCK>>`, register the permissive `TransferApproval`
 ///      witness for `send_funds`, and register a PTB template (in the shared PAS
@@ -24,7 +29,6 @@ use pas::request::Request;
 use pas::send_funds::SendFunds;
 use pas::templates::{PAS, Templates};
 use ptb::ptb;
-use std::internal;
 use std::type_name;
 use sui::balance::Balance;
 use sui::coin::{Self, Coin, TreasuryCap};
@@ -45,8 +49,9 @@ fun init(otw: STABLECOIN_MOCK, ctx: &mut TxContext) {
         b"".to_string(),
         ctx,
     );
-    let metadata = initializer.finalize(ctx);
-    transfer::public_freeze_object(metadata);
+
+    let metadata_cap = initializer.finalize(ctx);
+    transfer::public_transfer(metadata_cap, ctx.sender());
     transfer::public_transfer(cap, ctx.sender());
 }
 

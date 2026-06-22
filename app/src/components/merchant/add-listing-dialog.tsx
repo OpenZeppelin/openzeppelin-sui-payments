@@ -18,6 +18,7 @@ import { qk } from "@/hooks/queries";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { buildAddListing, buildAddListingVariant } from "@/lib/move/merchant";
 import { buildNewListing, buildNewVariant } from "@/lib/move/listing";
+import { STABLECOIN_DECIMALS, toBaseUnits } from "@/lib/utils";
 
 interface FormState {
   name: string;
@@ -32,13 +33,16 @@ export function AddListingDialog() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<FormState>(empty);
 
-  const addListing = useSponsoredMutation(
-    (tx, args: FormState) => {
+  const addListing = useSponsoredMutation<FormState>(
+    (tx, args) => {
       // 1. Build the listing + the first variant as PTB values.
+      // Stablecoin price is entered as a decimal ("500" or "5.50") and
+      // converted to u64 base units before storage. Loyalty price is a
+      // whole-unit count (LOY has no fractional component).
       const listing = buildNewListing(tx, args.name);
       const variant = buildNewVariant(tx, {
         name: args.variantName,
-        price: BigInt(args.price),
+        price: toBaseUnits(args.price, STABLECOIN_DECIMALS),
         loyaltyPrice: args.loyaltyPrice ? BigInt(args.loyaltyPrice) : null,
       });
       // 2. Store the listing on the Merchant and capture its runtime id.
@@ -101,14 +105,14 @@ export function AddListingDialog() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="al-price">Price (stablecoin units)</Label>
+              <Label htmlFor="al-price">Price (USD)</Label>
               <Input
                 id="al-price"
-                type="number"
-                min="1"
+                type="text"
+                inputMode="decimal"
                 value={form.price}
                 onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
-                placeholder="500"
+                placeholder="5.00"
                 required
               />
             </div>

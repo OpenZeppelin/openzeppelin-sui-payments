@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from "react";
 import { Minus, Plus, ShoppingCart } from "lucide-react";
-import type { SuiObjectChange } from "@mysten/sui/client";
 
 import { AddListingDialog } from "@/components/merchant/add-listing-dialog";
 import { QrDisplay } from "@/components/shared/qr-display";
@@ -20,8 +19,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { qk, useListings } from "@/hooks/queries";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
-import { buildPaymentNewAndShare } from "@/lib/move/payment";
+import { buildCreateInvoice } from "@/lib/move/payment";
 import { deployment } from "@/lib/deployment";
+import { STABLECOIN_DECIMALS, formatAmount } from "@/lib/utils";
 
 interface CartLine {
   variantId: string;
@@ -56,9 +56,9 @@ export default function CataloguePage() {
   );
   const totalQty = useMemo(() => lines.reduce((acc, l) => acc + l.quantity, 0), [lines]);
 
-  const createSale = useSponsoredMutation(
-    (tx, args: { lines: CartLine[]; orderRef: string }) => {
-      buildPaymentNewAndShare(tx, {
+  const createSale = useSponsoredMutation<{ lines: CartLine[]; orderRef: string }>(
+    (tx, args) => {
+      buildCreateInvoice(tx, {
         variantIds: args.lines.map((l) => l.variantId),
         quantities: args.lines.map((l) => BigInt(l.quantity)),
         orderRef: args.orderRef,
@@ -75,12 +75,13 @@ export default function CataloguePage() {
       lines,
       orderRef: orderRef || `order-${Date.now()}`,
     });
-    const invoiceType = `${deployment.packageId}::payment::Invoice`;
-    const created = (result.objectChanges ?? []).find(
-      (c: SuiObjectChange) => c.type === "created" && c.objectType === invoiceType,
-    );
-    if (created && "objectId" in created) {
-      setInvoiceId(created.objectId);
+    // Invoice is now stored inside Merchant.invoices keyed by a freshly-minted
+    // ID. The `InvoiceCreated` event carries that ID in `parsedJson.invoice_id`.
+    const invoiceCreatedType = `${deployment.packageId}::events::InvoiceCreated`;
+    const ev = (result.events ?? []).find((e) => e.type === invoiceCreatedType);
+    const newInvoiceId = (ev?.parsedJson as { invoice_id?: string } | undefined)?.invoice_id;
+    if (newInvoiceId) {
+      setInvoiceId(newInvoiceId);
       setCart(new Map());
       setOrderRef("");
     }
@@ -130,7 +131,7 @@ export default function CataloguePage() {
                         <div>
                           <div className="font-medium">{v.name}</div>
                           <div className="text-xs text-[color:var(--color-muted-foreground)]">
-                            {v.price.toString()} stable
+                            {formatAmount(v.price, STABLECOIN_DECIMALS)} USD
                             {v.loyaltyPrice ? ` · ${v.loyaltyPrice} LOY` : ""}
                           </div>
                         </div>
@@ -194,7 +195,8 @@ export default function CataloguePage() {
             <ShoppingCart className="h-5 w-5 text-[color:var(--color-primary)]" />
             <div className="flex-1">
               <div className="text-sm font-medium">
-                {totalQty} item{totalQty === 1 ? "" : "s"} · {total.toString()} stable
+                {totalQty} item{totalQty === 1 ? "" : "s"} ·{" "}
+                {formatAmount(total, STABLECOIN_DECIMALS)} USD
               </div>
               <div className="text-xs text-[color:var(--color-muted-foreground)]">
                 {lines.map((l) => `${l.quantity}× ${l.listingName} / ${l.variantName}`).join(", ")}

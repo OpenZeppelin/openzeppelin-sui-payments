@@ -9,7 +9,7 @@ import { sponsorAndExecute } from "@/lib/sponsored-tx";
 
 interface SponsorOptions {
   /** Optional query keys to invalidate after a successful tx. */
-  invalidate?: readonly unknown[][];
+  invalidate?: ReadonlyArray<ReadonlyArray<unknown>>;
   /** Optional gas budget (MIST). Defaults to the server's value. */
   gasBudget?: bigint;
   /** Optional success toast string; pass `null` to suppress. */
@@ -26,7 +26,7 @@ interface SponsorOptions {
  * Pages call this to fire any role-gated or customer-side write tx without
  * touching the sponsorship plumbing directly.
  */
-export function useSponsoredMutation<TArgs = void>(
+export function useSponsoredMutation<TArgs>(
   build: (tx: Transaction, args: TArgs) => void,
   opts: SponsorOptions = {},
 ) {

@@ -46,7 +46,7 @@ export async function sponsorAndExecute({
     onlyTransactionKind: true,
   });
 
-  // 2. Ask the server to sponsor it.
+  // 2. Ask the server to sponsor it: server attaches its gas data + signs.
   const resp = await fetch("/api/sponsor", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -65,15 +65,30 @@ export async function sponsorAndExecute({
     sponsorSignature: string;
   };
 
-  // 3. Sender signs the same bytes.
+  // 3. Sender signs the SAME bytes. Some wallets re-build the tx during
+  // signing and return slightly different bytes — if those bytes don't match
+  // what the sponsor signed, Sui rejects the submission with either a
+  // signature-count error ("Expect 1 signer signatures but got 2", when the
+  // wallet stripped the sponsor's gasData) or an invalid-signature error.
+  // Compare and fail fast with a clear message rather than letting Sui's
+  // validator produce a cryptic one.
   const fullTx = Transaction.from(fromBase64(txBytes));
-  const { signature: senderSignature } = await signTransaction({
+  const { bytes: signedBytes, signature: senderSignature } = await signTransaction({
     transaction: fullTx,
   });
+  if (signedBytes !== txBytes) {
+    throw new Error(
+      "Wallet re-built the sponsored transaction and changed its bytes. " +
+        "The sponsor's signature is no longer valid for what the wallet signed. " +
+        "Switch to a wallet that preserves the gas data of an already-built " +
+        "sponsored transaction (Slush, most Sui browser extensions). zkLogin " +
+        "wallets that auto-attach their own gas need the two-step sponsor flow.",
+    );
+  }
 
   // 4. Submit with both signatures.
   return client.executeTransactionBlock({
-    transactionBlock: txBytes,
+    transactionBlock: signedBytes,
     signature: [senderSignature, sponsorSignature],
     options: {
       showEffects: true,

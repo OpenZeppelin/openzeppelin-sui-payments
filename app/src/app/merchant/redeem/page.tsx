@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { qk, useVoucher } from "@/hooks/queries";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
-import { buildRedemptionRedeem } from "@/lib/move/redemption";
+import { buildRedeem } from "@/lib/move/redemption";
 import { deployment } from "@/lib/deployment";
 import { shortAddr } from "@/lib/utils";
 
@@ -25,9 +25,9 @@ export default function RedeemPage() {
   const [done, setDone] = useState<{ amount: bigint; customer: string } | null>(null);
   const voucher = useVoucher(voucherId);
 
-  const redeem = useSponsoredMutation(
-    (tx, args: { voucherId: string }) => {
-      buildRedemptionRedeem(tx, args.voucherId);
+  const redeem = useSponsoredMutation<{ voucherId: string }>(
+    (tx, args) => {
+      buildRedeem(tx, args.voucherId);
     },
     {
       invalidate: [

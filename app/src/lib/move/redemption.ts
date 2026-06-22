@@ -1,8 +1,4 @@
-import {
-  Transaction,
-  type TransactionArgument,
-  type TransactionResult,
-} from "@mysten/sui/transactions";
+import { Transaction, type TransactionArgument } from "@mysten/sui/transactions";
 
 import { deployment } from "@/lib/deployment";
 import { buildAcAuth } from "./auth";
@@ -10,19 +6,20 @@ import { buildAcAuth } from "./auth";
 const CLOCK_ID = "0x6";
 
 /**
- * `redemption::new(merchant, unlock_req, policy_loyalty, variant_ids, quantities, clock, ctx) -> Voucher`.
- * Caller must then `redemption::share(voucher)`.
+ * `merchant::create_voucher(self, unlock_req, policy_loyalty, variant_ids, quantities, clock, ctx) -> ID`.
+ * Customer-side voucher creation. The returned PTB argument is the voucher id
+ * (the QR value); the voucher itself is stored in `Merchant.vouchers`.
  */
-export function buildRedemptionNew(
+export function buildCreateVoucher(
   tx: Transaction,
   args: {
     unlockRequest: TransactionArgument;
     variantIds: string[];
     quantities: bigint[];
   },
-): TransactionResult {
+) {
   return tx.moveCall({
-    target: `${deployment.packageId}::redemption::new`,
+    target: `${deployment.packageId}::merchant::create_voucher`,
     arguments: [
       tx.object(deployment.merchantId),
       args.unlockRequest,
@@ -34,66 +31,47 @@ export function buildRedemptionNew(
   });
 }
 
-export function buildRedemptionShare(tx: Transaction, voucher: TransactionArgument): void {
-  tx.moveCall({
-    target: `${deployment.packageId}::redemption::share`,
-    arguments: [voucher],
-  });
-}
-
-export function buildRedemptionNewAndShare(
-  tx: Transaction,
-  args: {
-    unlockRequest: TransactionArgument;
-    variantIds: string[];
-    quantities: bigint[];
-  },
-): void {
-  const v = buildRedemptionNew(tx, args);
-  buildRedemptionShare(tx, v);
-}
-
-/** `redemption::redeem(voucher, &auth, merchant, clock, ctx)`. */
-export function buildRedemptionRedeem(tx: Transaction, voucherId: string): void {
+/** `merchant::redeem(self, &auth, voucher_id, clock)`. */
+export function buildRedeem(tx: Transaction, voucherId: string): void {
   const auth = buildAcAuth(tx, "CashierRole");
   tx.moveCall({
-    target: `${deployment.packageId}::redemption::redeem`,
+    target: `${deployment.packageId}::merchant::redeem`,
     arguments: [
-      tx.object(voucherId),
-      auth,
       tx.object(deployment.merchantId),
+      auth,
+      tx.pure.id(voucherId),
       tx.object(CLOCK_ID),
     ],
   });
 }
 
-/** `redemption::cancel(voucher, customer_loy_acct, clock)` — permissionless after expiry. */
-export function buildRedemptionCancel(
+/**
+ * `merchant::cancel_voucher(self, voucher_id, customer_loy_acct, clock)`. Permissionless
+ * after expiry — returns the locked LOYALTY balance to the customer's PAS account.
+ */
+export function buildCancelVoucher(
   tx: Transaction,
   args: { voucherId: string; customerLoyaltyAccountId: string },
 ): void {
   tx.moveCall({
-    target: `${deployment.packageId}::redemption::cancel`,
+    target: `${deployment.packageId}::merchant::cancel_voucher`,
     arguments: [
-      tx.object(args.voucherId),
+      tx.object(deployment.merchantId),
+      tx.pure.id(args.voucherId),
       tx.object(args.customerLoyaltyAccountId),
       tx.object(CLOCK_ID),
     ],
   });
 }
 
-/** `receipt::destroy<T>(receipt)` — customer-side cleanup. */
-export function buildDestroyReceipt(
-  tx: Transaction,
-  args: { receiptId: string; receiptType: "Payment" | "Redemption" },
-): void {
-  const payloadType =
-    args.receiptType === "Payment"
-      ? `${deployment.packageId}::receipt::Payment`
-      : `${deployment.packageId}::receipt::Redemption`;
+/**
+ * `merchant::prune_voucher_receipts(self, &auth, ids)` — MerchantRole-gated
+ * storage cleanup, mirror of `prune_invoice_receipts`.
+ */
+export function buildPruneVoucherReceipts(tx: Transaction, ids: string[]): void {
+  const auth = buildAcAuth(tx, "MerchantRole");
   tx.moveCall({
-    target: `${deployment.packageId}::receipt::destroy`,
-    typeArguments: [payloadType],
-    arguments: [tx.object(args.receiptId)],
+    target: `${deployment.packageId}::merchant::prune_voucher_receipts`,
+    arguments: [tx.object(deployment.merchantId), auth, tx.pure.vector("id", ids)],
   });
 }

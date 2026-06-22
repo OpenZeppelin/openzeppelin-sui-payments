@@ -5,8 +5,8 @@ import { deployment } from "@/lib/deployment";
 /**
  * `stablecoin_mock::approve_transfer(send_request)` — stamps the permissive
  * `TransferApproval` witness on a pending `Request<SendFunds<Balance<STABLE>>>`
- * so it can be resolved by the merchant's payment::pay call. Mutates the
- * request in place; the same arg can flow into `payment::pay` after.
+ * so it can be resolved by `merchant::pay`. Mutates the request in place; the
+ * same arg can flow into `merchant::pay` after.
  */
 export function buildApproveTransfer(tx: Transaction, sendRequest: TransactionArgument): void {
   tx.moveCall({

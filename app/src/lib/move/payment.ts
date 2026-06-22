@@ -1,8 +1,4 @@
-import {
-  Transaction,
-  type TransactionArgument,
-  type TransactionResult,
-} from "@mysten/sui/transactions";
+import { Transaction, type TransactionArgument } from "@mysten/sui/transactions";
 
 import { deployment } from "@/lib/deployment";
 import { buildAcAuth } from "./auth";
@@ -11,21 +7,21 @@ import { buildAcAuth } from "./auth";
 const CLOCK_ID = "0x6";
 
 /**
- * `payment::new(merchant, &auth, variant_ids, quantities, order_ref, clock, ctx) -> Invoice`.
- * Returned `Invoice` is by-value with no `drop`/`store` — caller must follow
- * up with `payment::share(invoice)` (see {@link buildPaymentShare}).
+ * `merchant::create_invoice(self, &auth, variant_ids, quantities, order_ref, clock, ctx) -> ID`.
+ * The returned PTB argument is the freshly-minted invoice id (the QR value).
+ * The invoice itself is stored inside `Merchant.invoices`, not a shared object.
  */
-export function buildPaymentNew(
+export function buildCreateInvoice(
   tx: Transaction,
   args: {
     variantIds: string[];
     quantities: bigint[];
     orderRef: string;
   },
-): TransactionResult {
+) {
   const auth = buildAcAuth(tx, "CashierRole");
   return tx.moveCall({
-    target: `${deployment.packageId}::payment::new`,
+    target: `${deployment.packageId}::merchant::create_invoice`,
     arguments: [
       tx.object(deployment.merchantId),
       auth,
@@ -37,29 +33,13 @@ export function buildPaymentNew(
   });
 }
 
-/** `payment::share(invoice)` — shares the freshly-built `Invoice`. */
-export function buildPaymentShare(tx: Transaction, invoice: TransactionArgument): void {
-  tx.moveCall({
-    target: `${deployment.packageId}::payment::share`,
-    arguments: [invoice],
-  });
-}
-
-/** Convenience: `new` + `share` chained. */
-export function buildPaymentNewAndShare(
-  tx: Transaction,
-  args: { variantIds: string[]; quantities: bigint[]; orderRef: string },
-): void {
-  const invoice = buildPaymentNew(tx, args);
-  buildPaymentShare(tx, invoice);
-}
-
 /**
- * `payment::pay<S>(invoice, merchant, send_req, policy_s, customer_loy_acct, clock, ctx)`.
- * The send_request must already be built + approved by the customer (see
- * `lib/move/pas.ts` and `lib/move/stablecoin.ts`).
+ * `merchant::pay<S>(self, invoice_id, send_request, policy_s, customer_loy_acct, clock)`.
+ * PAS-based settlement: the customer's `send_funds` request hands the stablecoin to
+ * the merchant's payout PAS account. The send request must already be built +
+ * approved (see `lib/move/pas.ts` and `lib/move/stablecoin.ts`).
  */
-export function buildPaymentPay(
+export function buildPay(
   tx: Transaction,
   args: {
     invoiceId: string;
@@ -68,11 +48,11 @@ export function buildPaymentPay(
   },
 ): void {
   tx.moveCall({
-    target: `${deployment.packageId}::payment::pay`,
+    target: `${deployment.packageId}::merchant::pay`,
     typeArguments: [deployment.stablecoinType],
     arguments: [
-      tx.object(args.invoiceId),
       tx.object(deployment.merchantId),
+      tx.pure.id(args.invoiceId),
       args.sendRequest,
       tx.object(deployment.stablecoinPolicyId),
       tx.object(args.customerLoyaltyAccountId),
@@ -81,10 +61,54 @@ export function buildPaymentPay(
   });
 }
 
-/** `payment::cancel(invoice, clock)` — permissionless after expiry. */
-export function buildPaymentCancel(tx: Transaction, invoiceId: string): void {
+/**
+ * `merchant::pay_with_coin<S>(self, invoice_id, coin, customer_loy_acct, clock)`.
+ * Open-loop settlement: hand over a plain `Coin<S>` and the merchant routes it to
+ * the payout address. Loyalty still credits `customer_loyalty_account`. The
+ * receipt's `customer` is whoever owns the loyalty account, not a proven payer.
+ */
+export function buildPayWithCoin(
+  tx: Transaction,
+  args: {
+    invoiceId: string;
+    coin: TransactionArgument;
+    customerLoyaltyAccountId: string;
+  },
+): void {
   tx.moveCall({
-    target: `${deployment.packageId}::payment::cancel`,
-    arguments: [tx.object(invoiceId), tx.object(CLOCK_ID)],
+    target: `${deployment.packageId}::merchant::pay_with_coin`,
+    typeArguments: [deployment.stablecoinType],
+    arguments: [
+      tx.object(deployment.merchantId),
+      tx.pure.id(args.invoiceId),
+      args.coin,
+      tx.object(args.customerLoyaltyAccountId),
+      tx.object(CLOCK_ID),
+    ],
+  });
+}
+
+/** `merchant::cancel_invoice(self, invoice_id, clock)` — permissionless after expiry. */
+export function buildCancelInvoice(tx: Transaction, invoiceId: string): void {
+  tx.moveCall({
+    target: `${deployment.packageId}::merchant::cancel_invoice`,
+    arguments: [
+      tx.object(deployment.merchantId),
+      tx.pure.id(invoiceId),
+      tx.object(CLOCK_ID),
+    ],
+  });
+}
+
+/**
+ * `merchant::prune_invoice_receipts(self, &auth, ids)` — MerchantRole-gated
+ * storage cleanup. Receipts are redundant with `InvoicePaid` events so pruning
+ * loses no canonical history.
+ */
+export function buildPruneInvoiceReceipts(tx: Transaction, ids: string[]): void {
+  const auth = buildAcAuth(tx, "MerchantRole");
+  tx.moveCall({
+    target: `${deployment.packageId}::merchant::prune_invoice_receipts`,
+    arguments: [tx.object(deployment.merchantId), auth, tx.pure.vector("id", ids)],
   });
 }

@@ -64,6 +64,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const sponsorAddr = sponsor.toSuiAddress();
   const client = new SuiClient({ url: networkConfig[NETWORK].url });
 
+  // Sui considers a transaction "sponsored" only when `gas_data.owner != sender`.
+  // If the connected wallet happens to be the sponsor address (e.g. someone
+  // imported the sponsor key into Slush), we'd build a tx where owner == sender,
+  // and Sui's validator would expect exactly one signature — but we attach two
+  // (sender + sponsor), producing "Expect 1 signer signatures but got 2".
+  // Fail fast with a clear message.
+  if (body.sender.toLowerCase() === sponsorAddr.toLowerCase()) {
+    return NextResponse.json(
+      {
+        error:
+          `Connected wallet (${body.sender}) is the same address as the ` +
+          `sponsor (${sponsorAddr}). Connect a different wallet — the sponsor ` +
+          `must be a separate address from the transaction sender.`,
+      },
+      { status: 400 },
+    );
+  }
+
   // Pick a gas coin owned by the sponsor.
   const { data: coins } = await client.getCoins({
     owner: sponsorAddr,

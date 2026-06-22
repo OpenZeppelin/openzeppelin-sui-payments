@@ -29,7 +29,7 @@ export function buildCreateAndShareAccount(tx: Transaction, ownerAddress: string
  */
 export function buildAccountAddress(tx: Transaction, ownerAddress: string): TransactionResult {
   return tx.moveCall({
-    target: `${deployment.pasPackageId}::account::account_address`,
+    target: `${deployment.pasPackageId}::namespace::account_address`,
     arguments: [tx.object(deployment.namespaceId), tx.pure.address(ownerAddress)],
   });
 }
@@ -45,7 +45,7 @@ export function buildAccountNewAuth(tx: Transaction): TransactionResult {
  * `account::send_balance<T>(&auth, &dest_account, amount, ctx) -> Request<SendFunds<Balance<T>>>`.
  * The returned `Request` is a hot potato that gets stamped with approval (e.g.
  * by `stablecoin_mock::approve_transfer`) and then resolved inside
- * `payment::pay<T>`.
+ * `merchant::pay<T>`.
  */
 export function buildSendBalance(
   tx: Transaction,
@@ -71,7 +71,7 @@ export function buildSendBalance(
 
 /**
  * `account::unlock_balance<T>(&auth, amount, ctx) -> Request<UnlockFunds<Balance<T>>>`.
- * Used by `redemption::new` to extract a customer's LOYALTY balance into the Voucher.
+ * Used by `merchant::create_voucher` to extract a customer's LOYALTY balance into the Voucher.
  */
 export function buildUnlockBalance(
   tx: Transaction,

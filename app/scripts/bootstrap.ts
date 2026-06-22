@@ -298,13 +298,64 @@ async function discoverPasContextFromPubfile(
 }
 
 function deployerKeypair(address: string): Ed25519Keypair {
+  return Ed25519Keypair.fromSecretKey(deployerPrivateKey(address));
+}
+
+function deployerPrivateKey(address: string): string {
   const out = execSync(`sui keytool export --key-identity ${address} --json`, {
     encoding: "utf8",
   });
-  const parsed = JSON.parse(out) as { exportedPrivateKey: string };
-  // fromSecretKey accepts a bech32 string directly and throws if the
-  // embedded schema is not ED25519.
-  return Ed25519Keypair.fromSecretKey(parsed.exportedPrivateKey);
+  return (JSON.parse(out) as { exportedPrivateKey: string }).exportedPrivateKey;
+}
+
+/**
+ * On a fresh chain only — wire pas's Namespace to its UpgradeCap and
+ * create the shared `Templates` registry. Must run in its own transaction
+ * because `templates::setup` shares the object directly, so its id isn't
+ * available within the same PTB.
+ */
+async function setupPasOnFreshChain(
+  client: SuiClient,
+  keypair: Ed25519Keypair,
+  pasPkg: string,
+  namespaceId: string,
+  pasUpgradeCapId: string,
+  payoutAddress: string,
+): Promise<{ templatesId: string }> {
+  console.log(`\n→ pas init (namespace::setup + templates::setup + merchant payout account)`);
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${pasPkg}::namespace::setup`,
+    arguments: [tx.object(namespaceId), tx.object(pasUpgradeCapId)],
+  });
+  tx.moveCall({
+    target: `${pasPkg}::templates::setup`,
+    arguments: [tx.object(namespaceId)],
+  });
+  // Pre-create the merchant's payout PAS account so customer-side `pay` flows
+  // can take it as `&Account` without an extra setup hop.
+  tx.moveCall({
+    target: `${pasPkg}::account::create_and_share`,
+    arguments: [tx.object(namespaceId), tx.pure.address(payoutAddress)],
+  });
+  tx.setGasBudget(200_000_000n);
+  const result = await client.signAndExecuteTransaction({
+    transaction: tx,
+    signer: keypair,
+    options: { showEffects: true, showObjectChanges: true },
+  });
+  if (result.effects?.status?.status !== "success") {
+    throw new Error(`pas init tx failed: ${JSON.stringify(result.effects)}`);
+  }
+  await client.waitForTransaction({ digest: result.digest });
+
+  const templates = (result.objectChanges ?? []).find(
+    (c): c is Extract<typeof c, { type: "created" }> =>
+      c.type === "created" && c.objectType?.endsWith("::templates::Templates") === true,
+  );
+  if (!templates) throw new Error("could not find Templates shared object in pas init tx");
+  console.log(`  Templates       ${templates.objectId}`);
+  return { templatesId: templates.objectId };
 }
 
 async function postPublishPTB({
@@ -315,12 +366,12 @@ async function postPublishPTB({
   stablecoinPkg,
   stablecoinType,
   namespaceId,
+  templatesId,
   loyaltyCapId,
   stablecoinCapId,
   accessControlId,
   payoutAddress,
   deployer,
-  pasUpgradeCapId,
 }: {
   rpcUrl: string;
   pasPkg: string;
@@ -329,12 +380,12 @@ async function postPublishPTB({
   stablecoinPkg: string;
   stablecoinType: string;
   namespaceId: string;
+  templatesId: string;
   loyaltyCapId: string;
   stablecoinCapId: string;
   accessControlId: string;
   payoutAddress: string;
   deployer: string;
-  pasUpgradeCapId?: string;
 }): Promise<{
   merchantId: string;
   loyaltyPolicyId: string;
@@ -346,19 +397,14 @@ async function postPublishPTB({
   const client = new SuiClient({ url: rpcUrl });
   const tx = new Transaction();
 
-  // (0) On a fresh chain only — wire pas's Namespace to its UpgradeCap.
-  // On testnet/mainnet pas is already published and this step has already run.
-  if (pasUpgradeCapId) {
-    tx.moveCall({
-      target: `${pasPkg}::namespace::setup`,
-      arguments: [tx.object(namespaceId), tx.object(pasUpgradeCapId)],
-    });
-  }
-
-  // (a) stablecoin_mock::setup(&mut Namespace, &mut TreasuryCap<STABLE>)
+  // (a) stablecoin_mock::setup(&mut Namespace, &mut TreasuryCap<STABLE>, &mut Templates, ctx)
   tx.moveCall({
     target: `${stablecoinPkg}::stablecoin_mock::setup`,
-    arguments: [tx.object(namespaceId), tx.object(stablecoinCapId)],
+    arguments: [
+      tx.object(namespaceId),
+      tx.object(stablecoinCapId),
+      tx.object(templatesId),
+    ],
   });
 
   // (b) loyalty_bundle = loyalty::create(&mut Namespace, TreasuryCap<LOYALTY>)
@@ -465,6 +511,7 @@ async function main() {
   let namespaceId: string;
   let pasUpgradeCapId: string | undefined;
   let ozAccessPkg: string;
+  let templatesId: string | undefined;
   let payments: PublishResult;
   let stable: PublishResult;
   let accessControlId: string | null;
@@ -516,12 +563,38 @@ async function main() {
     if (!stable.packageId) throw new Error("stablecoin-mock publish returned no packageId");
 
     ozAccessPkg = readPubfilePackageId(PUBFILE_LOCAL_PATH, "/contracts/access");
+
+    // pas was just published — bootstrap it: link the UpgradeCap and create
+    // the shared `Templates` registry. `templates::setup` shares its result,
+    // so this must run in its own tx before the post-publish PTB consumes the
+    // Templates id (for stablecoin_mock::setup).
+    const pasInit = await setupPasOnFreshChain(
+      client,
+      deployerKeypair(deployer),
+      pasPackageId,
+      namespaceId,
+      pasUpgradeCapId!,
+      deployer,
+    );
+    templatesId = pasInit.templatesId;
   } else {
     // ─── testnet / mainnet ─────────────────────────────────────────────────
     const ctx = await discoverPasContextFromMVR(client, envAlias);
     pasPackageId = ctx.packageId;
     namespaceId = ctx.namespaceId;
     ozAccessPkg = resolveMVR("@openzeppelin-move/access", envAlias);
+
+    // pas on canonical networks should already have `Templates` initialized.
+    // We can't easily discover it from the publish tx (Templates is created by
+    // a separate `templates::setup` call, not by pas::init), so for now we
+    // expect it to be supplied via env. TODO: derive via derived_object math.
+    templatesId = process.env.NEXT_PUBLIC_TEMPLATES_ID;
+    if (!templatesId) {
+      throw new Error(
+        "NEXT_PUBLIC_TEMPLATES_ID is required on testnet/mainnet — set it to the " +
+          "id of the pas::templates::Templates shared object for this network",
+      );
+    }
 
     clearFile(
       resolve(REPO_ROOT, "contracts/payments/Published.toml"),
@@ -570,12 +643,12 @@ async function main() {
     stablecoinPkg: stable.packageId!,
     stablecoinType,
     namespaceId,
+    templatesId: templatesId!,
     loyaltyCapId,
     stablecoinCapId,
     accessControlId: accessControlId!,
     payoutAddress: deployer,
     deployer,
-    pasUpgradeCapId,
   });
 
   patchEnv({
@@ -589,6 +662,11 @@ async function main() {
     NEXT_PUBLIC_NAMESPACE_ID: namespaceId,
     NEXT_PUBLIC_PAS_PACKAGE_ID: pasPackageId,
     NEXT_PUBLIC_OZ_ACCESS_PACKAGE_ID: ozAccessPkg,
+    NEXT_PUBLIC_TEMPLATES_ID: templatesId!,
+    // Deployer key — server-only, used by `/api/topup` to sign the
+    // stablecoin faucet. Treat as sensitive even though it's gitignored;
+    // do NOT enable this on mainnet without first rotating the deployer.
+    DEPLOYER_PRIVATE_KEY: deployerPrivateKey(deployer),
   });
 
   console.log(`\n✓ Bootstrap complete. .env.local patched.\n`);

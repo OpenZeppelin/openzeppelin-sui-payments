@@ -4,8 +4,12 @@
  * these types make destructuring + downstream rendering explicit and let the
  * compiler catch field renames after Move-side refactors.
  *
- * Each type has a `parse*` helper next to it that accepts the raw `content.fields`
- * shape from `SuiClient.getObject({ ...options: { showContent: true } })`.
+ * Object-model note: with the centralized `Merchant`, `Invoice`/`Voucher` and
+ * `Receipt<Payment>`/`Receipt<Redemption>` are all `store`-only (no `UID`).
+ * Each value is held under its issuance `ID` in a `Table<ID, V>` on the
+ * merchant, and that table key is the externally-visible "id" (the QR value).
+ * It is NOT a field on the struct - parsers don't try to read `id` from the
+ * content fields.
  */
 
 export type SuiAddress = string;
@@ -28,12 +32,21 @@ export interface Merchant {
   name: string;
   logoUrl: string | null;
   payoutAddress: SuiAddress;
-  acceptedPaymentType: string; // fully-qualified TypeName, e.g. "0x..::stablecoin_mock::STABLECOIN_MOCK"
+  /** Fully-qualified TypeName, e.g. "0x..::stablecoin_mock::STABLECOIN_MOCK" */
+  acceptedPaymentType: string;
   config: Config;
-  /** Parent object id of the `Table<ID, Listing>` — query dynamic fields under this id to enumerate listings. */
+  /** Parent object id of `Table<ID, Listing>` — query dynamic fields to enumerate. */
   listingsTableId: SuiObjectId;
   /** Parent of `Table<ID, ID>` mapping variant_id → listing_id. */
   variantIndexTableId: SuiObjectId;
+  /** Parent of `Table<ID, Invoice>` — open invoices keyed by issuance id. */
+  invoicesTableId: SuiObjectId;
+  /** Parent of `Table<ID, Voucher>` — open vouchers keyed by issuance id. */
+  vouchersTableId: SuiObjectId;
+  /** Parent of `Table<ID, Receipt<Payment>>` — keyed by settled invoice id. */
+  invoiceReceiptsTableId: SuiObjectId;
+  /** Parent of `Table<ID, Receipt<Redemption>>` — keyed by redeemed voucher id. */
+  voucherReceiptsTableId: SuiObjectId;
 }
 
 export function parseConfig(raw: any): Config {
@@ -58,6 +71,10 @@ export function parseMerchant(content: any): Merchant {
     config: parseConfig(f.config),
     listingsTableId: f.listings.fields.id.id,
     variantIndexTableId: f.variant_index.fields.id.id,
+    invoicesTableId: f.invoices.fields.id.id,
+    vouchersTableId: f.vouchers.fields.id.id,
+    invoiceReceiptsTableId: f.invoice_receipts.fields.id.id,
+    voucherReceiptsTableId: f.voucher_receipts.fields.id.id,
   };
 }
 
@@ -85,7 +102,7 @@ export function parseVariant(raw: any): Variant {
     id: f.id.id ?? f.id,
     name: f.name,
     price: BigInt(f.price),
-    loyaltyPrice: optionToValue<string>(f.loyalty_price)?.then ? null : optionToValueBig(f.loyalty_price),
+    loyaltyPrice: optionToValueBig(f.loyalty_price),
   };
 }
 
@@ -103,7 +120,8 @@ export function parseListing(content: any): Listing {
 }
 
 // ---------------------------------------------------------------------------
-// Invoice / Voucher
+// Invoice / Voucher — `store`-only values stored in merchant tables.
+// `id` comes from the table key (passed in by the caller), not the struct.
 // ---------------------------------------------------------------------------
 
 export interface Item {
@@ -140,10 +158,15 @@ export function parseItem(raw: any): Item {
   };
 }
 
-export function parseInvoice(content: any): Invoice {
-  const f = content.fields;
+/**
+ * `raw` is the value side of a `Table<ID, Invoice>` entry — i.e. the
+ * `content.fields.value.fields` returned by `getDynamicFieldObject`. The
+ * outer `id` is the table key, supplied separately.
+ */
+export function parseInvoice(id: SuiObjectId, raw: any): Invoice {
+  const f = raw.fields ?? raw;
   return {
-    id: f.id.id,
+    id,
     payoutAddress: f.payout_address,
     paymentType: typeNameToString(f.payment_type),
     items: (f.items as any[]).map(parseItem),
@@ -154,10 +177,10 @@ export function parseInvoice(content: any): Invoice {
   };
 }
 
-export function parseVoucher(content: any): Voucher {
-  const f = content.fields;
+export function parseVoucher(id: SuiObjectId, raw: any): Voucher {
+  const f = raw.fields ?? raw;
   return {
-    id: f.id.id,
+    id,
     customer: f.customer,
     items: (f.items as any[]).map(parseItem),
     // `funds` is a Balance<LOYALTY>; its `value` field carries the amount.
@@ -167,12 +190,16 @@ export function parseVoucher(content: any): Voucher {
 }
 
 // ---------------------------------------------------------------------------
-// Receipts
+// Receipts — `store`-only values stored in merchant.invoice_receipts /
+// .voucher_receipts. Keyed by the originating invoice/voucher id; the new
+// model puts the settling `customer` directly on the receipt (no longer
+// soulbound by transfer to an address).
 // ---------------------------------------------------------------------------
 
 export interface PaymentReceipt {
-  id: SuiObjectId;
+  /** Key in `invoice_receipts` — also the settled invoice's id. */
   invoiceId: SuiObjectId;
+  customer: SuiAddress;
   payoutAddress: SuiAddress;
   paymentType: string;
   items: Item[];
@@ -183,19 +210,20 @@ export interface PaymentReceipt {
 }
 
 export interface RedemptionReceipt {
-  id: SuiObjectId;
+  /** Key in `voucher_receipts` — also the redeemed voucher's id. */
   voucherId: SuiObjectId;
+  customer: SuiAddress;
   items: Item[];
   amount: bigint;
   timestampMs: bigint;
 }
 
-export function parsePaymentReceipt(content: any): PaymentReceipt {
-  const f = content.fields;
+export function parsePaymentReceipt(invoiceId: SuiObjectId, raw: any): PaymentReceipt {
+  const f = raw.fields ?? raw;
   const d = f.data.fields;
   return {
-    id: f.id.id,
-    invoiceId: d.invoice_id,
+    invoiceId,
+    customer: f.customer,
     payoutAddress: d.payout_address,
     paymentType: typeNameToString(d.payment_type),
     items: (f.items as any[]).map(parseItem),
@@ -206,12 +234,12 @@ export function parsePaymentReceipt(content: any): PaymentReceipt {
   };
 }
 
-export function parseRedemptionReceipt(content: any): RedemptionReceipt {
-  const f = content.fields;
+export function parseRedemptionReceipt(voucherId: SuiObjectId, raw: any): RedemptionReceipt {
+  const f = raw.fields ?? raw;
   const d = f.data.fields;
   return {
-    id: f.id.id,
-    voucherId: d.voucher_id,
+    voucherId,
+    customer: f.customer,
     items: (f.items as any[]).map(parseItem),
     amount: BigInt(f.amount),
     timestampMs: BigInt(f.timestamp_ms),

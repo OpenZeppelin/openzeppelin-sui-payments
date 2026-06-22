@@ -1,12 +1,17 @@
 "use client";
 
 import { useMemo } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { InvoiceQrButton } from "@/components/merchant/invoice-qr-button";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useEvents, useInvoice } from "@/hooks/queries";
-import { shortAddr } from "@/lib/utils";
+import { qk, useEvents, useInvoice } from "@/hooks/queries";
+import { deployment } from "@/lib/deployment";
+import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
 
 type EventName =
   | "InvoiceCreated"
@@ -128,8 +133,9 @@ export default function TransactionsPage() {
 
 /**
  * Renders an `InvoiceCreated` row enriched with live data from the Invoice
- * object — but only if the invoice hasn't reached a terminal state yet
- * (paid/canceled invoices are destroyed and `useInvoice` would 404).
+ * stored on `merchant.invoices` — but only if the invoice hasn't reached a
+ * terminal state yet (paid/canceled invoices are removed from the table, so
+ * `useInvoice`'s dynamic-field lookup would return null).
  */
 function OpenInvoiceRow({
   invoiceId,
@@ -140,23 +146,60 @@ function OpenInvoiceRow({
   timestampMs: bigint;
   terminated: boolean;
 }) {
-  const v = variants[terminated ? "InvoicePaid" : "InvoiceCreated"];
+  const queryClient = useQueryClient();
   // Skip the network read when we already know the invoice is gone.
   const invoice = useInvoice(terminated ? null : invoiceId);
+
+  const now = BigInt(Date.now());
+  const expired = Boolean(invoice.data && invoice.data.expiresAtMs <= now);
+
+  const status = terminated ? "closed" : expired ? "expired" : "open";
+  const badge: { label: string; variant: "outline" | "destructive" | "accent" } =
+    status === "closed"
+      ? { label: "Invoice closed", variant: "accent" }
+      : status === "expired"
+      ? { label: "Expired", variant: "destructive" }
+      : { label: "Invoice open", variant: "outline" };
+
+  const remove = useMutation({
+    mutationFn: async (id: string) => {
+      const resp = await fetch("/api/cancel-invoice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invoiceId: id }),
+      });
+      if (!resp.ok) {
+        const err = (await resp.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(err?.error ?? `remove failed (${resp.status})`);
+      }
+      return (await resp.json()) as { digest: string };
+    },
+    onSuccess: async () => {
+      toast.success("Expired invoice removed");
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: qk.events(`${deployment.packageId}::events::InvoiceCanceled`),
+        }),
+        queryClient.invalidateQueries({ queryKey: qk.invoice(invoiceId) }),
+      ]);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Remove failed");
+    },
+  });
 
   const when = timestampMs ? new Date(Number(timestampMs)).toLocaleString() : "—";
 
   return (
     <div className="flex items-center justify-between gap-4 py-3">
       <div className="flex items-center gap-3">
-        <Badge variant={v.variant}>
-          {terminated ? "Invoice closed" : v.label}
-        </Badge>
+        <Badge variant={badge.variant}>{badge.label}</Badge>
         <div>
           {invoice.data ? (
             <>
               <div className="text-sm font-medium">
-                {invoice.data.amount.toString()} units · {invoice.data.loyalty.toString()} LOY
+                {formatAmount(invoice.data.amount, STABLECOIN_DECIMALS)} USD ·{" "}
+                {invoice.data.loyalty.toString()} LOY
               </div>
               <div className="text-xs text-[color:var(--color-muted-foreground)]">
                 {invoice.data.items.length} item
@@ -174,7 +217,18 @@ function OpenInvoiceRow({
         </div>
       </div>
       <div className="flex items-center gap-3">
-        {!terminated && invoice.data ? <InvoiceQrButton invoiceId={invoiceId} /> : null}
+        {status === "open" ? <InvoiceQrButton invoiceId={invoiceId} /> : null}
+        {status === "expired" ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => remove.mutate(invoiceId)}
+            disabled={remove.isPending}
+          >
+            <Trash2 className="h-4 w-4" />
+            {remove.isPending ? "Removing…" : "Remove expired"}
+          </Button>
+        ) : null}
         <div className="text-xs text-[color:var(--color-muted-foreground)]">{when}</div>
       </div>
     </div>
@@ -192,6 +246,13 @@ function FeedRowView({ row }: { row: FeedRow }) {
   const orderRef = orderRefBytes
     ? new TextDecoder().decode(new Uint8Array(orderRefBytes))
     : null;
+  // `amount` is stablecoin for invoice events, LOY for voucher events.
+  const isStable = row.name.startsWith("Invoice");
+  const amountLabel = amount
+    ? isStable
+      ? `${formatAmount(BigInt(amount), STABLECOIN_DECIMALS)} USD`
+      : `${amount} LOY`
+    : "—";
 
   return (
     <div className="flex items-center justify-between gap-4 py-3">
@@ -199,7 +260,7 @@ function FeedRowView({ row }: { row: FeedRow }) {
         <Badge variant={v.variant}>{v.label}</Badge>
         <div>
           <div className="text-sm font-medium">
-            {amount ? `${amount} units` : "—"}
+            {amountLabel}
             {loyalty ? ` · ${loyalty} LOY` : ""}
           </div>
           <div className="text-xs text-[color:var(--color-muted-foreground)]">

@@ -121,7 +121,14 @@ fun payment_happy_path() {
 
         // `InvoicePaid` was emitted with the expected payload.
         test_helpers::assert_emitted!(
-            events::invoice_paid_for_testing(invoice_id, b"order-001", CUSTOMER, 500, 50, 1_000_000),
+            events::invoice_paid_for_testing(
+                invoice_id,
+                b"order-001",
+                CUSTOMER,
+                500,
+                50,
+                1_000_000,
+            ),
         );
 
         // The receipt is stored in the merchant's receipt table, keyed by invoice id.
@@ -276,13 +283,15 @@ fun cancel_after_expiry_destroys_invoice() {
         merchant.cancel_invoice(invoice_id, &test_clock);
 
         // `InvoiceCanceled` was emitted with the expected payload.
-        test_helpers::assert_emitted!(events::invoice_canceled_for_testing(
-            invoice_id,
-            PAYOUT,
-            type_name::with_defining_ids<TEST_USD>(),
-            500,
-            b"order-001",
-        ));
+        test_helpers::assert_emitted!(
+            events::invoice_canceled_for_testing(
+                invoice_id,
+                PAYOUT,
+                type_name::with_defining_ids<TEST_USD>(),
+                500,
+                b"order-001",
+            ),
+        );
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -1220,7 +1229,14 @@ fun pay_with_coin_happy_path() {
         );
 
         test_helpers::assert_emitted!(
-            events::invoice_paid_for_testing(invoice_id, b"order-001", CUSTOMER, 500, 50, 1_000_000),
+            events::invoice_paid_for_testing(
+                invoice_id,
+                b"order-001",
+                CUSTOMER,
+                500,
+                50,
+                1_000_000,
+            ),
         );
 
         // Receipt stored, attributed to the loyalty account's owner.

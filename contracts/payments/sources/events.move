@@ -37,7 +37,7 @@ public struct InvoicePaid has copy, drop {
     loyalty: u64,
     /// Settlement clock timestamp (ms since epoch).
     timestamp_ms: u64,
-    /// Custody discriminator: `true` if settled via the open-loop `merchant::pay_with_coin`, 
+    /// Custody discriminator: `true` if settled via the open-loop `merchant::pay_with_coin`,
     /// `false` if via the PAS `merchant::pay`.
     paid_with_coin: bool,
 }

@@ -1,312 +1,75 @@
-/// Invoice — merchant-issued payment intent + customer-side settlement.
+/// Invoice - merchant-issued payment intent, stored as a value in `Merchant`.
 ///
-/// Merchant POS issues an `Invoice` via
-/// `payment::new(merchant, &auth, listing_variant_ids, quantities, ...)` (gated by
-/// `Auth<CashierRole>`).
-/// `Item` line entries are derived inside `new` by snapshotting each variant's
-/// current price; the resulting `amount` total is the sum of `quantity * price`,
-/// and the `loyalty` to be granted on settlement is snapshotted from the
-/// merchant's `Config` at issuance — subsequent `set_config` calls do not retroactively
-/// affect open invoices.
-/// Merchant calls `payment::share(invoice)` and surfaces
-/// the object ID through a QR. Customer scans and calls `payment::pay<S>(...)`,
-/// which resolves the customer's already-approved PAS `send_funds` request
-/// (transfers stablecoin into the merchant's PAS Account), mints loyalty rewards
-/// into the customer's PAS Account, destroys the Invoice, and emits `InvoicePaid`.
-///
-/// Cleanup: `payment::cancel(invoice, &clock)` (permissionless after expiry).
+/// This module only defines the `Invoice` data type plus a merchant-agnostic
+/// constructor (`new`) and destructurer (`unpack`). It deliberately has NO
+/// dependency on `merchant`: since `Merchant` stores `Table<ID, Invoice>` (so
+/// `merchant` depends on `payment`), the reverse dependency would form an
+/// illegal cycle. All merchant-aware logic - catalog pricing, issuance,
+/// settlement (`pay`), and cancellation - therefore lives in `merchant`.
 module openzeppelin_payments::payment;
 
-use openzeppelin_access::access_control::Auth;
-use openzeppelin_payments::events;
-use openzeppelin_payments::loyalty;
-use openzeppelin_payments::merchant::{Self, Merchant, CashierRole};
-use openzeppelin_payments::receipt::{Self, Item};
-use pas::account::Account;
-use pas::policy::Policy;
-use pas::request::Request;
-use pas::send_funds::{Self, SendFunds};
-use std::type_name::{Self, TypeName};
-use sui::balance::Balance;
-use sui::clock::Clock;
-
-// === Errors ===
-
-#[error(code = 0)]
-const EZeroAmount: vector<u8> = "Invoice amount must be greater than zero";
-#[error(code = 1)]
-const ENotExpired: vector<u8> = "Invoice has not yet expired";
-#[error(code = 2)]
-const EInvoiceExpired: vector<u8> = "Invoice has expired";
-#[error(code = 3)]
-const EAmountMismatch: vector<u8> = "Send amount does not match Invoice amount";
-#[error(code = 4)]
-const EWrongRecipient: vector<u8> = "Send recipient does not match Invoice payout_address";
-#[error(code = 5)]
-const EWrongLoyaltyRecipient: vector<u8> = "Loyalty account owner does not match payer";
-#[error(code = 6)]
-const ENoItems: vector<u8> = "Invoice must include at least one item";
-#[error(code = 7)]
-const ELengthMismatch: vector<u8> = "listing_variant_ids and quantities must have the same length";
-#[error(code = 8)]
-const EWrongPaymentType: vector<u8> =
-    "Send currency does not match merchant's accepted payment type";
+use openzeppelin_payments::receipt::Item;
+use std::type_name::TypeName;
 
 // === Structs ===
 
-/// Merchant-issued invoice. Customer scans `id` from a QR and settles via `pay`.
+/// Merchant-issued invoice. Stored in `Merchant.invoices` keyed by a freshly
+/// minted ID; that ID is surfaced via QR for the customer to scan and settle.
 ///
-/// NOTE: No `merchant_id` field: the package's single-Merchant invariant means there's
-/// only one Merchant any Invoice could be against.
-public struct Invoice has key {
-    /// Object ID. Surfaced via QR for the customer to scan and look up the
-    /// shared object.
-    id: UID,
-    /// Snapshot of `merchant.payout_address` at issuance. Later
-    /// `set_payout_address` calls do not retarget open invoices.
+/// `store`-only (no `key`): identity is the `Table` key, not an object UID.
+public struct Invoice has store {
+    /// Snapshot of `merchant.payout_address` at issuance.
     payout_address: address,
-    /// Snapshot of `merchant.accepted_payment_type` at issuance. `pay<S>`
-    /// aborts if `type_name::with_defining_ids<S>() != payment_type`, preventing settlement
-    /// in arbitrary self-minted currencies.
+    /// Snapshot of `merchant.accepted_payment_type` at issuance. `merchant::pay<S>`
+    /// aborts if `S` does not match this, preventing settlement in self-minted
+    /// currencies.
     payment_type: TypeName,
-    /// Line items with snapshot prices. Each entry's `price` is in stablecoin
-    /// units (see `receipt::new_item`).
+    /// Line items with snapshot prices (stablecoin units).
     items: vector<Item>,
     /// Total stablecoin amount due, computed from `items` at issuance.
     amount: u64,
-    /// Loyalty units the customer earns on settlement. Snapshotted from the
-    /// merchant's `Config` at issuance so subsequent `set_config` calls don't
-    /// change what's owed on this invoice.
+    /// Loyalty units the customer earns on settlement, snapshotted from the
+    /// merchant's `Config` at issuance.
     loyalty: u64,
-    /// Merchant-supplied opaque tag (e.g. POS order number). Carried through
-    /// to `Receipt<Payment>.order_ref` and the `InvoicePaid` event.
+    /// Merchant-supplied opaque tag (e.g. POS order number).
     order_ref: vector<u8>,
     /// Expiry timestamp (ms). Past this point `pay` aborts and `cancel`
     /// becomes permissionless.
     expires_at_ms: u64,
 }
 
-// === Public Functions ===
+// === Package Functions ===
 
-/// Merchant issues an Invoice from parallel `listing_variant_ids` + `quantities`.
-///
-/// Each pair is resolved into an `Item` by snapshotting the variant's current
-/// price from the merchant's catalog. The total `amount` is computed from those
-/// items, the `loyalty` reward and `payment_type` are snapshotted from the
-/// merchant, and `expires_at_ms` uses the merchant's `Config.invoice_ttl_ms`.
-/// Gated by `CashierRole`. Emits `InvoiceCreated`.
-///
-/// #### Parameters
-/// - `merchant`: The merchant issuing the invoice.
-/// - `_auth`: `CashierRole` authorization.
-/// - `listing_variant_ids`: Variant IDs to bill for.
-/// - `quantities`: Per-variant quantities, parallel to `listing_variant_ids`.
-/// - `order_ref`: Opaque merchant order tag carried to the receipt and events.
-/// - `clock`: Clock used to compute `expires_at_ms`.
-/// - `ctx`: Transaction context.
-///
-/// #### Returns
-/// - The constructed `Invoice` (caller must `share` it).
-///
-/// #### Aborts
-/// - `ENoItems` if `listing_variant_ids` is empty.
-/// - `ELengthMismatch` if the two vectors differ in length.
-/// - `EZeroAmount` if the computed total is zero.
-/// - `EVariantNotFound` / `EListingInactive` (via `receipt::new_item`) if a
-///   variant is unregistered or its parent listing is inactive.
-/// - `EZeroQuantity` (via `receipt::new_item`) if any quantity is zero.
-public fun new(
-    merchant: &Merchant,
-    _auth: &Auth<CashierRole>,
-    listing_variant_ids: vector<ID>,
-    quantities: vector<u64>,
+/// Merchant-agnostic constructor. `merchant::create_invoice` resolves prices and
+/// snapshots fields, then calls this.
+public(package) fun new(
+    payout_address: address,
+    payment_type: TypeName,
+    items: vector<Item>,
+    amount: u64,
+    loyalty: u64,
     order_ref: vector<u8>,
-    clock: &Clock,
-    ctx: &mut TxContext,
+    expires_at_ms: u64,
 ): Invoice {
-    assert!(!listing_variant_ids.is_empty(), ENoItems);
-    assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
-
-    // Combine and validate active items and quantities.
-    let items = listing_variant_ids.zip_map!(quantities, |vid, qty| {
-        receipt::new_item(merchant, vid, qty)
-    });
-
-    // Validate amount and compute loyalty.
-    let amount = receipt::compute_total(&items);
-    assert!(amount > 0, EZeroAmount);
-    let config = merchant.config();
-    let loyalty = config.compute_loyalty(amount);
-
-    let invoice = Invoice {
-        id: object::new(ctx),
-        payout_address: merchant::payout_address(merchant),
-        payment_type: merchant.accepted_payment_type(),
-        items,
-        amount,
-        loyalty,
-        order_ref,
-        expires_at_ms: clock.timestamp_ms() + config.invoice_ttl_ms(),
-    };
-
-    events::emit_invoice_created(object::id(&invoice));
-
-    invoice
+    Invoice { payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms }
 }
 
-/// Share the `Invoice`. Required because it is `key`-only (no `store`), so
-/// `transfer::share_object` is restricted to this module.
-public fun share(invoice: Invoice) {
-    transfer::share_object(invoice);
-}
-
-/// Customer settles the invoice.
-///
-/// Resolves the customer's already-approved stablecoin `send_funds` request
-/// (transfers `Balance<S>` from the customer's PAS Account to the merchant's),
-/// mints loyalty rewards into the customer's PAS `Account<LOYALTY>`, destroys the
-/// Invoice, mints a soulbound `Receipt<Payment>` for the customer, and emits
-/// `InvoicePaid`. Permissionless — anyone holding a matching send request can pay.
-///
-/// #### Generics
-/// - `S`: The settlement coin type; must match the invoice's `payment_type`.
-///
-/// #### Parameters
-/// - `invoice`: The invoice to settle (consumed).
-/// - `merchant`: The merchant (mutated to mint loyalty).
-/// - `send_request`: The customer's approved `SendFunds<Balance<S>>` request.
-/// - `policy_s`: The PAS policy governing `Balance<S>`.
-/// - `customer_loyalty_account`: The payer's PAS account for the minted loyalty.
-/// - `clock`: Clock used to validate expiry and stamp the receipt.
-/// - `ctx`: Transaction context.
-///
-/// #### Aborts
-/// - `EInvoiceExpired` if the invoice has expired.
-/// - `EWrongPaymentType` if `S` does not match the invoice's `payment_type`.
-/// - `EWrongRecipient` if the send request's recipient is not the payout address.
-/// - `EAmountMismatch` if the sent amount is not the invoice amount.
-/// - `EWrongLoyaltyRecipient` if the loyalty account owner is not the sender.
-public fun pay<S>(
-    invoice: Invoice,
-    merchant: &mut Merchant,
-    send_request: Request<SendFunds<Balance<S>>>,
-    policy_s: &Policy<Balance<S>>,
-    customer_loyalty_account: &Account,
-    clock: &Clock,
-    ctx: &mut TxContext,
-) {
-    let now = clock.timestamp_ms();
-    let invoice_id = object::id(&invoice);
-
-    // Validate invoice expiration time.
-    assert!(now < invoice.expires_at_ms, EInvoiceExpired);
-    // Validate currency type.
-    // Otherwise a customer could mint their own coin and settle in junk tokens.
-    assert!(type_name::with_defining_ids<S>() == invoice.payment_type, EWrongPaymentType);
-
-    // Validate send request.
-    let data = send_request.data();
-    assert!(data.recipient() == invoice.payout_address, EWrongRecipient);
-    assert!(data.funds().value() == invoice.amount, EAmountMismatch);
-
-    // Mint loyalty to payer's account.
-    let sender = data.sender();
-    assert!(customer_loyalty_account.owner() == sender, EWrongLoyaltyRecipient);
-
-    // Consume the invoice.
-    let Invoice {
-        id,
-        payout_address,
-        payment_type,
-        items,
-        amount,
-        loyalty,
-        order_ref,
-        expires_at_ms: _,
-    } = invoice;
-    id.delete();
-
-    // Resolve send request and send funds to payout_address.
-    send_funds::resolve_balance(send_request, policy_s);
-
-    // Mint the loyalty tokens snapshotted at issuance.
-    if (loyalty > 0) {
-        loyalty::mint_to(
-            merchant.loyalty_mut().treasury_cap_mut(),
-            customer_loyalty_account,
-            loyalty,
-        );
-    };
-
-    // Soulbound receipt to the customer.
-    receipt::transfer_payment_receipt(
-        invoice_id,
-        payout_address,
-        payment_type,
-        items,
-        amount,
-        loyalty,
-        order_ref,
-        now,
-        sender,
-        ctx,
-    );
-
-    events::emit_invoice_paid(
-        invoice_id,
-        order_ref,
-        sender,
-        amount,
-        loyalty,
-        now,
-    );
-}
-
-/// Permissionless cleanup of an expired Invoice.
-///
-/// No balance is held by the Invoice (customer balance stays in their Account
-/// until settlement), so this is just object destruction. Emits `InvoiceCanceled`.
-///
-/// #### Parameters
-/// - `invoice`: The expired invoice to destroy (consumed).
-/// - `clock`: Clock used to verify the invoice has expired.
-///
-/// #### Aborts
-/// - `ENotExpired` if the invoice has not yet expired.
-public fun cancel(invoice: Invoice, clock: &Clock) {
-    assert!(clock.timestamp_ms() >= invoice.expires_at_ms, ENotExpired);
-
-    let Invoice {
-        id,
-        payout_address,
-        payment_type,
-        amount,
-        order_ref,
-        ..,
-    } = invoice;
-
-    events::emit_invoice_canceled(
-        id.to_inner(),
-        payout_address,
-        payment_type,
-        amount,
-        order_ref,
-    );
-
-    id.delete();
+/// Consume the invoice and return its fields. `Invoice` has no `drop`, so
+/// `merchant` destructures it through this on `pay` / `cancel`.
+public(package) fun unpack(
+    self: Invoice,
+): (address, TypeName, vector<Item>, u64, u64, vector<u8>, u64) {
+    let Invoice { payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms } =
+        self;
+    (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms)
 }
 
 // === View Functions ===
 
-/// Object ID of the shared `Invoice`.
-public fun id(self: &Invoice): ID { object::id(self) }
-
 /// Address that will receive the customer's stablecoin on `pay`.
 public fun payout_address(self: &Invoice): address { self.payout_address }
 
-/// `TypeName` of the stablecoin the customer must pay in, snapshotted from
-/// `merchant.accepted_payment_type` at issuance. `pay<S>` aborts if `S` does
-/// not match this.
+/// `TypeName` of the stablecoin the customer must pay in.
 public fun payment_type(self: &Invoice): TypeName { self.payment_type }
 
 /// Line items, each carrying `variant_id`, `quantity`, and snapshot `price`.
@@ -315,13 +78,11 @@ public fun items(self: &Invoice): &vector<Item> { &self.items }
 /// Total stablecoin due, computed from `items` at issuance.
 public fun amount(self: &Invoice): u64 { self.amount }
 
-/// Loyalty units that will be minted to the customer on settlement (snapshotted
-/// from the merchant's `Config` at issuance).
+/// Loyalty units that will be minted to the customer on settlement.
 public fun loyalty(self: &Invoice): u64 { self.loyalty }
 
-/// Merchant-supplied order reference (opaque bytes, surfaced in `InvoicePaid`).
+/// Merchant-supplied order reference (opaque bytes).
 public fun order_ref(self: &Invoice): &vector<u8> { &self.order_ref }
 
-/// Expiry timestamp (ms). After this point `pay` aborts with `EInvoiceExpired`
-/// and `cancel` becomes permissionless.
+/// Expiry timestamp (ms).
 public fun expires_at_ms(self: &Invoice): u64 { self.expires_at_ms }

@@ -1,22 +1,28 @@
-/// Merchant identity, central state, and listing CRUD. This module is the leaf for
-/// the merchant-side flows — it does NOT depend on `invoice` or `redemption`. Those
-/// modules import `Merchant` from here and own the issuance + settlement flows for
-/// their respective asset sides (invoice → stablecoin payment, redemption →
-/// loyalty burn).
+/// Merchant identity, central state, and the full settlement surface. The
+/// `Merchant` shared object stores the catalog plus open invoices, open vouchers,
+/// and settlement receipts in `Table`s, and owns the issuance + settlement flows
+/// for both asset sides (invoice -> stablecoin payment, redemption -> loyalty burn).
+///
+/// `payment` and `redemption` are thin data-type modules (`Invoice` / `Voucher`
+/// plus dumb constructors); this module depends on them and on `receipt`. Because
+/// `Merchant` stores `Table<ID, Invoice>` / `Table<ID, Voucher>` and the receipt
+/// tables (`Table<ID, Receipt<Payment>>` / `Table<ID, Receipt<Redemption>>`), those
+/// modules must NOT depend back on `merchant` (it would form a cycle), so all
+/// merchant-aware logic lives here.
 ///
 /// Access control: `AccessControl<MERCHANT>` (from `openzeppelin_access`) is
 /// created in `init` as a shared object. The root role is the `MERCHANT` OTW
 /// itself; the deployer becomes its sole holder. Three operational roles split
 /// the admin surface:
-///   - `MerchantRole`         → merchant-level identity + treasury settings
+///   - `MerchantRole`         -> merchant-level identity + treasury settings
 ///                              (`set_payout_address`, `set_config`, `set_display`)
-///   - `CatalogManagerRole`   → catalog CRUD (`add_listing`, `remove_listing`,
+///   - `CatalogManagerRole`   -> catalog CRUD (`add_listing`, `remove_listing`,
 ///                              `set_listing_status`, `add_listing_variant`,
 ///                              `remove_listing_variant`)
-///   - `CashierRole`          → settlement (`payment::new`, `redemption::redeem`)
+///   - `CashierRole`          -> settlement (`create_invoice`, `redeem`)
 /// Each role's default admin is the root role, so the root holder can
 /// grant/revoke via `access_control::grant_role` / `revoke_role`. None of the
-/// operational roles are auto-granted by `init` — the deployer (root holder)
+/// operational roles are auto-granted by `init` - the deployer (root holder)
 /// is expected to grant them explicitly in the bootstrap PTB, which also lets
 /// them assign roles to different addresses (cold-storage root, hot-wallet
 /// operator) from the outset.
@@ -40,9 +46,20 @@ use openzeppelin_access::access_control::{Self, Auth};
 use openzeppelin_payments::config::Config;
 use openzeppelin_payments::events;
 use openzeppelin_payments::listing::{Listing, Variant};
-use openzeppelin_payments::loyalty::Loyalty;
+use openzeppelin_payments::loyalty::{Self, Loyalty, LOYALTY};
+use openzeppelin_payments::payment::{Self, Invoice};
+use openzeppelin_payments::receipt::{Self, Item, Receipt, Payment, Redemption};
+use openzeppelin_payments::redemption::{Self, Voucher};
+use pas::account::Account;
+use pas::policy::Policy;
+use pas::request::Request;
+use pas::send_funds::{Self, SendFunds};
+use pas::unlock_funds::{Self, UnlockFunds};
 use std::string::String;
 use std::type_name::{Self, TypeName};
+use sui::balance::{Self, Balance};
+use sui::clock::Clock;
+use sui::coin::{Self, Coin};
 use sui::table::{Self, Table};
 
 // === Errors ===
@@ -63,6 +80,41 @@ const EDisplayUnchanged: vector<u8> = "Display name and logo both match the curr
 const EListingInactive: vector<u8> = "Listing is inactive and cannot be sold or redeemed";
 #[error(code = 7)]
 const EPaymentTypeUnchanged: vector<u8> = "Payment type matches the current value";
+#[error(code = 8)]
+const EZeroAmount: vector<u8> = "Amount must be greater than zero";
+#[error(code = 9)]
+const ENoItems: vector<u8> = "Must include at least one item";
+#[error(code = 10)]
+const ELengthMismatch: vector<u8> = "listing_variant_ids and quantities must have the same length";
+#[error(code = 11)]
+const EZeroQuantity: vector<u8> = "Item quantity must be greater than zero";
+#[error(code = 12)]
+const ENoLoyaltyPrice: vector<u8> = "Variant is not redeemable: loyalty_price is not set";
+#[error(code = 13)]
+const EInvoiceNotFound: vector<u8> = "Invoice not found";
+#[error(code = 14)]
+const EInvoiceExpired: vector<u8> = "Invoice has expired";
+#[error(code = 15)]
+const EWrongPaymentType: vector<u8> =
+    "Send currency does not match merchant's accepted payment type";
+#[error(code = 16)]
+const EWrongRecipient: vector<u8> = "Send recipient does not match Invoice payout_address";
+#[error(code = 17)]
+const EAmountMismatch: vector<u8> = "Send amount does not match Invoice amount";
+#[error(code = 18)]
+const EWrongLoyaltyRecipient: vector<u8> = "Loyalty account owner does not match payer";
+#[error(code = 19)]
+const ENotExpired: vector<u8> = "Not yet expired";
+#[error(code = 20)]
+const EVoucherNotFound: vector<u8> = "Voucher not found";
+#[error(code = 21)]
+const EVoucherExpired: vector<u8> = "Voucher has expired";
+#[error(code = 22)]
+const EWrongCustomer: vector<u8> = "Account owner does not match Voucher customer";
+#[error(code = 23)]
+const EInvalidAmount: vector<u8> = "Voucher amount must equal the total redeemed amount";
+#[error(code = 24)]
+const EReceiptNotFound: vector<u8> = "Receipt not found";
 
 // === Constants ===
 
@@ -72,7 +124,7 @@ const ROOT_TRANSFER_DELAY_MS: u64 = 86_400_000;
 
 // === Structs ===
 
-/// One-time witness — struct name == module name uppercased. Consumed once
+/// One-time witness - struct name == module name uppercased. Consumed once
 /// in `init` to mint the package's `AccessControl<MERCHANT>` registry.
 public struct MERCHANT has drop {}
 
@@ -84,8 +136,7 @@ public struct MerchantRole {}
 /// `set_listing_status`, `add_listing_variant`, `remove_listing_variant`.
 public struct CatalogManagerRole {}
 
-/// Holder gates settlement entry points: `payment::new`,
-/// `redemption::redeem`.
+/// Holder gates settlement entry points: `create_invoice` / `redeem`.
 public struct CashierRole {}
 
 /// Central shared object holding the merchant's entire on-chain state.
@@ -100,14 +151,15 @@ public struct Merchant has key {
     payout_address: address,
     /// `TypeName` of the only stablecoin this merchant accepts. Captured from
     /// the type parameter `C` at `create<C>` time and immutable thereafter.
-    /// `payment::pay<S>` aborts if `type_name::with_defining_ids<S>() != accepted_payment_type`,
+    /// `pay<S>` aborts if `type_name::with_defining_ids<S>() != accepted_payment_type`,
     /// preventing customers from settling with self-minted tokens.
     accepted_payment_type: TypeName,
     /// Loyalty asset bundle (treasury cap, policy cap, policy id). Stored whole;
-    /// only accessible via `loyalty()` / `loyalty_mut()`.
+    /// read via `loyalty()`. The treasury cap is reached internally by `pay`
+    /// (mint) and `redeem` (burn).
     loyalty: Loyalty,
     /// Loyalty mint configuration (numerator/denominator/cap). Replaceable via
-    /// `set_config` — note that changing the rate alters "$1 = X points" for
+    /// `set_config` - note that changing the rate alters "$1 = X points" for
     /// future settlements; existing invoices already snapshot both their
     /// stablecoin `amount` and `loyalty` values at issuance, so they're unaffected.
     config: Config,
@@ -119,15 +171,29 @@ public struct Merchant has key {
     /// in lockstep with `Listing.variants` by `add_listing`/`remove_listing` and
     /// `add_listing_variant`/`remove_listing_variant`.
     variant_index: Table<ID, ID>,
+    /// Open invoices, keyed by their freshly-minted issuance ID (the QR value).
+    /// Inserted by `create_invoice`, removed by `pay` / `cancel_invoice`.
+    invoices: Table<ID, Invoice>,
+    /// Open vouchers, keyed by their freshly-minted issuance ID (the QR value).
+    /// Inserted by `create_voucher`, removed by `redeem` / `cancel_voucher`.
+    vouchers: Table<ID, Voucher>,
+    /// Payment receipts, keyed by the settled invoice ID. The recipient is
+    /// recorded in `Receipt.customer`. Grows monotonically - the merchant bears
+    /// the storage. Customer-scoped history is served off-chain from the
+    /// `InvoicePaid` event stream.
+    invoice_receipts: Table<ID, Receipt<Payment>>,
+    /// Redemption receipts, keyed by the redeemed voucher ID. Same lifecycle and
+    /// off-chain history story as `invoice_receipts`, via `VoucherRedeemed`.
+    voucher_receipts: Table<ID, Receipt<Redemption>>,
 }
 
 // === Init ===
 
-/// Module init — runs once on package publish. Creates the
+/// Module init - runs once on package publish. Creates the
 /// `AccessControl<MERCHANT>` shared registry and shares it. The root role is
 /// granted to the deployer by `access_control::new`. Operational roles
 /// (`MerchantRole`, `CatalogManagerRole`, `CashierRole`) are NOT pre-granted
-/// here — the deployer grants them explicitly in the bootstrap PTB (typically
+/// here - the deployer grants them explicitly in the bootstrap PTB (typically
 /// to different addresses than the root key).
 ///
 /// #### Parameters
@@ -184,14 +250,276 @@ public fun create<C>(
         config,
         listings: table::new(ctx),
         variant_index: table::new(ctx),
+        invoices: table::new(ctx),
+        vouchers: table::new(ctx),
+        invoice_receipts: table::new(ctx),
+        voucher_receipts: table::new(ctx),
     }
 }
 
 /// Share the `Merchant`. Required because `Merchant` is `key`-only (no `store`), so
-/// `transfer::share_object` can only be called from this module — an external caller
+/// `transfer::share_object` can only be called from this module - an external caller
 /// can't share it directly. Call after `create` and any same-PTB setup.
 public fun share(m: Merchant) {
     transfer::share_object(m);
+}
+
+/// Customer settles an open invoice with a permissioned (PAS) stablecoin.
+///
+/// Resolves the customer's approved `send_funds` request (moving the
+/// `Balance<S>` into the merchant's payout PAS Account), mints the snapshotted
+/// loyalty into the customer's PAS account, removes the invoice, stores a
+/// `Receipt<Payment>` keyed by `invoice_id`, and emits `InvoicePaid`.
+/// Permissionless - anyone holding a matching send request can pay.
+///
+/// For settling with a plain, unrestricted coin instead, see `pay_with_coin`.
+///
+/// #### Generics
+/// - `S`: The settlement coin type; must match the invoice's `payment_type`.
+///
+/// #### Aborts
+/// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
+/// - `EInvoiceExpired` if the invoice has expired.
+/// - `EWrongPaymentType` if `S` does not match the invoice's `payment_type`.
+/// - `EWrongRecipient` if the send request's recipient is not the payout address.
+/// - `EAmountMismatch` if the sent amount is not the invoice amount.
+/// - `EWrongLoyaltyRecipient` if the loyalty account owner is not the sender.
+/// - Propagates from `send_funds::resolve_balance` if the request's approvals do
+///   not satisfy the stablecoin `Policy<Balance<S>>`.
+/// - Propagates from `loyalty::mint_to` if minting `loyalty` would overflow the
+///   `LOYALTY` total supply.
+public fun pay<S>(
+    self: &mut Merchant,
+    invoice_id: ID,
+    send_request: Request<SendFunds<Balance<S>>>,
+    policy_s: &Policy<Balance<S>>,
+    customer_loyalty_account: &Account,
+    clock: &Clock,
+) {
+    assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
+    let now = clock.timestamp_ms();
+
+    let (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms) = self
+        .invoices
+        .remove(invoice_id)
+        .unpack();
+
+    // Validate invoice expiration time.
+    assert!(now < expires_at_ms, EInvoiceExpired);
+    // Validate currency type. Otherwise a customer could mint their own coin and
+    // settle in junk tokens.
+    assert!(type_name::with_defining_ids<S>() == payment_type, EWrongPaymentType);
+
+    // Validate PaS send request.
+    let data = send_request.data();
+    assert!(data.recipient() == payout_address, EWrongRecipient);
+    assert!(data.funds().value() == amount, EAmountMismatch);
+    let sender = data.sender();
+    assert!(customer_loyalty_account.owner() == sender, EWrongLoyaltyRecipient);
+
+    // Resolve send request and send funds to payout_address.
+    send_funds::resolve_balance(send_request, policy_s);
+
+    // Mint the loyalty tokens snapshotted at issuance.
+    if (loyalty > 0) {
+        loyalty::mint_to(self.loyalty.treasury_cap_mut(), customer_loyalty_account, loyalty);
+    };
+
+    // Store the receipt under the invoice's issuance ID: a fresh, single-use ID
+    // removed from `invoices` above, so `invoice_receipts.add` can never collide.
+    let receipt = receipt::new_payment(
+        sender,
+        items,
+        amount,
+        now,
+        invoice_id,
+        payout_address,
+        payment_type,
+        loyalty,
+        order_ref,
+    );
+    self.invoice_receipts.add(invoice_id, receipt);
+
+    events::emit_invoice_paid(invoice_id, order_ref, sender, amount, loyalty, now, false);
+}
+
+/// Customer settles an open invoice with a plain, unrestricted `Coin<S>`.
+///
+/// The open-loop counterpart to `pay`: instead of a PAS `send_funds` request,
+/// the caller hands over a regular coin, which the merchant transfers in full to
+/// the invoice's `payout_address` (as an owned `Coin<S>`, NOT into a PAS Account).
+/// Loyalty is still minted into `customer_loyalty_account`, and that account's
+/// owner is recorded as the receipt's `customer`. Permissionless.
+///
+/// NOTE: unlike `pay`, there is no `send_funds` sender to bind the payer's
+/// identity - the caller designates the loyalty recipient, and the receipt's
+/// `customer` is that account's owner. This is safe (loyalty is a reward, so
+/// directing it is gifting, not taking), but the `customer` is "whoever was
+/// named," not a cryptographically-proven payer.
+///
+/// #### Generics
+/// - `S`: The settlement coin type; must match the invoice's `payment_type`.
+///
+/// #### Aborts
+/// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
+/// - `EInvoiceExpired` if the invoice has expired.
+/// - `EWrongPaymentType` if `S` does not match the invoice's `payment_type`.
+/// - `EAmountMismatch` if `coin.value()` is not the invoice amount.
+/// - Propagates from `loyalty::mint_to` if minting `loyalty` would overflow the
+///   `LOYALTY` total supply.
+public fun pay_with_coin<S>(
+    self: &mut Merchant,
+    invoice_id: ID,
+    coin: Coin<S>,
+    customer_loyalty_account: &Account,
+    clock: &Clock,
+) {
+    assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
+    let now = clock.timestamp_ms();
+
+    let (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms) = self
+        .invoices
+        .remove(invoice_id)
+        .unpack();
+
+    // Validate invoice expiration time.
+    assert!(now < expires_at_ms, EInvoiceExpired);
+    // Validate currency type. Otherwise a customer could mint their own coin and
+    // settle in junk tokens.
+    assert!(type_name::with_defining_ids<S>() == payment_type, EWrongPaymentType);
+
+    // Exact payment; the merchant routes the coin to the payout address.
+    assert!(coin.value() == amount, EAmountMismatch);
+    transfer::public_transfer(coin, payout_address);
+
+    // No send-request sender here: the loyalty account's owner is the customer.
+    let customer = customer_loyalty_account.owner();
+
+    // Mint the loyalty tokens snapshotted at issuance.
+    if (loyalty > 0) {
+        loyalty::mint_to(self.loyalty.treasury_cap_mut(), customer_loyalty_account, loyalty);
+    };
+
+    // Store the receipt under the invoice's issuance ID: a fresh, single-use ID
+    // removed from `invoices` above, so `invoice_receipts.add` can never collide.
+    let receipt = receipt::new_payment(
+        customer,
+        items,
+        amount,
+        now,
+        invoice_id,
+        payout_address,
+        payment_type,
+        loyalty,
+        order_ref,
+    );
+    self.invoice_receipts.add(invoice_id, receipt);
+
+    events::emit_invoice_paid(invoice_id, order_ref, customer, amount, loyalty, now, true);
+}
+
+/// Permissionless cleanup of an expired invoice.
+///
+/// No balance is held by the invoice (customer funds stay in their Account until
+/// settlement), so this is just removal + event. Emits `InvoiceCanceled`.
+///
+/// #### Aborts
+/// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
+/// - `ENotExpired` if the invoice has not yet expired.
+public fun cancel_invoice(self: &mut Merchant, invoice_id: ID, clock: &Clock) {
+    assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
+    assert!(clock.timestamp_ms() >= self.invoices.borrow(invoice_id).expires_at_ms(), ENotExpired);
+
+    let (payout_address, payment_type, _items, amount, _loyalty, order_ref, _expires) = self
+        .invoices
+        .remove(invoice_id)
+        .unpack();
+
+    events::emit_invoice_canceled(invoice_id, payout_address, payment_type, amount, order_ref);
+}
+
+/// Customer creates a voucher with a locked `Balance<LOYALTY>`.
+///
+/// Prices each line by snapshotting the variant's current `loyalty_price`, asserts
+/// the unlocked amount matches the items' total, resolves the unlock request into
+/// a `Balance<LOYALTY>`, and stores the `Voucher` under a freshly minted ID (the
+/// QR value). Emits `VoucherCreated`.
+///
+/// #### Returns
+/// - The issuance ID (the `Table` key and QR value).
+///
+/// #### Aborts
+/// - `ENoItems` if `listing_variant_ids` is empty.
+/// - `ELengthMismatch` if the two vectors differ in length.
+/// - `EZeroAmount` if the unlocked amount is zero.
+/// - `EInvalidAmount` if the unlocked amount differs from the items' total.
+/// - `EZeroQuantity` / `ENoLoyaltyPrice` / `EVariantNotFound` / `EListingInactive`
+///   for catalog/price problems.
+public fun create_voucher(
+    self: &mut Merchant,
+    mut unlock_req: Request<UnlockFunds<Balance<LOYALTY>>>,
+    policy_loyalty: &Policy<Balance<LOYALTY>>,
+    listing_variant_ids: vector<ID>,
+    quantities: vector<u64>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): ID {
+    assert!(!listing_variant_ids.is_empty(), ENoItems);
+    assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
+
+    // Take and validate customer account and funds.
+    let customer = unlock_req.data().owner();
+    let amount = unlock_req.data().funds().value();
+    assert!(amount > 0, EZeroAmount);
+
+    // Combine and validate active items and quantities.
+    let items = listing_variant_ids.zip_map!(
+        quantities,
+        |vid, qty| self.price_loyalty_item(vid, qty),
+    );
+    assert!(amount == receipt::compute_total(&items), EInvalidAmount);
+
+    // Cannot overflow: `config::new` caps the TTL at `MAX_TTL_MS` (~10 years), far below u64.
+    let expires_at_ms = clock.timestamp_ms() + self.config.voucher_ttl_ms();
+
+    // Extract funds from customer's PAS account and lock them in the voucher.
+    unlock_req.approve(loyalty::new_redeem_unlock_approval());
+    let funds: Balance<LOYALTY> = unlock_funds::resolve(unlock_req, policy_loyalty);
+
+    let voucher = redemption::new(customer, items, funds, expires_at_ms);
+
+    let id = object::id_from_address(ctx.fresh_object_address());
+    self.vouchers.add(id, voucher);
+
+    events::emit_voucher_created(id);
+
+    id
+}
+
+/// Permissionless cleanup after expiry - deposits the locked balance back into
+/// the customer's PAS Account. Emits `VoucherCanceled`.
+///
+/// #### Aborts
+/// - `EVoucherNotFound` if no open voucher with `voucher_id` is stored.
+/// - `ENotExpired` if the voucher has not yet expired.
+/// - `EWrongCustomer` if the account owner is not the voucher's customer.
+public fun cancel_voucher(
+    self: &mut Merchant,
+    voucher_id: ID,
+    customer_loyalty_account: &Account,
+    clock: &Clock,
+) {
+    assert!(self.vouchers.contains(voucher_id), EVoucherNotFound);
+    assert!(clock.timestamp_ms() >= self.vouchers.borrow(voucher_id).expires_at_ms(), ENotExpired);
+
+    let (customer, _items, funds, _expires) = self.vouchers.remove(voucher_id).unpack();
+    assert!(customer_loyalty_account.owner() == customer, EWrongCustomer);
+
+    let amount = funds.value();
+    events::emit_voucher_canceled(voucher_id, customer, amount);
+
+    // Deposit funds back to the customer.
+    customer_loyalty_account.deposit_balance(funds);
 }
 
 // === View Functions ===
@@ -205,7 +533,7 @@ public fun name(self: &Merchant): &String { &self.name }
 /// Optional logo URL (mutable via `set_display`).
 public fun logo_url(self: &Merchant): &Option<String> { &self.logo_url }
 
-/// Payout address — where customer stablecoin lands on `payment::pay`.
+/// Payout address - where customer stablecoin lands on `pay`.
 public fun payout_address(self: &Merchant): address { self.payout_address }
 
 /// `TypeName` of the only stablecoin currency this merchant accepts. Pinned
@@ -257,8 +585,8 @@ public fun listing_variant(self: &Merchant, listing_variant_id: &ID): &Variant {
 
 /// Like `listing_variant`, but additionally asserts the parent listing is `active`.
 ///
-/// Used at issuance time by `payment::new` / `redemption::new` (via
-/// `receipt::new_item` / `new_loyalty_item`) so inactive listings can't be sold
+/// Used at issuance time by `create_invoice` / `create_voucher` (via the private
+/// `price_item` / `price_loyalty_item` helpers) so inactive listings can't be sold
 /// or redeemed against. Also useful to clients for pre-flight checks before
 /// submitting an issuance call.
 ///
@@ -281,6 +609,52 @@ public fun active_listing_variant(self: &Merchant, listing_variant_id: &ID): &Va
     assert!(listing.active(), EListingInactive);
 
     listing.variant(listing_variant_id)
+}
+
+/// Look up an open `Invoice` by its issuance ID.
+///
+/// #### Aborts
+/// - `EInvoiceNotFound` if no open invoice with `id` is stored.
+public fun invoice(self: &Merchant, id: ID): &Invoice {
+    assert!(self.invoices.contains(id), EInvoiceNotFound);
+
+    self.invoices.borrow(id)
+}
+
+/// Look up an open `Voucher` by its issuance ID.
+///
+/// #### Aborts
+/// - `EVoucherNotFound` if no open voucher with `id` is stored.
+public fun voucher(self: &Merchant, id: ID): &Voucher {
+    assert!(self.vouchers.contains(id), EVoucherNotFound);
+
+    self.vouchers.borrow(id)
+}
+
+/// Look up a stored payment `Receipt<Payment>` by the settled invoice ID.
+///
+/// Customer-scoped history is not an on-chain query - `Receipt.customer` is a
+/// value field, not a key. Index the `InvoicePaid` event off-chain for
+/// per-customer history.
+///
+/// #### Aborts
+/// - `EReceiptNotFound` if no payment receipt with `id` is stored.
+public fun invoice_receipt(self: &Merchant, id: ID): &Receipt<Payment> {
+    assert!(self.invoice_receipts.contains(id), EReceiptNotFound);
+
+    self.invoice_receipts.borrow(id)
+}
+
+/// Look up a stored redemption `Receipt<Redemption>` by the redeemed voucher ID.
+///
+/// Index the `VoucherRedeemed` event off-chain for per-customer history.
+///
+/// #### Aborts
+/// - `EReceiptNotFound` if no redemption receipt with `id` is stored.
+public fun voucher_receipt(self: &Merchant, id: ID): &Receipt<Redemption> {
+    assert!(self.voucher_receipts.contains(id), EReceiptNotFound);
+
+    self.voucher_receipts.borrow(id)
 }
 
 // === Admin Functions ===
@@ -308,7 +682,7 @@ public fun set_payout_address(self: &mut Merchant, _auth: &Auth<MerchantRole>, a
 ///
 /// The new `C` is captured from the type parameter and pinned as
 /// `accepted_payment_type`. Gated by `MerchantRole`. Emits `PaymentTypeChanged`.
-/// In-flight invoices are unaffected — each invoice snapshots its `payment_type`
+/// In-flight invoices are unaffected - each invoice snapshots its `payment_type`
 /// at issuance, so rotating here only affects future invoices.
 ///
 /// #### Generics
@@ -501,7 +875,7 @@ public fun add_listing_variant(
 
 /// Remove a variant by ID from its listing.
 ///
-/// The owning listing is resolved via `variant_index` — no separate
+/// The owning listing is resolved via `variant_index` - no separate
 /// `listing_id` argument needed. Gated by `CatalogManagerRole`. Emits
 /// `VariantRemoved`.
 ///
@@ -526,13 +900,169 @@ public fun remove_listing_variant(
     events::emit_variant_removed(listing_id, variant_id);
 }
 
-// === Package Functions ===
+// === Settlement Functions ===
 
-/// Mutable reference to the merchant's `Loyalty` bundle. Used by `payment::pay`
-/// (mint earned loyalty) and `redemption::redeem` (burn redeemed loyalty) to
-/// reach the treasury cap via `loyalty::treasury_cap_mut`.
-public(package) fun loyalty_mut(self: &mut Merchant): &mut Loyalty {
-    &mut self.loyalty
+/// Merchant issues an invoice from parallel `listing_variant_ids` + `quantities`.
+///
+/// Each pair is priced by snapshotting the variant's current stablecoin price.
+/// The total `amount`, the `loyalty` reward, the accepted `payment_type`, and the
+/// `expires_at_ms` (from `Config.invoice_ttl_ms`) are all snapshotted, and the
+/// resulting `Invoice` is stored in `Merchant.invoices` under a freshly minted ID
+/// (the QR value). Gated by `CashierRole`. Emits `InvoiceCreated`.
+///
+/// #### Returns
+/// - The issuance ID (the `Table` key and QR value).
+///
+/// #### Aborts
+/// - `ENoItems` if `listing_variant_ids` is empty.
+/// - `ELengthMismatch` if the two vectors differ in length.
+/// - `EZeroQuantity` if any quantity is zero.
+/// - `EVariantNotFound` / `EListingInactive` if a variant is unregistered or its
+///   parent listing is inactive.
+public fun create_invoice(
+    self: &mut Merchant,
+    _auth: &Auth<CashierRole>,
+    listing_variant_ids: vector<ID>,
+    quantities: vector<u64>,
+    order_ref: vector<u8>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): ID {
+    assert!(!listing_variant_ids.is_empty(), ENoItems);
+    assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
+
+    let items = listing_variant_ids.zip_map!(quantities, |vid, qty| self.price_item(vid, qty));
+    // Amount should not be zero, since individual prices and quantities enforced to be non-zero.
+    let amount = receipt::compute_total(&items);
+    let loyalty = self.config.compute_loyalty(amount);
+    // Cannot overflow: `config::new` caps the TTL at `MAX_TTL_MS` (~10 years), far below u64.
+    let expires_at_ms = clock.timestamp_ms() + self.config.invoice_ttl_ms();
+
+    let invoice = payment::new(
+        self.payout_address,
+        self.accepted_payment_type,
+        items,
+        amount,
+        loyalty,
+        order_ref,
+        expires_at_ms,
+    );
+
+    let id = object::id_from_address(ctx.fresh_object_address());
+    self.invoices.add(id, invoice);
+
+    events::emit_invoice_created(id);
+
+    id
+}
+
+/// Merchant redeems an open voucher.
+///
+/// Burns the locked `Balance<LOYALTY>` via the merchant's `TreasuryCap<LOYALTY>`,
+/// removes the voucher, stores a `Receipt` keyed by `voucher_id`, and emits
+/// `VoucherRedeemed`. Gated by `CashierRole`.
+///
+/// #### Aborts
+/// - `EVoucherNotFound` if no open voucher with `voucher_id` is stored.
+/// - `EVoucherExpired` if the voucher has expired.
+public fun redeem(self: &mut Merchant, _auth: &Auth<CashierRole>, voucher_id: ID, clock: &Clock) {
+    assert!(self.vouchers.contains(voucher_id), EVoucherNotFound);
+    let now = clock.timestamp_ms();
+    assert!(now < self.vouchers.borrow(voucher_id).expires_at_ms(), EVoucherExpired);
+
+    let (customer, items, funds, _expires) = self.vouchers.remove(voucher_id).unpack();
+    let amount = funds.value();
+
+    balance::decrease_supply(coin::supply_mut(self.loyalty.treasury_cap_mut()), funds);
+
+    // Store the receipt under the voucher's issuance ID: a fresh, single-use ID
+    // removed from `vouchers` above, so `voucher_receipts.add` can never collide.
+    let receipt = receipt::new_redemption(customer, items, amount, now, voucher_id);
+    self.voucher_receipts.add(voucher_id, receipt);
+
+    events::emit_voucher_redeemed(voucher_id, customer, amount, now);
+}
+
+/// Reclaim storage by pruning the listed payment receipts.
+///
+/// Receipts are redundant with the permanent `InvoicePaid` event stream, so
+/// pruning loses no canonical history - it only frees the merchant's storage
+/// deposit (refunded to the caller). The merchant computes which receipts to drop
+/// off-chain (a `Table` can't be iterated on-chain) and passes their `ids`. Gated
+/// by `MerchantRole`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+/// - `ids`: Receipt IDs (settled invoice IDs) to prune.
+///
+/// #### Aborts
+/// - `EReceiptNotFound` if any `id` has no stored payment receipt.
+public fun prune_invoice_receipts(
+    self: &mut Merchant,
+    _auth: &Auth<MerchantRole>,
+    ids: vector<ID>,
+) {
+    ids.do!(|id| {
+        assert!(self.invoice_receipts.contains(id), EReceiptNotFound);
+        self.invoice_receipts.remove(id).destroy();
+    });
+}
+
+/// Reclaim storage by pruning the listed redemption receipts.
+///
+/// Mirror of `prune_invoice_receipts` for the `VoucherRedeemed` side. Gated by
+/// `MerchantRole`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+/// - `ids`: Receipt IDs (redeemed voucher IDs) to prune.
+///
+/// #### Aborts
+/// - `EReceiptNotFound` if any `id` has no stored redemption receipt.
+public fun prune_voucher_receipts(
+    self: &mut Merchant,
+    _auth: &Auth<MerchantRole>,
+    ids: vector<ID>,
+) {
+    ids.do!(|id| {
+        assert!(self.voucher_receipts.contains(id), EReceiptNotFound);
+        self.voucher_receipts.remove(id).destroy();
+    });
+}
+
+// === Private Functions ===
+
+/// Price one stablecoin line by snapshotting the variant's current price from
+/// the catalog (asserting the parent listing is active).
+///
+/// #### Aborts
+/// - `EZeroQuantity` if `quantity` is zero.
+/// - `EVariantNotFound` / `EListingInactive` if the variant is unregistered or
+///   its parent listing is inactive.
+fun price_item(self: &Merchant, variant_id: ID, quantity: u64): Item {
+    assert!(quantity > 0, EZeroQuantity);
+
+    let price = self.active_listing_variant(&variant_id).price();
+    receipt::new_item(variant_id, quantity, price)
+}
+
+/// Price one loyalty line by snapshotting the variant's current `loyalty_price`.
+///
+/// #### Aborts
+/// - `EZeroQuantity` if `quantity` is zero.
+/// - `ENoLoyaltyPrice` if the variant's `loyalty_price` is `None`.
+/// - `EVariantNotFound` / `EListingInactive` if the variant is unregistered or
+///   its parent listing is inactive.
+fun price_loyalty_item(self: &Merchant, variant_id: ID, quantity: u64): Item {
+    assert!(quantity > 0, EZeroQuantity);
+
+    let price = self
+        .active_listing_variant(&variant_id)
+        .loyalty_price()
+        .destroy_or!(abort ENoLoyaltyPrice);
+    receipt::new_item(variant_id, quantity, price)
 }
 
 // === Test-Only Helpers ===

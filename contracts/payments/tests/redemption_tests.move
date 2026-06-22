@@ -3,20 +3,26 @@
 module openzeppelin_payments::redemption_tests;
 
 use openzeppelin_access::access_control::AccessControl;
-use openzeppelin_payments::events::{VoucherRedeemed, VoucherCanceled};
+use openzeppelin_payments::events;
 use openzeppelin_payments::listing;
 use openzeppelin_payments::loyalty::LOYALTY;
-use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, CashierRole, CatalogManagerRole};
-use openzeppelin_payments::receipt::{Self, Receipt, Redemption};
-use openzeppelin_payments::redemption::{Self, Voucher};
-use openzeppelin_payments::test_setup;
+use openzeppelin_payments::merchant::{
+    Self,
+    Merchant,
+    MERCHANT,
+    CashierRole,
+    CatalogManagerRole,
+    MerchantRole
+};
+use openzeppelin_payments::receipt;
+use openzeppelin_payments::test_helpers::assert_emitted;
+use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::account::{Self, Account};
 use pas::e2e;
 use std::unit_test::{assert_eq, destroy};
 use sui::balance;
 use sui::clock;
 use sui::coin;
-use sui::event;
 use sui::test_scenario;
 
 const ADMIN: address = @0xA;
@@ -34,11 +40,18 @@ fun redemption_happy_path() {
             scenario.ctx(),
         );
 
-        // Customer PAS account (unfunded for now; we mint LOYALTY via the
-        // merchant TreasuryCap below so the supply counter matches circulation
-        // — `balance::decrease_supply` asserts on this in `redeem`).
+        // Customer PAS account. We fund it with LOYALTY by running a real
+        // payment first (paying 500 TEST_USD mints 50 LOYALTY at the default
+        // 1/10 rate). This is supply-tracked LOYALTY, which `redeem`'s
+        // `balance::decrease_supply` requires (a `create_for_testing` balance
+        // would underflow the treasury supply counter).
         let customer_account_id = ns.account_address(CUSTOMER).to_id();
-        account::create_and_share(ns, CUSTOMER);
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.deposit_balance(balance::create_for_testing<TEST_USD>(10_000));
+        customer_account.share();
+
+        let payout_account_id = ns.account_address(PAYOUT).to_id();
+        account::create_and_share(ns, PAYOUT);
 
         // Catalog: one listing with a variant priced 500 stablecoin units and 50 LOYALTY.
         let mut listing = listing::new(b"Free Drink".to_string(), scenario.ctx());
@@ -57,20 +70,47 @@ fun redemption_happy_path() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let mut customer_account_shared = scenario.take_shared_by_id<Account>(
-            customer_account_id,
-        );
 
         let _ = merchant.add_listing(&catalog_auth, listing);
 
-        // Mint LOYALTY for the customer via the merchant-held TreasuryCap.
-        let loyalty_bal = merchant.loyalty_mut().treasury_cap_mut().mint_balance(100);
-        customer_account_shared.deposit_balance(loyalty_bal);
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
 
-        // Customer: build unlock request, then voucher.
+        // Issue + pay an invoice to mint 50 LOYALTY into the customer's account.
+        let invoice_id = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            b"fund",
+            &test_clock,
+            scenario.ctx(),
+        );
+
         scenario.next_tx(CUSTOMER);
+        let mut customer_account_shared = scenario.take_shared_by_id<Account>(
+            customer_account_id,
+        );
+        let payout_account_shared = scenario.take_shared_by_id<Account>(payout_account_id);
+        let test_usd_policy = test_setup::take_test_usd_policy(scenario);
         let loyalty_policy = test_setup::take_loyalty_policy(scenario);
 
+        let pay_auth = account::new_auth(scenario.ctx());
+        let mut send_req = customer_account_shared.send_balance<TEST_USD>(
+            &pay_auth,
+            &payout_account_shared,
+            500,
+            scenario.ctx(),
+        );
+        test_setup::approve_test_usd(&mut send_req);
+        merchant.pay<TEST_USD>(
+            invoice_id,
+            send_req,
+            &test_usd_policy,
+            &customer_account_shared,
+            &test_clock,
+        );
+
+        // Customer: build unlock request, then voucher.
         let customer_auth = account::new_auth(scenario.ctx());
         let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
             &customer_auth,
@@ -78,11 +118,7 @@ fun redemption_happy_path() {
             scenario.ctx(),
         );
 
-        let mut test_clock = clock::create_for_testing(scenario.ctx());
-        test_clock.set_for_testing(1_000_000);
-
-        let voucher = redemption::new(
-            &merchant,
+        let voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[variant_id],
@@ -90,38 +126,38 @@ fun redemption_happy_path() {
             &test_clock,
             scenario.ctx(),
         );
-        let voucher_id = object::id(&voucher);
-        redemption::share(voucher);
+
+        // `VoucherCreated` was emitted with the issuance ID (same tx as create_voucher).
+        assert_emitted!(events::voucher_created(voucher_id));
 
         // Merchant redeems. Capture LOYALTY supply before/after to confirm
         // the redeem path actually burns from the TreasuryCap-tracked supply.
         scenario.next_tx(ADMIN);
-        let v_shared = scenario.take_shared_by_id<Voucher>(voucher_id);
         let supply_before = coin::total_supply(merchant.loyalty().treasury_cap());
-        redemption::redeem(v_shared, &cashier_auth, &mut merchant, &test_clock, scenario.ctx());
+        merchant.redeem(&cashier_auth, voucher_id, &test_clock);
         let supply_after = coin::total_supply(merchant.loyalty().treasury_cap());
         assert!(supply_before - supply_after == 50, 0);
 
-        // `VoucherRedeemed` was emitted.
-        assert!(event::events_by_type<VoucherRedeemed>().length() == 1, 0);
+        // `VoucherRedeemed` was emitted with the expected payload.
+        assert_emitted!(events::voucher_redeemed(voucher_id, CUSTOMER, 50, 1_000_000));
 
-        // Customer receives the RedemptionReceipt.
-        scenario.next_tx(CUSTOMER);
-        let r = scenario.take_from_sender<Receipt<Redemption>>();
-        assert_eq!(receipt::amount(&r), 50);
-        assert_eq!(receipt::timestamp_ms(&r), 1_000_000);
+        // Receipt is stored in the merchant's receipt table, keyed by voucher id.
+        let r = merchant.voucher_receipt(voucher_id);
+        assert_eq!(receipt::amount(r), 50);
+        assert_eq!(receipt::timestamp_ms(r), 1_000_000);
 
-        destroy(r);
         test_setup::return_loyalty_policy(loyalty_policy);
+        test_setup::return_test_usd_policy(test_usd_policy);
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
         test_scenario::return_shared(customer_account_shared);
+        test_scenario::return_shared(payout_account_shared);
         destroy(test_usd_cap);
         destroy(test_clock);
     });
 }
 
-#[test, expected_failure(abort_code = redemption::EVoucherExpired)]
+#[test, expected_failure(abort_code = merchant::EVoucherExpired)]
 fun redeem_after_expiry_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -171,8 +207,7 @@ fun redeem_after_expiry_aborts() {
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
 
-        let voucher = redemption::new(
-            &merchant,
+        let voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[variant_id],
@@ -180,15 +215,12 @@ fun redeem_after_expiry_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        let voucher_id = object::id(&voucher);
-        redemption::share(voucher);
 
         // Advance past voucher_ttl_ms (600_000).
         test_clock.set_for_testing(2_000_000);
 
         scenario.next_tx(ADMIN);
-        let v_shared = scenario.take_shared_by_id<Voucher>(voucher_id);
-        redemption::redeem(v_shared, &cashier_auth, &mut merchant, &test_clock, scenario.ctx());
+        merchant.redeem(&cashier_auth, voucher_id, &test_clock);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -247,8 +279,7 @@ fun cancel_voucher_returns_funds() {
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
-        let voucher = redemption::new(
-            &merchant,
+        let voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[variant_id],
@@ -256,17 +287,14 @@ fun cancel_voucher_returns_funds() {
             &test_clock,
             scenario.ctx(),
         );
-        let voucher_id = object::id(&voucher);
-        redemption::share(voucher);
 
         // Past expiry, permissionless cancel by another address.
         test_clock.set_for_testing(2_000_000);
         scenario.next_tx(@0xDEAD);
-        let v_shared = scenario.take_shared_by_id<Voucher>(voucher_id);
-        redemption::cancel(v_shared, &customer_account_shared, &test_clock);
+        merchant.cancel_voucher(voucher_id, &customer_account_shared, &test_clock);
 
-        // `VoucherCanceled` was emitted.
-        assert!(event::events_by_type<VoucherCanceled>().length() == 1, 0);
+        // `VoucherCanceled` was emitted with the expected payload.
+        assert_emitted!(events::voucher_canceled(voucher_id, CUSTOMER, 50));
 
         test_setup::return_loyalty_policy(loyalty_policy);
         test_scenario::return_shared(merchant);
@@ -277,7 +305,7 @@ fun cancel_voucher_returns_funds() {
     });
 }
 
-#[test, expected_failure(abort_code = receipt::ENoLoyaltyPrice)]
+#[test, expected_failure(abort_code = merchant::ENoLoyaltyPrice)]
 fun voucher_without_loyalty_price_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -327,9 +355,8 @@ fun voucher_without_loyalty_price_aborts() {
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
 
-        // Aborts with `receipt::ENoLoyaltyPrice` — variant has no loyalty_price.
-        let voucher = redemption::new(
-            &merchant,
+        // Aborts with `merchant::ENoLoyaltyPrice` — variant has no loyalty_price.
+        let _voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[variant_id],
@@ -337,7 +364,6 @@ fun voucher_without_loyalty_price_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        redemption::share(voucher);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -349,7 +375,7 @@ fun voucher_without_loyalty_price_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = redemption::ENoItems)]
+#[test, expected_failure(abort_code = merchant::ENoItems)]
 fun redemption_empty_items_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -365,7 +391,7 @@ fun redemption_empty_items_aborts() {
         customer_account.share();
 
         scenario.next_tx(CUSTOMER);
-        let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
             customer_account_id,
         );
@@ -381,8 +407,7 @@ fun redemption_empty_items_aborts() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // Empty vectors — aborts on `ENoItems`.
-        let voucher = redemption::new(
-            &merchant,
+        let _voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[],
@@ -390,7 +415,6 @@ fun redemption_empty_items_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        redemption::share(voucher);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -401,7 +425,7 @@ fun redemption_empty_items_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = redemption::ELengthMismatch)]
+#[test, expected_failure(abort_code = merchant::ELengthMismatch)]
 fun redemption_length_mismatch_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -450,8 +474,7 @@ fun redemption_length_mismatch_aborts() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // 1 variant id, 2 quantities — aborts on `ELengthMismatch`.
-        let voucher = redemption::new(
-            &merchant,
+        let _voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[variant_id],
@@ -459,7 +482,6 @@ fun redemption_length_mismatch_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        redemption::share(voucher);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -521,8 +543,7 @@ fun redemption_inactive_listing_aborts() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // Variant belongs to a deactivated listing — aborts on `EListingInactive`.
-        let voucher = redemption::new(
-            &merchant,
+        let _voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[variant_id],
@@ -530,7 +551,6 @@ fun redemption_inactive_listing_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        redemption::share(voucher);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -542,7 +562,7 @@ fun redemption_inactive_listing_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = redemption::EWrongCustomer)]
+#[test, expected_failure(abort_code = merchant::EWrongCustomer)]
 fun cancel_wrong_customer_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -595,8 +615,7 @@ fun cancel_wrong_customer_aborts() {
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
 
-        let voucher = redemption::new(
-            &merchant,
+        let voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[variant_id],
@@ -604,15 +623,12 @@ fun cancel_wrong_customer_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        let voucher_id = object::id(&voucher);
-        redemption::share(voucher);
 
         // Past expiry, attempt cancel with the wrong customer account.
         test_clock.set_for_testing(2_000_000);
         scenario.next_tx(@0xDEAD);
-        let v_shared = scenario.take_shared_by_id<Voucher>(voucher_id);
-        // Aborts with `redemption::EWrongCustomer`.
-        redemption::cancel(v_shared, &other_account_shared, &test_clock);
+        // Aborts with `merchant::EWrongCustomer`.
+        merchant.cancel_voucher(voucher_id, &other_account_shared, &test_clock);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -626,7 +642,7 @@ fun cancel_wrong_customer_aborts() {
 }
 
 #[test]
-fun destroy_redemption_receipt_succeeds() {
+fun redemption_receipt_stored_in_merchant() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
@@ -635,8 +651,15 @@ fun destroy_redemption_receipt_succeeds() {
             scenario.ctx(),
         );
 
+        // Fund the customer's LOYALTY by running a real payment first (paying
+        // 500 TEST_USD mints 50 supply-tracked LOYALTY at the default 1/10 rate).
         let customer_account_id = ns.account_address(CUSTOMER).to_id();
-        account::create_and_share(ns, CUSTOMER);
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.deposit_balance(balance::create_for_testing<TEST_USD>(10_000));
+        customer_account.share();
+
+        let payout_account_id = ns.account_address(PAYOUT).to_id();
+        account::create_and_share(ns, PAYOUT);
 
         let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
         let variant = listing::new_variant(
@@ -654,18 +677,46 @@ fun destroy_redemption_receipt_succeeds() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let mut customer_account_shared = scenario.take_shared_by_id<Account>(
-            customer_account_id,
-        );
 
         let _ = merchant.add_listing(&catalog_auth, listing);
 
-        // Mint LOYALTY for the customer via the merchant-held TreasuryCap.
-        let loyalty_bal = merchant.loyalty_mut().treasury_cap_mut().mint_balance(100);
-        customer_account_shared.deposit_balance(loyalty_bal);
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+
+        // Issue + pay an invoice to mint 50 LOYALTY into the customer's account.
+        let invoice_id = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            b"fund",
+            &test_clock,
+            scenario.ctx(),
+        );
 
         scenario.next_tx(CUSTOMER);
+        let mut customer_account_shared = scenario.take_shared_by_id<Account>(
+            customer_account_id,
+        );
+        let payout_account_shared = scenario.take_shared_by_id<Account>(payout_account_id);
+        let test_usd_policy = test_setup::take_test_usd_policy(scenario);
         let loyalty_policy = test_setup::take_loyalty_policy(scenario);
+
+        let pay_auth = account::new_auth(scenario.ctx());
+        let mut send_req = customer_account_shared.send_balance<TEST_USD>(
+            &pay_auth,
+            &payout_account_shared,
+            500,
+            scenario.ctx(),
+        );
+        test_setup::approve_test_usd(&mut send_req);
+        merchant.pay<TEST_USD>(
+            invoice_id,
+            send_req,
+            &test_usd_policy,
+            &customer_account_shared,
+            &test_clock,
+        );
+
         let customer_auth = account::new_auth(scenario.ctx());
         let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
             &customer_auth,
@@ -673,10 +724,7 @@ fun destroy_redemption_receipt_succeeds() {
             scenario.ctx(),
         );
 
-        let mut test_clock = clock::create_for_testing(scenario.ctx());
-        test_clock.set_for_testing(1_000_000);
-        let voucher = redemption::new(
-            &merchant,
+        let voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[variant_id],
@@ -684,28 +732,28 @@ fun destroy_redemption_receipt_succeeds() {
             &test_clock,
             scenario.ctx(),
         );
-        let voucher_id = object::id(&voucher);
-        redemption::share(voucher);
 
         scenario.next_tx(ADMIN);
-        let v_shared = scenario.take_shared_by_id<Voucher>(voucher_id);
-        redemption::redeem(v_shared, &cashier_auth, &mut merchant, &test_clock, scenario.ctx());
+        merchant.redeem(&cashier_auth, voucher_id, &test_clock);
 
-        // Customer voluntarily discards their receipt.
-        scenario.next_tx(CUSTOMER);
-        let r = scenario.take_from_sender<Receipt<Redemption>>();
-        receipt::destroy(r);
+        // The receipt is stored in the merchant's receipt table, keyed by
+        // voucher id. Read it back and verify it records the redemption.
+        let r = merchant.voucher_receipt(voucher_id);
+        assert_eq!(receipt::amount(r), 50);
+        assert_eq!(receipt::voucher_id(r), voucher_id);
 
         test_setup::return_loyalty_policy(loyalty_policy);
+        test_setup::return_test_usd_policy(test_usd_policy);
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
         test_scenario::return_shared(customer_account_shared);
+        test_scenario::return_shared(payout_account_shared);
         destroy(test_usd_cap);
         destroy(test_clock);
     });
 }
 
-#[test, expected_failure(abort_code = redemption::ENotExpired)]
+#[test, expected_failure(abort_code = merchant::ENotExpired)]
 fun cancel_voucher_before_expiry_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -751,8 +799,7 @@ fun cancel_voucher_before_expiry_aborts() {
         );
 
         let test_clock = clock::create_for_testing(scenario.ctx());
-        let voucher = redemption::new(
-            &merchant,
+        let voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[variant_id],
@@ -760,13 +807,10 @@ fun cancel_voucher_before_expiry_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        let voucher_id = object::id(&voucher);
-        redemption::share(voucher);
 
-        // Voucher is still live — `cancel` must abort with `ENotExpired`.
+        // Voucher is still live — `cancel_voucher` must abort with `ENotExpired`.
         scenario.next_tx(@0xDEAD);
-        let v_shared = scenario.take_shared_by_id<Voucher>(voucher_id);
-        redemption::cancel(v_shared, &customer_account_shared, &test_clock);
+        merchant.cancel_voucher(voucher_id, &customer_account_shared, &test_clock);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -778,7 +822,7 @@ fun cancel_voucher_before_expiry_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = redemption::EZeroAmount)]
+#[test, expected_failure(abort_code = merchant::EZeroAmount)]
 fun redemption_zero_amount_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -825,8 +869,7 @@ fun redemption_zero_amount_aborts() {
         );
 
         let test_clock = clock::create_for_testing(scenario.ctx());
-        let voucher = redemption::new(
-            &merchant,
+        let _voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[variant_id],
@@ -834,7 +877,6 @@ fun redemption_zero_amount_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        redemption::share(voucher);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -846,7 +888,7 @@ fun redemption_zero_amount_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = redemption::EInvalidAmount)]
+#[test, expected_failure(abort_code = merchant::EInvalidAmount)]
 fun redemption_amount_mismatch_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -894,8 +936,7 @@ fun redemption_amount_mismatch_aborts() {
         );
 
         let test_clock = clock::create_for_testing(scenario.ctx());
-        let voucher = redemption::new(
-            &merchant,
+        let _voucher_id = merchant.create_voucher(
             unlock_req,
             &loyalty_policy,
             vector[variant_id],
@@ -903,7 +944,251 @@ fun redemption_amount_mismatch_aborts() {
             &test_clock,
             scenario.ctx(),
         );
-        redemption::share(voucher);
+
+        // Unreachable cleanup.
+        test_setup::return_loyalty_policy(loyalty_policy);
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EReceiptNotFound)]
+fun prune_voucher_receipts_removes_receipt() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        // Fund LOYALTY by paying a real invoice first (mints 50 at the 1/10 rate).
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.deposit_balance(balance::create_for_testing<TEST_USD>(10_000));
+        customer_account.share();
+
+        let payout_account_id = ns.account_address(PAYOUT).to_id();
+        account::create_and_share(ns, PAYOUT);
+
+        let mut listing = listing::new(b"Free Drink".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"Small".to_string(),
+            500,
+            std::option::some(50),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+        let invoice_id = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            b"fund",
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        scenario.next_tx(CUSTOMER);
+        let mut customer_account_shared = scenario.take_shared_by_id<Account>(customer_account_id);
+        let payout_account_shared = scenario.take_shared_by_id<Account>(payout_account_id);
+        let test_usd_policy = test_setup::take_test_usd_policy(scenario);
+        let loyalty_policy = test_setup::take_loyalty_policy(scenario);
+
+        let pay_auth = account::new_auth(scenario.ctx());
+        let mut send_req = customer_account_shared.send_balance<TEST_USD>(
+            &pay_auth,
+            &payout_account_shared,
+            500,
+            scenario.ctx(),
+        );
+        test_setup::approve_test_usd(&mut send_req);
+        merchant.pay<TEST_USD>(
+            invoice_id,
+            send_req,
+            &test_usd_policy,
+            &customer_account_shared,
+            &test_clock,
+        );
+
+        // Customer locks the 50 LOYALTY into a voucher.
+        let customer_auth = account::new_auth(scenario.ctx());
+        let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
+            &customer_auth,
+            50,
+            scenario.ctx(),
+        );
+        let voucher_id = merchant.create_voucher(
+            unlock_req,
+            &loyalty_policy,
+            vector[variant_id],
+            vector[1],
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Merchant redeems, then prunes the receipt; reading it aborts `EReceiptNotFound`.
+        scenario.next_tx(ADMIN);
+        merchant.redeem(&cashier_auth, voucher_id, &test_clock);
+        merchant.prune_voucher_receipts(&merchant_auth, vector[voucher_id]);
+        let _ = merchant.voucher_receipt(voucher_id);
+
+        // Unreachable cleanup.
+        test_setup::return_loyalty_policy(loyalty_policy);
+        test_setup::return_test_usd_policy(test_usd_policy);
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        test_scenario::return_shared(payout_account_shared);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EVoucherNotFound)]
+fun redeem_unknown_voucher_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // No voucher with this ID — aborts `EVoucherNotFound`.
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        merchant.redeem(&cashier_auth, phantom, &test_clock);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EVoucherNotFound)]
+fun cancel_voucher_unknown_id_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        account::create_and_share(ns, CUSTOMER);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let ac = scenario.take_shared<AccessControl<MERCHANT>>();
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        scenario.next_tx(CUSTOMER);
+        let customer_account_shared = scenario.take_shared_by_id<Account>(customer_account_id);
+
+        // No voucher with this ID — aborts `EVoucherNotFound`.
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        merchant.cancel_voucher(phantom, &customer_account_shared, &test_clock);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EReceiptNotFound)]
+fun prune_voucher_receipts_unknown_id_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        // No voucher receipt with this ID — aborts `EReceiptNotFound`.
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        merchant.prune_voucher_receipts(&merchant_auth, vector[phantom]);
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EZeroQuantity)]
+fun create_voucher_zero_quantity_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
+        customer_account.share();
+
+        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::some(50),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        scenario.next_tx(CUSTOMER);
+        let mut customer_account_shared = scenario.take_shared_by_id<Account>(
+            customer_account_id,
+        );
+        let loyalty_policy = test_setup::take_loyalty_policy(scenario);
+
+        let customer_auth = account::new_auth(scenario.ctx());
+        let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
+            &customer_auth,
+            50,
+            scenario.ctx(),
+        );
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // Quantity 0 — aborts on `EZeroQuantity` during item pricing.
+        let _voucher_id = merchant.create_voucher(
+            unlock_req,
+            &loyalty_policy,
+            vector[variant_id],
+            vector[0],
+            &test_clock,
+            scenario.ctx(),
+        );
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);

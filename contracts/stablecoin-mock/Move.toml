@@ -4,3 +4,4 @@ edition = "2024"
 
 [dependencies]
 pas = { r.mvr = "@pas/pas" }
+ptb = { r.mvr = "@pas/ptb" }

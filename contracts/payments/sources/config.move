@@ -22,6 +22,14 @@ const EZeroMintDenominator: vector<u8> = "Mint denominator cannot be zero";
 const EZeroInvoiceTtl: vector<u8> = "invoice_ttl_ms must be greater than zero";
 #[error(code = 2)]
 const EZeroVoucherTtl: vector<u8> = "voucher_ttl_ms must be greater than zero";
+#[error(code = 3)]
+const ETtlTooLarge: vector<u8> = "TTL exceeds the maximum allowed (MAX_TTL_MS)";
+
+// === Constants ===
+
+/// Upper bound (ms) on invoice/voucher TTLs (~10 years — generous for any POS).
+/// Keeps the issuance-time `clock.timestamp_ms() + ttl_ms` computation well below `u64` overflow.
+const MAX_TTL_MS: u64 = 10 * 365 * 24 * 60 * 60 * 1000;
 
 // === Structs ===
 
@@ -34,10 +42,10 @@ public struct Config has drop, store {
     /// Hard cap on minted LOYALTY per payment.
     max_mint_per_payment: u64,
     /// Lifetime in milliseconds applied to merchant-issued invoices
-    /// (`invoice.expires_at_ms = clock + invoice_ttl_ms`). Must be > 0.
+    /// (`invoice.expires_at_ms = clock + invoice_ttl_ms`). Must be non-zero.
     invoice_ttl_ms: u64,
     /// Lifetime in milliseconds applied to customer-issued vouchers
-    /// (`voucher.expires_at_ms = clock + voucher_ttl_ms`). Must be > 0.
+    /// (`voucher.expires_at_ms = clock + voucher_ttl_ms`). Must be non-zero.
     voucher_ttl_ms: u64,
 }
 
@@ -45,7 +53,7 @@ public struct Config has drop, store {
 
 /// Construct a new `Config`.
 ///
-/// `mint_numerator = 0` and/or `max_mint_per_payment = 0` are permitted —
+/// `mint_numerator = 0` and/or `max_mint_per_payment = 0` are permitted -
 /// loyalty mint becomes a no-op. Pass the returned value to `merchant::create`
 /// (initial setup) or `merchant::set_config` (replacement).
 ///
@@ -53,8 +61,8 @@ public struct Config has drop, store {
 /// - `mint_numerator`: Numerator of the loyalty mint ratio.
 /// - `mint_denominator`: Denominator of the loyalty mint ratio. Must be non-zero.
 /// - `max_mint_per_payment`: Hard cap on minted LOYALTY per payment.
-/// - `invoice_ttl_ms`: Invoice lifetime in milliseconds. Must be > 0.
-/// - `voucher_ttl_ms`: Voucher lifetime in milliseconds. Must be > 0.
+/// - `invoice_ttl_ms`: Invoice lifetime in milliseconds. Must be in `(0, MAX_TTL_MS]`.
+/// - `voucher_ttl_ms`: Voucher lifetime in milliseconds. Must be in `(0, MAX_TTL_MS]`.
 ///
 /// #### Returns
 /// - The constructed `Config`.
@@ -63,6 +71,7 @@ public struct Config has drop, store {
 /// - `EZeroMintDenominator` if `mint_denominator` is zero.
 /// - `EZeroInvoiceTtl` if `invoice_ttl_ms` is zero.
 /// - `EZeroVoucherTtl` if `voucher_ttl_ms` is zero.
+/// - `ETtlTooLarge` if either TTL exceeds `MAX_TTL_MS` (guards `clock + ttl` overflow).
 public fun new(
     mint_numerator: u64,
     mint_denominator: u64,
@@ -70,9 +79,11 @@ public fun new(
     invoice_ttl_ms: u64,
     voucher_ttl_ms: u64,
 ): Config {
-    assert!(mint_denominator != 0, EZeroMintDenominator);
+    assert!(mint_denominator > 0, EZeroMintDenominator);
     assert!(invoice_ttl_ms > 0, EZeroInvoiceTtl);
+    assert!(invoice_ttl_ms <= MAX_TTL_MS, ETtlTooLarge);
     assert!(voucher_ttl_ms > 0, EZeroVoucherTtl);
+    assert!(voucher_ttl_ms <= MAX_TTL_MS, ETtlTooLarge);
 
     Config {
         mint_numerator,

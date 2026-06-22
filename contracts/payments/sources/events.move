@@ -1,7 +1,7 @@
 /// Event types and package-private emit helpers for the payments package.
 ///
 /// All on-chain state transitions worth indexing emit one event from this
-/// module. Indexers filter by event type (`InvoicePaid`, `VoucherRedeemed`, …)
+/// module. Indexers filter by event type (`InvoicePaid`, `VoucherRedeemed`, ...)
 /// and resolve the embedded IDs back to the relevant objects.
 module openzeppelin_payments::events;
 
@@ -10,26 +10,26 @@ use sui::event;
 
 // === Events ===
 
-/// Emitted when a merchant issues a fresh `Invoice` via `payment::new`.
+/// Emitted when a merchant issues a fresh `Invoice` via `merchant::create_invoice`.
 public struct InvoiceCreated has copy, drop {
     /// ID of the newly-shared `Invoice` object.
     invoice_id: ID,
 }
 
-/// Emitted when a customer creates a fresh `Voucher` via `redemption::new`.
+/// Emitted when a customer creates a fresh `Voucher` via `merchant::create_voucher`.
 public struct VoucherCreated has copy, drop {
     /// ID of the newly-shared `Voucher` object.
     voucher_id: ID,
 }
 
 /// Emitted when a customer settles an `Invoice`. Indexer resolves
-/// `invoice_id`/`order_ref` → settled.
+/// `invoice_id`/`order_ref` -> settled.
 public struct InvoicePaid has copy, drop {
     /// ID of the settled `Invoice` (now destroyed).
     invoice_id: ID,
     /// Merchant-supplied order reference carried over from the invoice.
     order_ref: vector<u8>,
-    /// Address that paid (and received the soulbound `Receipt<Payment>`).
+    /// Address that paid (recorded as `customer` on the stored `Receipt`).
     customer: address,
     /// Stablecoin amount settled.
     amount: u64,
@@ -37,10 +37,13 @@ public struct InvoicePaid has copy, drop {
     loyalty: u64,
     /// Settlement clock timestamp (ms since epoch).
     timestamp_ms: u64,
+    /// Custody discriminator: `true` if settled via the open-loop `merchant::pay_with_coin`,
+    /// `false` if via the PAS `merchant::pay`.
+    paid_with_coin: bool,
 }
 
 /// Emitted when a customer redeems a `Voucher`. Indexer resolves
-/// `voucher_id` → redeemed.
+/// `voucher_id` -> redeemed.
 public struct VoucherRedeemed has copy, drop {
     /// ID of the redeemed `Voucher` (now destroyed).
     voucher_id: ID,
@@ -52,7 +55,7 @@ public struct VoucherRedeemed has copy, drop {
     timestamp_ms: u64,
 }
 
-/// Emitted when an expired `Invoice` is cleaned up via `payment::cancel`.
+/// Emitted when an expired `Invoice` is cleaned up via `merchant::cancel_invoice`.
 public struct InvoiceCanceled has copy, drop {
     /// ID of the canceled `Invoice` (now destroyed).
     invoice_id: ID,
@@ -66,7 +69,7 @@ public struct InvoiceCanceled has copy, drop {
     order_ref: vector<u8>,
 }
 
-/// Emitted when an expired `Voucher` is cleaned up via `redemption::cancel`.
+/// Emitted when an expired `Voucher` is cleaned up via `merchant::cancel_voucher`.
 /// The locked LOYALTY balance has been returned to `customer`.
 public struct VoucherCanceled has copy, drop {
     /// ID of the canceled `Voucher` (now destroyed).
@@ -113,19 +116,19 @@ public struct VariantRemoved has copy, drop {
     variant_id: ID,
 }
 
-/// Emitted when a merchant replaces its loyalty mint `Config`. Pulse only —
+/// Emitted when a merchant replaces its loyalty mint `Config`. Pulse only -
 /// query `Merchant.config` for the current values.
 public struct ConfigUpdated has copy, drop {}
 
-/// Emitted when a merchant rotates its payout address. Pulse only — query
+/// Emitted when a merchant rotates its payout address. Pulse only - query
 /// `Merchant.payout_address` for the current value.
 public struct PayoutAddressChanged has copy, drop {}
 
-/// Emitted when a merchant rotates its accepted payment currency. Pulse only —
+/// Emitted when a merchant rotates its accepted payment currency. Pulse only -
 /// query `Merchant.accepted_payment_type` for the current value.
 public struct PaymentTypeChanged has copy, drop {}
 
-/// Emitted when a merchant updates its display name or logo. Pulse only —
+/// Emitted when a merchant updates its display name or logo. Pulse only -
 /// query `Merchant.name` / `Merchant.logo_url` for the current values.
 public struct DisplayChanged has copy, drop {}
 
@@ -149,6 +152,7 @@ public(package) fun emit_invoice_paid(
     amount: u64,
     loyalty: u64,
     timestamp_ms: u64,
+    paid_with_coin: bool,
 ) {
     event::emit(InvoicePaid {
         invoice_id,
@@ -157,6 +161,7 @@ public(package) fun emit_invoice_paid(
         amount,
         loyalty,
         timestamp_ms,
+        paid_with_coin,
     });
 }
 
@@ -234,4 +239,80 @@ public(package) fun emit_payment_type_changed() {
 /// Emit `DisplayChanged`.
 public(package) fun emit_display_changed() {
     event::emit(DisplayChanged {});
+}
+
+// === Test-Only Helpers ===
+
+#[test_only]
+public fun invoice_paid(
+    invoice_id: ID,
+    order_ref: vector<u8>,
+    customer: address,
+    amount: u64,
+    loyalty: u64,
+    timestamp_ms: u64,
+    paid_with_coin: bool,
+): InvoicePaid {
+    InvoicePaid { invoice_id, order_ref, customer, amount, loyalty, timestamp_ms, paid_with_coin }
+}
+
+#[test_only]
+public fun voucher_redeemed(
+    voucher_id: ID,
+    customer: address,
+    amount: u64,
+    timestamp_ms: u64,
+): VoucherRedeemed {
+    VoucherRedeemed { voucher_id, customer, amount, timestamp_ms }
+}
+
+#[test_only]
+public fun invoice_canceled(
+    invoice_id: ID,
+    payout_address: address,
+    payment_type: TypeName,
+    amount: u64,
+    order_ref: vector<u8>,
+): InvoiceCanceled {
+    InvoiceCanceled { invoice_id, payout_address, payment_type, amount, order_ref }
+}
+
+#[test_only]
+public fun voucher_canceled(voucher_id: ID, customer: address, amount: u64): VoucherCanceled {
+    VoucherCanceled { voucher_id, customer, amount }
+}
+
+#[test_only]
+public fun invoice_created(invoice_id: ID): InvoiceCreated {
+    InvoiceCreated { invoice_id }
+}
+
+#[test_only]
+public fun voucher_created(voucher_id: ID): VoucherCreated {
+    VoucherCreated { voucher_id }
+}
+
+#[test_only]
+public fun listing_added(listing_id: ID): ListingAdded {
+    ListingAdded { listing_id }
+}
+
+#[test_only]
+public fun listing_removed(listing_id: ID): ListingRemoved {
+    ListingRemoved { listing_id }
+}
+
+#[test_only]
+public fun listing_status_changed(listing_id: ID, active: bool): ListingStatusChanged {
+    ListingStatusChanged { listing_id, active }
+}
+
+#[test_only]
+public fun variant_added(listing_id: ID, variant_id: ID): VariantAdded {
+    VariantAdded { listing_id, variant_id }
+}
+
+#[test_only]
+public fun variant_removed(listing_id: ID, variant_id: ID): VariantRemoved {
+    VariantRemoved { listing_id, variant_id }
 }

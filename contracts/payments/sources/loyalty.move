@@ -20,21 +20,21 @@ use sui::coin_registry;
 
 // === Structs ===
 
-/// One-time witness — struct name == module name, uppercased.
+/// One-time witness - struct name == module name, uppercased.
 public struct LOYALTY has drop {}
 
 /// Bundle of loyalty-side outputs from `create`, consumed by `merchant::create`
-/// which moves it whole into `Merchant.loyalty`. `store`-only — no `drop` and
+/// which moves it whole into `Merchant.loyalty`. `store`-only - no `drop` and
 /// no `copy`, so the value is a linear resource that must be moved into
 /// another struct (the Merchant) before the transaction ends. No `key`, so it
 /// cannot exist as a top-level on-chain object.
 public struct Loyalty has store {
     /// Mint/burn authority for `LOYALTY`. Mutably accessed only via
-    /// `treasury_cap_mut` (package-private) to mint on `payment::pay` and burn
-    /// on `redemption::redeem`.
+    /// `treasury_cap_mut` (package-private) to mint on `merchant::pay` and burn
+    /// on `merchant::redeem`.
     treasury_cap: TreasuryCap<LOYALTY>,
     /// PAS authority over `Policy<Balance<LOYALTY>>`. Held but never exposed
-    /// mutably — the policy is locked once registered in `create`.
+    /// mutably - the policy is locked once registered in `create`.
     policy_cap: PolicyCap<Balance<LOYALTY>>,
     /// ID of the shared `Policy<Balance<LOYALTY>>` created in `create`. Useful
     /// for off-chain consumers that need to resolve the policy object.
@@ -43,16 +43,25 @@ public struct Loyalty has store {
 
 /// Approval witness consumed when `redemption` resolves an `unlock_funds` request.
 /// `drop` so adding it to a `Request` (`request.approve(w)`) consumes cleanly.
-/// Constructor is package-private — only modules in this package can produce one.
+/// Constructor is package-private - only modules in this package can produce one.
 public struct RedeemUnlockApproval() has drop;
 
 // === Init ===
 
-/// Module init — creates the standard Sui currency and freezes its metadata.
+/// Module init - registers the standard Sui currency and hands the deployer its
+/// `TreasuryCap` and `MetadataCap`.
 ///
 /// Policy creation happens in `create` (the second deployer tx) because
 /// `policy::new_for_currency` requires `&mut Namespace`, which `init` cannot
 /// take.
+///
+/// The `MetadataCap` is transferred to the deployer (owned), NOT frozen. Freezing
+/// it would be unsafe: `coin_registry::set_name`/`set_description`/`set_icon_url`
+/// take the cap by *immutable* reference, so a frozen (publicly readable) cap
+/// would let anyone rewrite the shared `Currency<LOYALTY>` metadata. Keeping it
+/// owned means only the deployer can update metadata; to make metadata permanently
+/// immutable, the deployer can later `coin_registry::delete_metadata_cap` once it
+/// holds a `&mut Currency<LOYALTY>` (post `finalize_registration`).
 ///
 /// #### Parameters
 /// - `otw`: The `LOYALTY` one-time witness, consumed to register the currency.
@@ -67,8 +76,8 @@ fun init(otw: LOYALTY, ctx: &mut TxContext) {
         b"".to_string(),
         ctx,
     );
-    let metadata = initializer.finalize(ctx);
-    transfer::public_freeze_object(metadata);
+    let metadata_cap = initializer.finalize(ctx);
+    transfer::public_transfer(metadata_cap, ctx.sender());
     transfer::public_transfer(cap, ctx.sender());
 }
 
@@ -80,7 +89,7 @@ fun init(otw: LOYALTY, ctx: &mut TxContext) {
 ///
 /// Approval registration:
 ///   - `unlock_funds`    requires `RedeemUnlockApproval` (gates redemption)
-///   - `send_funds`      NOT registered → soulbound (transfers can never resolve)
+///   - `send_funds`      NOT registered -> soulbound (transfers can never resolve)
 ///   - `clawback_funds`  NOT registered + `clawback_allowed = false`
 ///
 /// #### Parameters
@@ -116,16 +125,17 @@ public fun policy_id(self: &Loyalty): ID { self.policy_id }
 
 // === Package Functions ===
 
-/// Mutable accessor for the treasury cap. Used by `payment::pay` (mint) and
-/// `redemption::redeem` (burn) via `merchant::loyalty_mut`.
+/// Mutable accessor for the treasury cap. Used by `merchant::pay` (mint) and
+/// `merchant::redeem` (burn), which reach it through the merchant's `loyalty`
+/// field.
 public(package) fun treasury_cap_mut(self: &mut Loyalty): &mut TreasuryCap<LOYALTY> {
     &mut self.treasury_cap
 }
 
-/// Mint LOYALTY into the customer's PAS Account. Called by `payment::pay`.
+/// Mint LOYALTY into the customer's PAS Account. Called by `merchant::pay`.
 ///
 /// `deposit_balance` is unrestricted in PAS (no `Auth` needed), so the customer
-/// doesn't have to sign for the loyalty-side leg — only for their stablecoin spend.
+/// doesn't have to sign for the loyalty-side leg - only for their stablecoin spend.
 ///
 /// #### Parameters
 /// - `cap`: The merchant's `TreasuryCap<LOYALTY>` (mint authority).

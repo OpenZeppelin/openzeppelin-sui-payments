@@ -340,7 +340,7 @@ public fun pay<S>(
     );
     self.invoice_receipts.add(invoice_id, receipt);
 
-    events::emit_invoice_paid(invoice_id, order_ref, sender, amount, loyalty, now);
+    events::emit_invoice_paid(invoice_id, order_ref, sender, amount, loyalty, now, false);
 }
 
 /// Customer settles an open invoice with a plain, unrestricted `Coin<S>`.
@@ -415,7 +415,7 @@ public fun pay_with_coin<S>(
     );
     self.invoice_receipts.add(invoice_id, receipt);
 
-    events::emit_invoice_paid(invoice_id, order_ref, customer, amount, loyalty, now);
+    events::emit_invoice_paid(invoice_id, order_ref, customer, amount, loyalty, now, true);
 }
 
 /// Permissionless cleanup of an expired invoice.
@@ -479,6 +479,7 @@ public fun create_voucher(
     );
     assert!(amount == receipt::compute_total(&items), EInvalidAmount);
 
+    // Cannot overflow: `config::new` caps the TTL at `MAX_TTL_MS` (~10 years), far below u64.
     let expires_at_ms = clock.timestamp_ms() + self.config.voucher_ttl_ms();
 
     // Extract funds from customer's PAS account and lock them in the voucher.
@@ -934,6 +935,7 @@ public fun create_invoice(
     // Amount should not be zero, since individual prices and quantities enforced to be non-zero.
     let amount = receipt::compute_total(&items);
     let loyalty = self.config.compute_loyalty(amount);
+    // Cannot overflow: `config::new` caps the TTL at `MAX_TTL_MS` (~10 years), far below u64.
     let expires_at_ms = clock.timestamp_ms() + self.config.invoice_ttl_ms();
 
     let invoice = payment::new(

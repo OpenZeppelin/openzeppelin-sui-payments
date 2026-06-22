@@ -132,6 +132,7 @@ fun payment_happy_path() {
                 500,
                 50,
                 1_000_000,
+                false, // PAS `pay` path
             ),
         );
 
@@ -1240,6 +1241,7 @@ fun pay_with_coin_happy_path() {
                 500,
                 50,
                 1_000_000,
+                true, // open-loop `pay_with_coin` path
             ),
         );
 

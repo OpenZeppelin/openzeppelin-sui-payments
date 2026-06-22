@@ -18,3 +18,14 @@ fun config_zero_invoice_ttl_aborts() {
 fun config_zero_voucher_ttl_aborts() {
     let _ = config::new(1, 10, 1_000_000, 600_000, 0);
 }
+
+#[test, expected_failure(abort_code = config::ETtlTooLarge)]
+fun config_invoice_ttl_too_large_aborts() {
+    // 1e18 ms ≫ MAX_TTL_MS (~10 years) — aborts.
+    let _ = config::new(1, 10, 1_000_000, 1_000_000_000_000_000_000, 600_000);
+}
+
+#[test, expected_failure(abort_code = config::ETtlTooLarge)]
+fun config_voucher_ttl_too_large_aborts() {
+    let _ = config::new(1, 10, 1_000_000, 600_000, 1_000_000_000_000_000_000);
+}

@@ -37,6 +37,9 @@ public struct InvoicePaid has copy, drop {
     loyalty: u64,
     /// Settlement clock timestamp (ms since epoch).
     timestamp_ms: u64,
+    /// Custody discriminator: `true` if settled via the open-loop `merchant::pay_with_coin`, 
+    /// `false` if via the PAS `merchant::pay`.
+    paid_with_coin: bool,
 }
 
 /// Emitted when a customer redeems a `Voucher`. Indexer resolves
@@ -149,6 +152,7 @@ public(package) fun emit_invoice_paid(
     amount: u64,
     loyalty: u64,
     timestamp_ms: u64,
+    paid_with_coin: bool,
 ) {
     event::emit(InvoicePaid {
         invoice_id,
@@ -157,6 +161,7 @@ public(package) fun emit_invoice_paid(
         amount,
         loyalty,
         timestamp_ms,
+        paid_with_coin,
     });
 }
 
@@ -246,8 +251,9 @@ public fun invoice_paid(
     amount: u64,
     loyalty: u64,
     timestamp_ms: u64,
+    paid_with_coin: bool,
 ): InvoicePaid {
-    InvoicePaid { invoice_id, order_ref, customer, amount, loyalty, timestamp_ms }
+    InvoicePaid { invoice_id, order_ref, customer, amount, loyalty, timestamp_ms, paid_with_coin }
 }
 
 #[test_only]

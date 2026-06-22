@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { LayoutGrid, Receipt, Wallet, QrCode } from "lucide-react";
+import { LayoutGrid, Receipt, Settings, Wallet, QrCode } from "lucide-react";
 
 const nav = [
   { href: "/merchant/catalogue", label: "Catalogue", icon: LayoutGrid },
   { href: "/merchant/transactions", label: "Transactions", icon: Receipt },
   { href: "/merchant/balance", label: "Balance", icon: Wallet },
   { href: "/merchant/redeem", label: "Redeem", icon: QrCode },
+  { href: "/merchant/settings", label: "Settings", icon: Settings },
 ];
 
 export default function MerchantLayout({ children }: { children: React.ReactNode }) {

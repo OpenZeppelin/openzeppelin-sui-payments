@@ -1,0 +1,4 @@
+[files]
+# Vendored packages is a submodule and not part of this repo's source — CI
+# doesn't checkout submodules, so skip it locally too for parity.
+extend-exclude = ["vendor/"]

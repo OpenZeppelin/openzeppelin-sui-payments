@@ -324,6 +324,7 @@ fun set_config_updates_values() {
         assert_eq!(merchant.config().max_mint_per_payment(), 500_000);
         assert_eq!(merchant.config().invoice_ttl_ms(), 300_000);
         assert_eq!(merchant.config().voucher_ttl_ms(), 300_000);
+        assert_emitted!(events::config_updated());
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -375,6 +376,7 @@ fun set_payout_address_rotates_payout() {
 
         merchant.set_payout_address(&merchant_auth, @0xC0FFEE);
         assert_eq!(merchant.payout_address(), @0xC0FFEE);
+        assert_emitted!(events::payout_address_changed());
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -430,6 +432,7 @@ fun set_display_updates_name_and_logo() {
         );
         assert_eq!(*merchant.name(), b"Renamed Shop".to_string());
         assert_eq!(*merchant.logo_url().borrow(), b"https://example.com/logo.png".to_string());
+        assert_emitted!(events::display_changed());
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -478,6 +481,7 @@ fun set_payment_type_rotates() {
         assert_eq!(merchant.accepted_payment_type(), type_name::with_defining_ids<TEST_USD>());
         merchant.set_payment_type<OTHER_USD>(&merchant_auth);
         assert_eq!(merchant.accepted_payment_type(), type_name::with_defining_ids<OTHER_USD>());
+        assert_emitted!(events::payment_type_changed());
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);

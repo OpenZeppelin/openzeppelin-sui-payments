@@ -119,33 +119,42 @@ async function readTableValueByIdKey<T>(
   return parse(key, { fields: content.fields.value.fields });
 }
 
-export function useInvoice(id: string | null | undefined) {
+/**
+ * Reads an invoice from `merchant.invoices` by id. Returns `null` if the
+ * invoice isn't in the table — settled (paid), canceled, or never existed.
+ * Callers distinguish via `data === undefined` (still loading) vs
+ * `data === null` (confirmed missing). `pollMs` enables live-watching for
+ * "is it still open?" UIs.
+ */
+export function useInvoice(
+  id: string | null | undefined,
+  options: { pollMs?: number } = {},
+) {
   const client = useSuiClient();
   const merchantQuery = useMerchant();
   const invoicesTableId = merchantQuery.data?.invoicesTableId;
   return useQuery({
     queryKey: qk.invoice(id ?? ""),
     enabled: Boolean(id) && Boolean(invoicesTableId),
-    queryFn: async (): Promise<Invoice> => {
-      const v = await readTableValueByIdKey(client, invoicesTableId!, id!, parseInvoice);
-      if (!v) throw new Error(`Invoice ${id} not found (already settled or canceled)`);
-      return v;
-    },
+    refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
+    queryFn: async (): Promise<Invoice | null> =>
+      readTableValueByIdKey(client, invoicesTableId!, id!, parseInvoice),
   });
 }
 
-export function useVoucher(id: string | null | undefined) {
+export function useVoucher(
+  id: string | null | undefined,
+  options: { pollMs?: number } = {},
+) {
   const client = useSuiClient();
   const merchantQuery = useMerchant();
   const vouchersTableId = merchantQuery.data?.vouchersTableId;
   return useQuery({
     queryKey: qk.voucher(id ?? ""),
     enabled: Boolean(id) && Boolean(vouchersTableId),
-    queryFn: async (): Promise<Voucher> => {
-      const v = await readTableValueByIdKey(client, vouchersTableId!, id!, parseVoucher);
-      if (!v) throw new Error(`Voucher ${id} not found (already redeemed or canceled)`);
-      return v;
-    },
+    refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
+    queryFn: async (): Promise<Voucher | null> =>
+      readTableValueByIdKey(client, vouchersTableId!, id!, parseVoucher),
   });
 }
 
@@ -198,7 +207,7 @@ export function useMyOpenVouchers(customerAddress: string | null | undefined) {
  * stored on the merchant. Used by the "Prune receipts" button to know how many
  * there are and which ids to pass into `prune_*_receipts`.
  */
-export function useStoredReceipts() {
+export function useStoredReceipts(options: { pollMs?: number } = {}) {
   const client = useSuiClient();
   const merchantQuery = useMerchant();
   const inv = merchantQuery.data?.invoiceReceiptsTableId;
@@ -206,6 +215,7 @@ export function useStoredReceipts() {
   return useQuery({
     queryKey: ["stored-receipts", inv ?? "", vou ?? ""],
     enabled: Boolean(inv) && Boolean(vou),
+    refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
     queryFn: async (): Promise<{ invoice: string[]; voucher: string[] }> => {
       const enumerate = async (parentId: string): Promise<string[]> => {
         const keys: string[] = [];
@@ -381,11 +391,12 @@ const EVENT_TYPES = {
 
 export function useEvents<T extends keyof typeof EVENT_TYPES>(
   name: T,
-  options: { limit?: number } = {},
+  options: { limit?: number; pollMs?: number } = {},
 ) {
   const client = useSuiClient();
   return useQuery({
     queryKey: qk.events(EVENT_TYPES[name]),
+    refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
     queryFn: async () => {
       const r = await client.queryEvents({
         query: { MoveEventType: EVENT_TYPES[name] },

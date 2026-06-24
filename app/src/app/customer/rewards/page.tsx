@@ -6,17 +6,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Minus, Plus, Gift, RotateCcw, ScanLine } from "lucide-react";
 import { toast } from "sonner";
 
-import { QrDisplay } from "@/components/shared/qr-display";
+import { VoucherStatusDialog } from "@/components/customer/voucher-status-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { qk, useBalances, useListings, useMyOpenVouchers } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
@@ -250,41 +243,20 @@ export default function RewardsPage() {
         </div>
       ) : null}
 
-      <Dialog open={Boolean(voucherId)} onOpenChange={(o) => !o && setVoucherId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Show this to the merchant</DialogTitle>
-            <DialogDescription>
-              The merchant scans the QR + redeems. Your LOY is locked until then,
-              and refunded after expiry if not redeemed.
-            </DialogDescription>
-          </DialogHeader>
-          {voucherId ? <QrDisplay value={voucherId} label="Voucher ID" /> : null}
-          <div className="flex justify-end">
-            <Button variant="ghost" onClick={() => setVoucherId(null)}>
-              Done
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Post-creation QR dialog. Polls merchant.voucher_receipts and auto-
+          swaps to a "Voucher redeemed" view the moment the merchant settles. */}
+      <VoucherStatusDialog
+        voucherId={voucherId}
+        open={Boolean(voucherId)}
+        onOpenChange={(o) => !o && setVoucherId(null)}
+      />
 
-      {/* Re-show an already-created voucher's QR when the customer clicks Show */}
-      <Dialog open={Boolean(showingVoucher)} onOpenChange={(o) => !o && setShowingVoucher(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Voucher</DialogTitle>
-            <DialogDescription>
-              Show this to the merchant to redeem.
-            </DialogDescription>
-          </DialogHeader>
-          {showingVoucher ? <QrDisplay value={showingVoucher} label="Voucher ID" /> : null}
-          <div className="flex justify-end">
-            <Button variant="ghost" onClick={() => setShowingVoucher(null)}>
-              Done
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Re-show an existing open voucher's QR; same status-watching dialog. */}
+      <VoucherStatusDialog
+        voucherId={showingVoucher}
+        open={Boolean(showingVoucher)}
+        onOpenChange={(o) => !o && setShowingVoucher(null)}
+      />
     </section>
   );
 }

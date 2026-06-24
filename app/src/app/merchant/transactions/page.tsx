@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -17,6 +17,25 @@ import { buildPruneVoucherReceipts } from "@/lib/move/redemption";
 import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
 
 const PRUNE_BATCH_SIZE = 50;
+/** Refresh cadence for events + receipt counts while this page is open. */
+const POLL_MS = 3_000;
+/** Tick cadence for re-evaluating "Expired" badges from the wall clock. */
+const CLOCK_TICK_MS = 5_000;
+
+/**
+ * Returns a value that changes every `intervalMs` so any component using it
+ * re-renders on a clock-driven cadence. Used to flip "Open" rows to "Expired"
+ * the moment `expiresAtMs` passes — pure time-based transitions don't fire
+ * events, so polling alone can't catch them.
+ */
+function useClockTick(intervalMs: number) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), intervalMs);
+    return () => clearInterval(t);
+  }, [intervalMs]);
+  return tick;
+}
 
 type EventName =
   | "InvoiceCreated"
@@ -58,12 +77,14 @@ const variants: Record<
 };
 
 export default function TransactionsPage() {
-  const invCreated = useEvents("InvoiceCreated", { limit: 100 });
-  const paid = useEvents("InvoicePaid", { limit: 100 });
-  const invCx = useEvents("InvoiceCanceled", { limit: 100 });
-  const vouCreated = useEvents("VoucherCreated", { limit: 100 });
-  const redeemed = useEvents("VoucherRedeemed", { limit: 100 });
-  const vouCx = useEvents("VoucherCanceled", { limit: 100 });
+  // Poll the event queries every POLL_MS so new payments / redemptions /
+  // cancellations push the feed without manual refresh.
+  const invCreated = useEvents("InvoiceCreated", { limit: 100, pollMs: POLL_MS });
+  const paid = useEvents("InvoicePaid", { limit: 100, pollMs: POLL_MS });
+  const invCx = useEvents("InvoiceCanceled", { limit: 100, pollMs: POLL_MS });
+  const vouCreated = useEvents("VoucherCreated", { limit: 100, pollMs: POLL_MS });
+  const redeemed = useEvents("VoucherRedeemed", { limit: 100, pollMs: POLL_MS });
+  const vouCx = useEvents("VoucherCanceled", { limit: 100, pollMs: POLL_MS });
 
   /** Invoice ids that have reached a terminal state (paid or canceled). */
   const terminatedInvoiceIds = useMemo(() => {
@@ -172,6 +193,9 @@ function OpenInvoiceRow({
   const queryClient = useQueryClient();
   // Skip the network read when we already know the invoice is gone.
   const invoice = useInvoice(terminated ? null : invoiceId);
+  // Re-render on the clock tick so the "Expired" badge flips on time even
+  // when no chain event has fired (TTL elapsed but nobody canceled yet).
+  useClockTick(CLOCK_TICK_MS);
 
   const now = BigInt(Date.now());
   const expired = Boolean(invoice.data && invoice.data.expiresAtMs <= now);
@@ -275,6 +299,7 @@ function OpenVoucherRow({
 }) {
   const queryClient = useQueryClient();
   const voucher = useVoucher(terminated ? null : voucherId);
+  useClockTick(CLOCK_TICK_MS);
 
   const now = BigInt(Date.now());
   const expired = Boolean(voucher.data && voucher.data.expiresAtMs <= now);
@@ -404,7 +429,7 @@ function FeedRowView({ row }: { row: FeedRow }) {
  * kind in a single PTB — for larger backlogs the merchant clicks again.
  */
 function PruneReceiptsButton() {
-  const stored = useStoredReceipts();
+  const stored = useStoredReceipts({ pollMs: POLL_MS });
   const queryClient = useQueryClient();
 
   const prune = useSponsoredMutation<{ invoiceIds: string[]; voucherIds: string[] }>(

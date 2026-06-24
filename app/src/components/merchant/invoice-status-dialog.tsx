@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, XCircle } from "lucide-react";
 
 import { QrDisplay } from "@/components/shared/qr-display";
 import { Button } from "@/components/ui/button";
@@ -13,19 +13,29 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { qk, useInvoiceReceipt } from "@/hooks/queries";
+import { qk, useInvoice, useInvoiceReceipt } from "@/hooks/queries";
 import { deployment } from "@/lib/deployment";
 import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
 
-/** How often we re-check the receipt table while the dialog is open. */
+/** How often we re-check the receipt + invoice tables while the dialog is open. */
 const POLL_MS = 1_000;
 
 /**
- * Shows the invoice QR while the customer hasn't paid yet, then swaps to a
- * "payment received" summary the moment the on-chain receipt appears in
- * `merchant.invoice_receipts`. Polls every POLL_MS while the dialog is open;
- * once a receipt arrives, also invalidates the transactions-page event
- * queries so the feed re-renders if the merchant navigates there next.
+ * Three-state dialog for an open invoice:
+ *
+ *   - **Open**          — invoice still in `merchant.invoices` and no receipt yet.
+ *                         Renders the QR; this is the initial state.
+ *   - **Paid**          — a `Receipt<Payment>` arrived at
+ *                         `merchant.invoice_receipts[invoice_id]`. Renders the
+ *                         payment summary (amount, LOY minted, customer).
+ *   - **Canceled**      — invoice is gone from `merchant.invoices` AND no
+ *                         receipt landed (someone called `cancel_invoice` after
+ *                         expiry). Renders a "Canceled" notice.
+ *
+ * Both polls run every POLL_MS while the dialog is open. We require both
+ * queries to have completed before declaring "canceled" so that a transient
+ * mid-redeem state (object gone, receipt not yet visible) doesn't flicker
+ * through a false canceled view.
  */
 export function InvoiceStatusDialog({
   invoiceId,
@@ -37,22 +47,39 @@ export function InvoiceStatusDialog({
   onOpenChange: (next: boolean) => void;
 }) {
   const queryClient = useQueryClient();
-  // Poll only while the dialog is actually on screen — saves RPC and React work
-  // on stale invoices the merchant has long dismissed.
-  const receipt = useInvoiceReceipt(open ? invoiceId : null, { pollMs: POLL_MS });
+  const target = open ? invoiceId : null;
+  const invoice = useInvoice(target, { pollMs: POLL_MS });
+  const receipt = useInvoiceReceipt(target, { pollMs: POLL_MS });
 
-  // When the receipt materializes, invalidate the transactions-feed queries so
-  // an "Invoice closed" / "Paid" row shows up the next time the merchant
-  // navigates to /merchant/transactions.
+  // Cross-page consistency: when terminal state is reached, refresh the
+  // transactions feed + per-invoice caches.
   useEffect(() => {
-    if (!receipt.data) return;
-    void queryClient.invalidateQueries({
-      queryKey: qk.events(`${deployment.packageId}::events::InvoicePaid`),
-    });
-    void queryClient.invalidateQueries({ queryKey: qk.invoice(receipt.data.invoiceId) });
-  }, [receipt.data, queryClient]);
+    if (!receipt.data && !(invoice.isSuccess && invoice.data === null)) return;
+    if (receipt.data) {
+      void queryClient.invalidateQueries({
+        queryKey: qk.events(`${deployment.packageId}::events::InvoicePaid`),
+      });
+      void queryClient.invalidateQueries({ queryKey: qk.invoice(receipt.data.invoiceId) });
+    } else {
+      void queryClient.invalidateQueries({
+        queryKey: qk.events(`${deployment.packageId}::events::InvoiceCanceled`),
+      });
+      if (invoiceId) {
+        void queryClient.invalidateQueries({ queryKey: qk.invoice(invoiceId) });
+      }
+    }
+  }, [receipt.data, invoice.isSuccess, invoice.data, invoiceId, queryClient]);
 
   const paid = receipt.data;
+  // Only declare canceled when BOTH queries have returned a confirmed-empty
+  // answer. This avoids the brief inconsistent window during settlement where
+  // the invoice was removed but the receipt hasn't shown up yet.
+  const canceled =
+    !paid &&
+    invoice.isSuccess &&
+    invoice.data === null &&
+    receipt.isSuccess &&
+    receipt.data === null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -107,6 +134,22 @@ export function InvoiceStatusDialog({
                 {new Date(Number(paid.timestampMs)).toLocaleString()}
               </div>
             </div>
+            <div className="flex justify-end">
+              <Button onClick={() => onOpenChange(false)}>Done</Button>
+            </div>
+          </>
+        ) : canceled ? (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <XCircle className="h-5 w-5 text-[color:var(--color-destructive)]" />
+                Invoice canceled
+              </DialogTitle>
+              <DialogDescription>
+                The invoice was canceled before the customer settled — likely
+                expired and cleaned up. No payment was received.
+              </DialogDescription>
+            </DialogHeader>
             <div className="flex justify-end">
               <Button onClick={() => onOpenChange(false)}>Done</Button>
             </div>

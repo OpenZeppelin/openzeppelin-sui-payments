@@ -183,8 +183,12 @@ export function parseVoucher(id: SuiObjectId, raw: any): Voucher {
     id,
     customer: f.customer,
     items: (f.items as any[]).map(parseItem),
-    // `funds` is a Balance<LOYALTY>; its `value` field carries the amount.
-    amount: BigInt(f.funds.fields?.value ?? f.funds.value ?? 0),
+    // `funds` is a `Balance<LOYALTY>`. Sui's normalized-JSON encoding for
+    // Balance differs between framework versions: newer emits just the u64
+    // value as a string (`"funds": "5"`), older nests it as
+    // `{ fields: { value: "5" } }`. Same shape-versioning issue as
+    // `optionToValue` — handle both.
+    amount: balanceToValue(f.funds),
     expiresAtMs: BigInt(f.expires_at_ms),
   };
 }
@@ -275,6 +279,17 @@ function optionToValue<T>(raw: any): T | null {
 function optionToValueBig(raw: any): bigint | null {
   const v = optionToValue<string | number | bigint>(raw);
   return v === null ? null : BigInt(v as any);
+}
+
+/**
+ * Reads the u64 inside a `Balance<T>`. Same dual-shape support as
+ * `optionToValue`: newer Sui SDK flattens to just the value
+ * (`"funds": "5"`), older nests it as `{ fields: { value: "5" } }`.
+ */
+function balanceToValue(raw: any): bigint {
+  if (raw === null || raw === undefined) return 0n;
+  if (typeof raw !== "object") return BigInt(raw);
+  return BigInt(raw.fields?.value ?? raw.value ?? 0);
 }
 
 /** `TypeName` serializes as `{ name: "0x..::module::Type" }`. */

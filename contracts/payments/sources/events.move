@@ -316,3 +316,23 @@ public fun variant_added(listing_id: ID, variant_id: ID): VariantAdded {
 public fun variant_removed(listing_id: ID, variant_id: ID): VariantRemoved {
     VariantRemoved { listing_id, variant_id }
 }
+
+#[test_only]
+public fun config_updated(): ConfigUpdated {
+    ConfigUpdated {}
+}
+
+#[test_only]
+public fun payout_address_changed(): PayoutAddressChanged {
+    PayoutAddressChanged {}
+}
+
+#[test_only]
+public fun payment_type_changed(): PaymentTypeChanged {
+    PaymentTypeChanged {}
+}
+
+#[test_only]
+public fun display_changed(): DisplayChanged {
+    DisplayChanged {}
+}

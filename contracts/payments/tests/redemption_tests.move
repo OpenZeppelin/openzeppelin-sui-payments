@@ -136,7 +136,7 @@ fun redemption_happy_path() {
         let supply_before = coin::total_supply(merchant.loyalty().treasury_cap());
         merchant.redeem(&cashier_auth, voucher_id, &test_clock);
         let supply_after = coin::total_supply(merchant.loyalty().treasury_cap());
-        assert!(supply_before - supply_after == 50, 0);
+        assert_eq!(supply_before - supply_after, 50);
 
         // `VoucherRedeemed` was emitted with the expected payload.
         assert_emitted!(events::voucher_redeemed(voucher_id, CUSTOMER, 50, 1_000_000));

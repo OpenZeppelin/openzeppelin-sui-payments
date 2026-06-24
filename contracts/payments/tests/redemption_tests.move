@@ -133,9 +133,9 @@ fun redemption_happy_path() {
         // Merchant redeems. Capture LOYALTY supply before/after to confirm
         // the redeem path actually burns from the TreasuryCap-tracked supply.
         scenario.next_tx(ADMIN);
-        let supply_before = coin::total_supply(merchant.loyalty().treasury_cap());
+        let supply_before = merchant.loyalty_supply();
         merchant.redeem(&cashier_auth, voucher_id, &test_clock);
-        let supply_after = coin::total_supply(merchant.loyalty().treasury_cap());
+        let supply_after = merchant.loyalty_supply();
         assert_eq!(supply_before - supply_after, 50);
 
         // `VoucherRedeemed` was emitted with the expected payload.

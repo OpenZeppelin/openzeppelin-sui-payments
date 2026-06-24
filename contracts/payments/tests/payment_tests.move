@@ -1133,7 +1133,7 @@ fun pay_zero_loyalty_no_mint() {
         );
 
         // Capture LOYALTY supply before pay so we can assert no mint occurred.
-        let supply_before = coin::total_supply(merchant.loyalty().treasury_cap());
+        let supply_before = merchant.loyalty_supply();
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -1163,7 +1163,7 @@ fun pay_zero_loyalty_no_mint() {
         let r = merchant.invoice_receipt(invoice_id);
         assert!(receipt::amount(r) == 500, 0);
         assert!(receipt::loyalty(r) == 0, 0);
-        let supply_after = coin::total_supply(merchant.loyalty().treasury_cap());
+        let supply_after = merchant.loyalty_supply();
         assert!(supply_before == supply_after, 0);
 
         test_setup::return_test_usd_policy(test_usd_policy);

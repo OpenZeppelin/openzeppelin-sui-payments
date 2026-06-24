@@ -57,9 +57,9 @@ use pas::send_funds::{Self, SendFunds};
 use pas::unlock_funds::{Self, UnlockFunds};
 use std::string::String;
 use std::type_name::{Self, TypeName};
-use sui::balance::{Self, Balance};
+use sui::balance::Balance;
 use sui::clock::Clock;
-use sui::coin::{Self, Coin};
+use sui::coin::Coin;
 use sui::table::{Self, Table};
 
 // === Errors ===
@@ -322,7 +322,7 @@ public fun pay<S>(
 
     // Mint the loyalty tokens snapshotted at issuance.
     if (loyalty > 0) {
-        loyalty::mint_to(self.loyalty.treasury_cap_mut(), customer_loyalty_account, loyalty);
+        self.loyalty.mint_to(customer_loyalty_account, loyalty);
     };
 
     // Store the receipt under the invoice's issuance ID: a fresh, single-use ID
@@ -397,7 +397,7 @@ public fun pay_with_coin<S>(
 
     // Mint the loyalty tokens snapshotted at issuance.
     if (loyalty > 0) {
-        loyalty::mint_to(self.loyalty.treasury_cap_mut(), customer_loyalty_account, loyalty);
+        self.loyalty.mint_to(customer_loyalty_account, loyalty);
     };
 
     // Store the receipt under the invoice's issuance ID: a fresh, single-use ID
@@ -541,8 +541,19 @@ public fun payout_address(self: &Merchant): address { self.payout_address }
 /// will be honored.
 public fun accepted_payment_type(self: &Merchant): TypeName { self.accepted_payment_type }
 
-/// Reference to the merchant's `Loyalty` bundle (treasury + policy caps + policy id).
-public fun loyalty(self: &Merchant): &Loyalty { &self.loyalty }
+/// ID of the embedded `TreasuryCap<LOYALTY>`. Off-chain indexers only —
+/// the cap itself stays inside `self.loyalty` and is never publicly borrowable.
+public fun loyalty_treasury_cap_id(self: &Merchant): ID { self.loyalty.treasury_cap_id() }
+
+/// ID of the embedded `PolicyCap<Balance<LOYALTY>>`. Off-chain indexers only —
+/// the cap is auth for PAS policy mutations, so it must not leak by reference.
+public fun loyalty_policy_cap_id(self: &Merchant): ID { self.loyalty.policy_cap_id() }
+
+/// ID of the shared `Policy<Balance<LOYALTY>>` for the loyalty currency.
+public fun loyalty_policy_id(self: &Merchant): ID { self.loyalty.policy_id() }
+
+/// Current total supply of `LOYALTY` (mints minus burns). View-only.
+public fun loyalty_supply(self: &Merchant): u64 { self.loyalty.supply() }
 
 /// Current loyalty-mint `Config` (numerator / denominator / cap).
 public fun config(self: &Merchant): &Config { &self.config }
@@ -973,7 +984,7 @@ public fun redeem(self: &mut Merchant, _auth: &Auth<CashierRole>, voucher_id: ID
     let (customer, items, funds, _expires) = self.vouchers.remove(voucher_id).unpack();
     let amount = funds.value();
 
-    balance::decrease_supply(coin::supply_mut(self.loyalty.treasury_cap_mut()), funds);
+    self.loyalty.decrease_supply(funds);
 
     // Store the receipt under the voucher's issuance ID: a fresh, single-use ID
     // removed from `vouchers` above, so `voucher_receipts.add` can never collide.

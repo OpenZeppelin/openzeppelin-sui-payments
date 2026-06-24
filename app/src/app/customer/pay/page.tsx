@@ -81,6 +81,16 @@ export default function CustomerPayPage() {
   const expired = invoice.data ? invoice.data.expiresAtMs <= BigInt(now) : false;
   const merchantAccountReady = merchantPas.data !== null && merchantPas.data !== undefined;
   const customerAccountReady = customerPas.data !== null && customerPas.data !== undefined;
+  // Self-payment is a structural dead-end: `account::send_balance(from, .., to, ..)`
+  // would have `from` and `to` resolve to the same shared object, which Sui's PTB
+  // borrow checker rejects (`InvalidReferenceArgument`). Block it with a clear
+  // message rather than letting the chain produce a cryptic error.
+  const isSelfPayment =
+    Boolean(
+      account?.address &&
+        invoice.data &&
+        account.address.toLowerCase() === invoice.data.payoutAddress.toLowerCase(),
+    );
 
   return (
     <section className="flex flex-col gap-6">
@@ -179,6 +189,13 @@ export default function CustomerPayPage() {
                 the merchant to initialize it.
               </p>
             ) : null}
+            {isSelfPayment ? (
+              <p className="text-sm text-[color:var(--color-destructive)]">
+                Your wallet is the merchant&apos;s payout address. Sui&apos;s PTB
+                borrow checker rejects sending balance from an account to itself.
+                Connect a different wallet to pay this invoice.
+              </p>
+            ) : null}
             <div className="mt-2 flex justify-end gap-2">
               <Button variant="ghost" onClick={() => setInvoiceId(null)}>
                 Cancel
@@ -187,6 +204,7 @@ export default function CustomerPayPage() {
                 onClick={handlePay}
                 disabled={
                   expired ||
+                  isSelfPayment ||
                   pay.isPending ||
                   !customerAccountReady ||
                   !merchantAccountReady

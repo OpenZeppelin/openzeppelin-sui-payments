@@ -236,7 +236,8 @@ export function parsePaymentReceipt(invoiceId: SuiObjectId, raw: any): PaymentRe
 
 export function parseRedemptionReceipt(voucherId: SuiObjectId, raw: any): RedemptionReceipt {
   const f = raw.fields ?? raw;
-  const d = f.data.fields;
+  // The `data: Redemption` payload only holds `voucher_id`, which we already
+  // pass in as the parameter (it's the table key) — nothing else to read here.
   return {
     voucherId,
     customer: f.customer,
@@ -251,11 +252,21 @@ export function parseRedemptionReceipt(voucherId: SuiObjectId, raw: any): Redemp
 // ---------------------------------------------------------------------------
 
 /**
- * Sui SDK encodes `Option<T>` as `{ vec: [] | [value] }`. Returns the
- * inner value or null.
+ * Sui's normalized-JSON encoding for `Option<T>` differs between framework /
+ * SDK versions:
+ *
+ *   - Newer: the inner value directly, or `null` for `None`
+ *     (e.g. `"loyalty_price": "50"` or `"loyalty_price": null`)
+ *   - Older: `{ vec: [] | [value] }` (sometimes wrapped in `{ fields: ... }`)
+ *
+ * Both forms appear in the wild — handle both so the same parsers work
+ * regardless of which RPC / SDK version returns the object.
  */
 function optionToValue<T>(raw: any): T | null {
   if (raw === null || raw === undefined) return null;
+  // Newer SDK: primitive value sitting directly under the Option's field name.
+  if (typeof raw !== "object") return raw as T;
+  // Older SDK: `{ vec: [...] }` possibly wrapped in `{ fields: { vec: [...] } }`.
   const vec = (raw.fields?.vec ?? raw.vec) as T[] | undefined;
   if (!vec || vec.length === 0) return null;
   return vec[0];

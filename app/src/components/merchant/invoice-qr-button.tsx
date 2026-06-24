@@ -3,20 +3,13 @@
 import { useState } from "react";
 import { QrCode } from "lucide-react";
 
-import { QrDisplay } from "@/components/shared/qr-display";
+import { InvoiceStatusDialog } from "@/components/merchant/invoice-status-dialog";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 
 /**
- * Compact "QR" button that opens a dialog containing the invoice QR code.
- * Reused from the Transactions page so the merchant can re-show a QR if the
- * customer couldn't scan it the first time around.
+ * Compact "QR" button used in the merchant transactions feed. Opens the same
+ * `InvoiceStatusDialog` the catalogue uses, so re-shown QRs also auto-update
+ * if the customer settles while the dialog is open.
  */
 export function InvoiceQrButton({ invoiceId }: { invoiceId: string }) {
   const [open, setOpen] = useState(false);
@@ -26,22 +19,11 @@ export function InvoiceQrButton({ invoiceId }: { invoiceId: string }) {
         <QrCode className="h-4 w-4" />
         Show QR
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Invoice QR code</DialogTitle>
-            <DialogDescription>
-              Customer scans to pay. Copy the id below if scanning fails.
-            </DialogDescription>
-          </DialogHeader>
-          <QrDisplay value={invoiceId} label="Invoice ID" />
-          <div className="flex justify-end">
-            <Button variant="ghost" onClick={() => setOpen(false)}>
-              Done
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <InvoiceStatusDialog
+        invoiceId={open ? invoiceId : null}
+        open={open}
+        onOpenChange={setOpen}
+      />
     </>
   );
 }

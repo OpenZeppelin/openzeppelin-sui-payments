@@ -51,6 +51,13 @@ export function useSponsoredMutation<TArgs>(
       });
       // Make sure the wallet returns to a consistent view of chain state.
       await client.waitForTransaction({ digest: result.digest });
+      // Surface on-chain aborts as failures — without this the mutation would
+      // resolve "successfully" on a Move-side abort, fire the success toast,
+      // navigate away, and leave the user wondering why nothing changed on chain.
+      if (result.effects?.status?.status !== "success") {
+        const moveErr = result.effects?.status?.error ?? "unknown abort";
+        throw new Error(`Transaction aborted on chain: ${moveErr}`);
+      }
       return result;
     },
     onSuccess: async () => {

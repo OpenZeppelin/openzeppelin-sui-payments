@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { LayoutGrid, Receipt, Settings, Wallet, QrCode } from "lucide-react";
 
+import { ConnectButton } from "@/components/connect-button";
+
 const nav = [
   { href: "/merchant/catalogue", label: "Catalogue", icon: LayoutGrid },
   { href: "/merchant/transactions", label: "Transactions", icon: Receipt },
@@ -29,7 +31,20 @@ export default function MerchantLayout({ children }: { children: React.ReactNode
           ))}
         </nav>
       </aside>
-      <main className="p-8">{children}</main>
+      <div className="flex min-h-screen flex-col">
+        <header className="border-b border-[color:var(--color-border)] bg-[color:var(--color-card)]">
+          <div className="flex h-14 items-center justify-end gap-4 px-8">
+            <Link
+              href="/"
+              className="text-sm text-[color:var(--color-muted-foreground)] hover:underline"
+            >
+              Switch role
+            </Link>
+            <ConnectButton />
+          </div>
+        </header>
+        <main className="flex-1 p-8">{children}</main>
+      </div>
     </div>
   );
 }

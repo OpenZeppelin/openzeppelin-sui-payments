@@ -1,16 +1,12 @@
 import Link from "next/link";
 import { Coins, Store } from "lucide-react";
 
-import { ConnectButton } from "@/components/connect-button";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function LandingPage() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-12 px-6 py-12">
-      <div className="flex items-center justify-end">
-        <ConnectButton />
-      </div>
       <header className="flex flex-col items-center gap-3 text-center">
         <h1 className="text-4xl font-semibold tracking-tight">
           OpenZeppelin Sui Payments

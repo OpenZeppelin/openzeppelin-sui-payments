@@ -4,20 +4,12 @@ import { useState, useMemo } from "react";
 import { Minus, Plus, ShoppingCart, X } from "lucide-react";
 
 import { AddListingDialog } from "@/components/merchant/add-listing-dialog";
+import { InvoiceStatusDialog } from "@/components/merchant/invoice-status-dialog";
 import { ListingActions } from "@/components/merchant/listing-actions";
-import { QrDisplay } from "@/components/shared/qr-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { qk, useListings } from "@/hooks/queries";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { buildCreateInvoice } from "@/lib/move/payment";
@@ -252,23 +244,13 @@ export default function CataloguePage() {
         </div>
       ) : null}
 
-      {/* Invoice QR popup */}
-      <Dialog open={Boolean(invoiceId)} onOpenChange={(o) => !o && setInvoiceId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Show this to the customer</DialogTitle>
-            <DialogDescription>
-              They scan to pay. The invoice expires in 10 minutes.
-            </DialogDescription>
-          </DialogHeader>
-          {invoiceId ? <QrDisplay value={invoiceId} label="Invoice ID" /> : null}
-          <div className="flex justify-end">
-            <Button variant="ghost" onClick={() => setInvoiceId(null)}>
-              Done
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Shows the QR while waiting for payment; auto-swaps to a receipt summary
+          when the customer settles (polls merchant.invoice_receipts). */}
+      <InvoiceStatusDialog
+        invoiceId={invoiceId}
+        open={Boolean(invoiceId)}
+        onOpenChange={(o) => !o && setInvoiceId(null)}
+      />
     </section>
   );
 }

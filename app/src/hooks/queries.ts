@@ -234,26 +234,36 @@ export function useStoredReceipts() {
 /**
  * Look up the stored payment receipt for a settled invoice. Returns null when
  * no receipt is stored (invoice was canceled, not paid; or receipt was pruned).
+ * `pollMs` enables periodic refetch — useful for "watch for payment while QR
+ * is on screen" UI; pass undefined / 0 to disable polling.
  */
-export function useInvoiceReceipt(invoiceId: string | null | undefined) {
+export function useInvoiceReceipt(
+  invoiceId: string | null | undefined,
+  options: { pollMs?: number } = {},
+) {
   const client = useSuiClient();
   const merchantQuery = useMerchant();
   const tableId = merchantQuery.data?.invoiceReceiptsTableId;
   return useQuery({
     queryKey: qk.invoiceReceipt(invoiceId ?? ""),
     enabled: Boolean(invoiceId) && Boolean(tableId),
+    refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
     queryFn: async (): Promise<PaymentReceipt | null> =>
       readTableValueByIdKey(client, tableId!, invoiceId!, parsePaymentReceipt),
   });
 }
 
-export function useVoucherReceipt(voucherId: string | null | undefined) {
+export function useVoucherReceipt(
+  voucherId: string | null | undefined,
+  options: { pollMs?: number } = {},
+) {
   const client = useSuiClient();
   const merchantQuery = useMerchant();
   const tableId = merchantQuery.data?.voucherReceiptsTableId;
   return useQuery({
     queryKey: qk.voucherReceipt(voucherId ?? ""),
     enabled: Boolean(voucherId) && Boolean(tableId),
+    refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
     queryFn: async (): Promise<RedemptionReceipt | null> =>
       readTableValueByIdKey(client, tableId!, voucherId!, parseRedemptionReceipt),
   });

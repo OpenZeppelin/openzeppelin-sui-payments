@@ -118,7 +118,10 @@ const EBadHashLength: vector<u8> = "Voucher redeem_hash must be 32 bytes";
 const EWrongPreimage: vector<u8> =
     "Provided preimage does not match the voucher's redeem_hash commitment";
 #[error(code = 27)]
-const EOrderRefTooLong: vector<u8> = "order_ref exceeds MAX_ORDER_REF_LEN (128 bytes)";
+const EOrderRefTooLong: vector<u8> = "order_ref exceeds MAX_ORDER_REF_LEN (256 bytes)";
+#[error(code = 28)]
+const EItemsTooMany: vector<u8> =
+    "listing_variant_ids exceeds MAX_INVOICE_ITEMS (256 items)";
 
 // === Constants ===
 
@@ -131,9 +134,17 @@ const ROOT_TRANSFER_DELAY_MS: u64 = 86_400_000;
 /// `InvoicePaid` / `InvoiceCanceled` events.
 /// Capping it here keeps a single invoice's contribution to per-tx effects bounded,
 /// so an oversized ref can't brick the settle/cancel paths and leave an invoice stuck.
-/// 128 bytes covers all common POS reference formats (UUIDs, ULIDs, Shopify order names,
-/// composite prefixes) with headroom.
-const MAX_ORDER_REF_LEN: u64 = 128;
+/// 256 bytes covers all common POS reference formats (UUIDs, ULIDs, Shopify order names,
+/// composite prefixes) with generous headroom.
+const MAX_ORDER_REF_LEN: u64 = 256;
+
+/// Maximum number of line items on a single invoice or voucher. Bounds the
+/// `items` vector that's snapshotted into the stored `Receipt` and propagated
+/// to events at settlement, so an oversized invoice/voucher can't push effects
+/// past per-tx limits and brick the settle/cancel paths. 256 items is
+/// generous for any realistic POS flow (typical receipts ≤ 30, grocery hauls
+/// rarely > 100).
+const MAX_INVOICE_ITEMS: u64 = 256;
 
 // === Structs ===
 
@@ -490,6 +501,7 @@ public fun cancel_invoice(self: &mut Merchant, invoice_id: ID, clock: &Clock) {
 ///
 /// #### Aborts
 /// - `ENoItems` if `listing_variant_ids` is empty.
+/// - `EItemsTooMany` if `listing_variant_ids.length() > MAX_INVOICE_ITEMS`.
 /// - `ELengthMismatch` if the two vectors differ in length.
 /// - `EZeroAmount` if the unlocked amount is zero.
 /// - `EInvalidAmount` if the unlocked amount differs from the items' total.
@@ -515,6 +527,7 @@ public fun create_voucher(
     ctx: &mut TxContext,
 ): ID {
     assert!(!listing_variant_ids.is_empty(), ENoItems);
+    assert!(listing_variant_ids.length() <= MAX_INVOICE_ITEMS, EItemsTooMany);
     assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
     assert!(redeem_hash.length() == 32, EBadHashLength);
 
@@ -959,6 +972,7 @@ public fun remove_listing_variant(
 /// #### Aborts
 /// - `ENoItems` if `listing_variant_ids` is empty.
 /// - `ELengthMismatch` if the two vectors differ in length.
+/// - `EItemsTooMany` if `listing_variant_ids.length() > MAX_INVOICE_ITEMS`.
 /// - `EZeroQuantity` if any quantity is zero.
 /// - `EVariantNotFound` / `EListingInactive` if a variant is unregistered or its
 ///   parent listing is inactive.
@@ -973,6 +987,7 @@ public fun create_invoice(
     ctx: &mut TxContext,
 ): ID {
     assert!(!listing_variant_ids.is_empty(), ENoItems);
+    assert!(listing_variant_ids.length() <= MAX_INVOICE_ITEMS, EItemsTooMany);
     assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
     assert!(order_ref.length() <= MAX_ORDER_REF_LEN, EOrderRefTooLong);
 

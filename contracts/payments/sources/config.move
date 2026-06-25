@@ -101,6 +101,12 @@ public struct Config has drop, store {
 /// loyalty mint becomes a no-op. Pass the returned value to `merchant::create<C>`
 /// (initial setup) or `merchant::update_config` (replacement).
 ///
+/// Note for merchants: this config is the live source for *future* invoices
+/// only. Each issued `Invoice` snapshots `payout_address`, `payment_type`,
+/// item prices, `amount`, and `loyalty` at creation time and is binding — a
+/// later `update_config` does not retro-mutate open invoices. See
+/// `payment::Invoice` for the full snapshot semantics.
+///
 /// #### Generics
 /// - `C`: The stablecoin currency this merchant accepts.
 ///

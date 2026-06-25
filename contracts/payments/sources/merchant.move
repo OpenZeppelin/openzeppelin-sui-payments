@@ -117,12 +117,23 @@ const EBadHashLength: vector<u8> = "Voucher redeem_hash must be 32 bytes";
 #[error(code = 26)]
 const EWrongPreimage: vector<u8> =
     "Provided preimage does not match the voucher's redeem_hash commitment";
+#[error(code = 27)]
+const EOrderRefTooLong: vector<u8> = "order_ref exceeds MAX_ORDER_REF_LEN (128 bytes)";
 
 // === Constants ===
 
 /// Timelock (in ms) applied to root role transfer / renounce on the shared
 /// `AccessControl<MERCHANT>`. 24 hours.
 const ROOT_TRANSFER_DELAY_MS: u64 = 86_400_000;
+
+/// Maximum length (bytes) of the cashier-supplied `order_ref` on an invoice.
+/// `order_ref` is snapshotted into both the stored `Receipt<Payment>` and the
+/// `InvoicePaid` / `InvoiceCanceled` events.
+/// Capping it here keeps a single invoice's contribution to per-tx effects bounded,
+/// so an oversized ref can't brick the settle/cancel paths and leave an invoice stuck.
+/// 128 bytes covers all common POS reference formats (UUIDs, ULIDs, Shopify order names,
+/// composite prefixes) with headroom.
+const MAX_ORDER_REF_LEN: u64 = 128;
 
 // === Structs ===
 
@@ -951,6 +962,7 @@ public fun remove_listing_variant(
 /// - `EZeroQuantity` if any quantity is zero.
 /// - `EVariantNotFound` / `EListingInactive` if a variant is unregistered or its
 ///   parent listing is inactive.
+/// - `EOrderRefTooLong` if `order_ref` is longer than `MAX_ORDER_REF_LEN` bytes.
 public fun create_invoice(
     self: &mut Merchant,
     _auth: &Auth<CashierRole>,
@@ -962,6 +974,7 @@ public fun create_invoice(
 ): ID {
     assert!(!listing_variant_ids.is_empty(), ENoItems);
     assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
+    assert!(order_ref.length() <= MAX_ORDER_REF_LEN, EOrderRefTooLong);
 
     let items = listing_variant_ids.zip_map!(quantities, |vid, qty| self.price_item(vid, qty));
     // Amount should not be zero, since individual prices and quantities enforced to be non-zero.

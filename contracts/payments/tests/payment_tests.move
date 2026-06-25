@@ -1614,6 +1614,57 @@ fun new_zero_quantity_aborts() {
     });
 }
 
+#[test, expected_failure(abort_code = merchant::EOrderRefTooLong)]
+fun create_invoice_order_ref_too_long_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // Cap is 128 bytes; build a 129-byte `order_ref` to trip the bound.
+        let mut order_ref = vector::empty<u8>();
+        let mut i = 0;
+        while (i < 129) {
+            order_ref.push_back(b"x"[0]);
+            i = i + 1;
+        };
+
+        let _ = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            order_ref,
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
 #[test, expected_failure(abort_code = merchant::EInvoiceNotFound)]
 fun pay_unknown_invoice_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { qk, useInvoice, useInvoiceReceipt } from "@/hooks/queries";
 import { deployment } from "@/lib/deployment";
+import { encodeInvoiceQr } from "@/lib/qr";
 import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
 
 /** How often we re-check the receipt + invoice tables while the dialog is open. */
@@ -163,7 +164,9 @@ export function InvoiceStatusDialog({
                 the customer settles. Invoice expires per the merchant config.
               </DialogDescription>
             </DialogHeader>
-            {invoiceId ? <QrDisplay value={invoiceId} label="Invoice ID" /> : null}
+            {invoiceId ? (
+              <QrDisplay value={encodeInvoiceQr(invoiceId)} label="Invoice code" />
+            ) : null}
             <div className="flex justify-end">
               <Button variant="ghost" onClick={() => onOpenChange(false)}>
                 Done

@@ -147,6 +147,12 @@ export interface Voucher {
   items: Item[];
   amount: bigint;
   expiresAtMs: bigint;
+  /**
+   * blake2b256 commitment to the customer's redemption preimage. The cashier
+   * UI can hash a scanned preimage and compare against this to sanity-check
+   * before submitting the redeem tx; the chain enforces it regardless.
+   */
+  redeemHash: Uint8Array;
 }
 
 export function parseItem(raw: any): Item {
@@ -190,6 +196,7 @@ export function parseVoucher(id: SuiObjectId, raw: any): Voucher {
     // `optionToValue` — handle both.
     amount: balanceToValue(f.funds),
     expiresAtMs: BigInt(f.expires_at_ms),
+    redeemHash: bytesFromVectorU8(f.redeem_hash),
   };
 }
 
@@ -290,6 +297,28 @@ function balanceToValue(raw: any): bigint {
   if (raw === null || raw === undefined) return 0n;
   if (typeof raw !== "object") return BigInt(raw);
   return BigInt(raw.fields?.value ?? raw.value ?? 0);
+}
+
+/**
+ * Normalizes a Move `vector<u8>` field value to a `Uint8Array`. Sui's
+ * normalized JSON usually emits these as `number[]`, but older SDKs and
+ * some response paths return a hex-encoded `string`. Handle both so the
+ * parser doesn't break across framework versions.
+ */
+function bytesFromVectorU8(raw: any): Uint8Array {
+  if (raw === null || raw === undefined) return new Uint8Array(0);
+  if (raw instanceof Uint8Array) return raw;
+  if (Array.isArray(raw)) return Uint8Array.from(raw as number[]);
+  if (typeof raw === "string") {
+    const clean = raw.startsWith("0x") ? raw.slice(2) : raw;
+    if (clean.length % 2 !== 0) return new Uint8Array(0);
+    const out = new Uint8Array(clean.length / 2);
+    for (let i = 0; i < out.length; i++) {
+      out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+    }
+    return out;
+  }
+  return new Uint8Array(0);
 }
 
 /** `TypeName` serializes as `{ name: "0x..::module::Type" }`. */

@@ -60,6 +60,7 @@ use std::type_name::{Self, TypeName};
 use sui::balance::Balance;
 use sui::clock::Clock;
 use sui::coin::Coin;
+use sui::hash;
 use sui::table::{Self, Table};
 
 // === Errors ===
@@ -115,6 +116,11 @@ const EWrongCustomer: vector<u8> = "Account owner does not match Voucher custome
 const EInvalidAmount: vector<u8> = "Voucher amount must equal the total redeemed amount";
 #[error(code = 24)]
 const EReceiptNotFound: vector<u8> = "Receipt not found";
+#[error(code = 25)]
+const EBadHashLength: vector<u8> = "Voucher redeem_hash must be 32 bytes";
+#[error(code = 26)]
+const EWrongPreimage: vector<u8> =
+    "Provided preimage does not match the voucher's redeem_hash commitment";
 
 // === Constants ===
 
@@ -297,7 +303,6 @@ public fun pay<S>(
     clock: &Clock,
 ) {
     assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
-    let now = clock.timestamp_ms();
 
     let (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms) = self
         .invoices
@@ -305,6 +310,7 @@ public fun pay<S>(
         .unpack();
 
     // Validate invoice expiration time.
+    let now = clock.timestamp_ms();
     assert!(now < expires_at_ms, EInvoiceExpired);
     // Validate currency type. Otherwise a customer could mint their own coin and
     // settle in junk tokens.
@@ -375,7 +381,6 @@ public fun pay_with_coin<S>(
     clock: &Clock,
 ) {
     assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
-    let now = clock.timestamp_ms();
 
     let (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms) = self
         .invoices
@@ -383,6 +388,7 @@ public fun pay_with_coin<S>(
         .unpack();
 
     // Validate invoice expiration time.
+    let now = clock.timestamp_ms();
     assert!(now < expires_at_ms, EInvoiceExpired);
     // Validate currency type. Otherwise a customer could mint their own coin and
     // settle in junk tokens.
@@ -428,12 +434,13 @@ public fun pay_with_coin<S>(
 /// - `ENotExpired` if the invoice has not yet expired.
 public fun cancel_invoice(self: &mut Merchant, invoice_id: ID, clock: &Clock) {
     assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
-    assert!(clock.timestamp_ms() >= self.invoices.borrow(invoice_id).expires_at_ms(), ENotExpired);
 
-    let (payout_address, payment_type, _items, amount, _loyalty, order_ref, _expires) = self
+    let (payout_address, payment_type, _items, amount, _loyalty, order_ref, expires_at_ms) = self
         .invoices
         .remove(invoice_id)
         .unpack();
+
+    assert!(clock.timestamp_ms() >= expires_at_ms, ENotExpired);
 
     events::emit_invoice_canceled(invoice_id, payout_address, payment_type, amount, order_ref);
 }
@@ -455,17 +462,28 @@ public fun cancel_invoice(self: &mut Merchant, invoice_id: ID, clock: &Clock) {
 /// - `EInvalidAmount` if the unlocked amount differs from the items' total.
 /// - `EZeroQuantity` / `ENoLoyaltyPrice` / `EVariantNotFound` / `EListingInactive`
 ///   for catalog/price problems.
+/// - `EBadHashLength` if `redeem_hash` is not 32 bytes (blake2b256 digest).
+///
+/// #### Hashlock authorization
+/// `redeem_hash` is a 32-byte blake2b256 commitment to a customer-chosen
+/// secret preimage. The customer keeps the preimage off-chain (e.g. browser
+/// localStorage) and reveals it at the till via the voucher QR. `redeem`
+/// requires the matching preimage, so `CashierRole` alone — even when armed
+/// with the publicly-emitted `voucher_id`, cannot sweep vouchers without
+/// the customer also revealing the preimage. See `merchant::redeem`.
 public fun create_voucher(
     self: &mut Merchant,
     mut unlock_req: Request<UnlockFunds<Balance<LOYALTY>>>,
     policy_loyalty: &Policy<Balance<LOYALTY>>,
     listing_variant_ids: vector<ID>,
     quantities: vector<u64>,
+    redeem_hash: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ): ID {
     assert!(!listing_variant_ids.is_empty(), ENoItems);
     assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
+    assert!(redeem_hash.length() == 32, EBadHashLength);
 
     // Take and validate customer account and funds.
     let customer = unlock_req.data().owner();
@@ -486,7 +504,7 @@ public fun create_voucher(
     unlock_req.approve(loyalty::new_redeem_unlock_approval());
     let funds: Balance<LOYALTY> = unlock_funds::resolve(unlock_req, policy_loyalty);
 
-    let voucher = redemption::new(customer, items, funds, expires_at_ms);
+    let voucher = redemption::new(customer, items, funds, expires_at_ms, redeem_hash);
 
     let id = object::id_from_address(ctx.fresh_object_address());
     self.vouchers.add(id, voucher);
@@ -510,9 +528,14 @@ public fun cancel_voucher(
     clock: &Clock,
 ) {
     assert!(self.vouchers.contains(voucher_id), EVoucherNotFound);
-    assert!(clock.timestamp_ms() >= self.vouchers.borrow(voucher_id).expires_at_ms(), ENotExpired);
 
-    let (customer, _items, funds, _expires) = self.vouchers.remove(voucher_id).unpack();
+    let (customer, _items, funds, expires_at_ms, _redeem_hash) = self
+        .vouchers
+        .remove(voucher_id)
+        .unpack();
+
+    // Validate voucher's expiration time and customer's loyalty account.
+    assert!(clock.timestamp_ms() >= expires_at_ms, ENotExpired);
     assert!(customer_loyalty_account.owner() == customer, EWrongCustomer);
 
     let amount = funds.value();
@@ -971,25 +994,49 @@ public fun create_invoice(
 ///
 /// Burns the locked `Balance<LOYALTY>` via the merchant's `TreasuryCap<LOYALTY>`,
 /// removes the voucher, stores a `Receipt` keyed by `voucher_id`, and emits
-/// `VoucherRedeemed`. Gated by `CashierRole`.
+/// `VoucherRedeemed`. Gated by both:
+///   - `CashierRole` — the till operator authorizes settlement, AND
+///   - the customer's preimage matching `voucher.redeem_hash` — proves the
+///     redeemer holds the secret the customer chose at issuance.
+///
+/// `CashierRole` alone is no longer sufficient: even a cashier who observes
+/// `voucher_id` from the public `VoucherCreated` event cannot redeem without
+/// the customer also revealing the preimage (typically via the QR shown at
+/// the till). The preimage is opaque random bytes the customer's dApp
+/// generates client-side and stores locally — it never appears on chain
+/// until reveal time.
 ///
 /// #### Aborts
 /// - `EVoucherNotFound` if no open voucher with `voucher_id` is stored.
 /// - `EVoucherExpired` if the voucher has expired.
-public fun redeem(self: &mut Merchant, _auth: &Auth<CashierRole>, voucher_id: ID, clock: &Clock) {
+/// - `EWrongPreimage` if `blake2b256(preimage) != voucher.redeem_hash`.
+public fun redeem(
+    self: &mut Merchant,
+    _auth: &Auth<CashierRole>,
+    voucher_id: ID,
+    preimage: vector<u8>,
+    clock: &Clock,
+) {
     assert!(self.vouchers.contains(voucher_id), EVoucherNotFound);
+
+    let (customer, items, funds, expires_at_ms, redeem_hash) = self
+        .vouchers
+        .remove(voucher_id)
+        .unpack();
+
+    // Validate voucher's expiration time and submitted preimage.
     let now = clock.timestamp_ms();
-    assert!(now < self.vouchers.borrow(voucher_id).expires_at_ms(), EVoucherExpired);
-
-    let (customer, items, funds, _expires) = self.vouchers.remove(voucher_id).unpack();
-    let amount = funds.value();
-
-    self.loyalty.decrease_supply(funds);
+    assert!(now < expires_at_ms, EVoucherExpired);
+    assert!(hash::blake2b256(&preimage) == redeem_hash, EWrongPreimage);
 
     // Store the receipt under the voucher's issuance ID: a fresh, single-use ID
     // removed from `vouchers` above, so `voucher_receipts.add` can never collide.
+    let amount = funds.value();
     let receipt = receipt::new_redemption(customer, items, amount, now, voucher_id);
     self.voucher_receipts.add(voucher_id, receipt);
+
+    // Decrease loyalty supply.
+    self.loyalty.decrease_supply(funds);
 
     events::emit_voucher_redeemed(voucher_id, customer, amount, now);
 }

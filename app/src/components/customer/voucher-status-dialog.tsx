@@ -35,10 +35,18 @@ const POLL_MS = 1_000;
  */
 export function VoucherStatusDialog({
   voucherId,
+  qrPayload,
   open,
   onOpenChange,
 }: {
   voucherId: string | null;
+  /**
+   * Pre-encoded QR string (base64 of `{ v, p }` — see `lib/preimage`). Held
+   * separately from `voucherId` because the dialog still needs the id for
+   * polling receipts/state; the QR carries id + preimage so the cashier can
+   * scan and redeem in one step.
+   */
+  qrPayload: string | null;
   open: boolean;
   onOpenChange: (next: boolean) => void;
 }) {
@@ -144,7 +152,7 @@ export function VoucherStatusDialog({
                 when the merchant scans and burns the LOY.
               </DialogDescription>
             </DialogHeader>
-            {voucherId ? <QrDisplay value={voucherId} label="Voucher ID" /> : null}
+            {qrPayload ? <QrDisplay value={qrPayload} label="Voucher QR" /> : null}
             <div className="flex justify-end">
               <Button variant="ghost" onClick={() => onOpenChange(false)}>
                 Done

@@ -18,6 +18,7 @@ import {
   buildSendBalance,
 } from "@/lib/move/pas";
 import { buildPay } from "@/lib/move/payment";
+import { decodeInvoiceQr } from "@/lib/qr";
 import { buildApproveTransfer } from "@/lib/move/stablecoin";
 import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
 
@@ -108,8 +109,15 @@ export default function CustomerPayPage() {
           </CardHeader>
           <CardContent>
             <QrScanner
-              onResult={(v) => setInvoiceId(v)}
-              placeholder="Paste invoice ID (0x…)"
+              onResult={(v) => {
+                const id = decodeInvoiceQr(v);
+                if (!id) {
+                  toast.error("Not an invoice QR. Expecting a 32-byte base32 payload.");
+                  return;
+                }
+                setInvoiceId(id);
+              }}
+              placeholder="Paste invoice code"
             />
           </CardContent>
         </Card>

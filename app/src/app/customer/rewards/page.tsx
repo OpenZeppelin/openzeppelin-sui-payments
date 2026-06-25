@@ -16,6 +16,13 @@ import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
 import { buildAccountNewAuth, buildUnlockBalance } from "@/lib/move/pas";
 import { buildCreateVoucher } from "@/lib/move/redemption";
+import {
+  blake2b256,
+  generatePreimage,
+  loadPreimage,
+  savePreimage,
+} from "@/lib/preimage";
+import { encodeVoucherQr } from "@/lib/qr";
 import { formatAmount, shortAddr } from "@/lib/utils";
 import type { Voucher } from "@/lib/move/types";
 
@@ -74,6 +81,7 @@ export default function RewardsPage() {
     amount: bigint;
     variantIds: string[];
     quantities: bigint[];
+    redeemHash: Uint8Array;
   }>(
     (tx, args) => {
       const auth = buildAccountNewAuth(tx);
@@ -87,6 +95,7 @@ export default function RewardsPage() {
         unlockRequest: unlockReq,
         variantIds: args.variantIds,
         quantities: args.quantities,
+        redeemHash: args.redeemHash,
       });
     },
     {
@@ -100,20 +109,50 @@ export default function RewardsPage() {
 
   async function handleCreate() {
     if (!customerPas.data || lines.length === 0) return;
+
+    // Generate the redemption preimage client-side and commit only its hash
+    // on chain. The preimage is held in localStorage keyed by the voucher
+    // id (see `handlePreimage` below once we know the id), and never leaves
+    // this device until the customer reveals it via the QR at the till.
+    const preimage = generatePreimage();
+    const redeemHash = blake2b256(preimage);
+
     const result = await createVoucher.mutateAsync({
       customerAccountId: customerPas.data,
       amount: total,
       variantIds: lines.map((l) => l.variantId),
       quantities: lines.map((l) => BigInt(l.quantity)),
+      redeemHash,
     });
     const evType = `${deployment.packageId}::events::VoucherCreated`;
     const ev = (result.events ?? []).find((e) => e.type === evType);
     const newId = (ev?.parsedJson as { voucher_id?: string } | undefined)?.voucher_id;
     if (newId) {
+      // Persist BEFORE flipping UI state — if we set the id first and the
+      // user closes the dialog before storage writes, we'd lose the preimage
+      // and the voucher would be unredeemable.
+      savePreimage(newId, preimage);
       setVoucherId(newId);
       setCart(new Map());
     }
   }
+
+  // QR payload for the post-create dialog. Computed from the just-persisted
+  // preimage so the dialog component stays unaware of the encoding.
+  const justCreatedQr = useMemo(() => {
+    if (!voucherId) return null;
+    const preimage = loadPreimage(voucherId);
+    if (!preimage) return null;
+    return encodeVoucherQr(voucherId, preimage);
+  }, [voucherId]);
+
+  // QR payload for the "Show" button on an existing open voucher.
+  const showingQr = useMemo(() => {
+    if (!showingVoucher) return null;
+    const preimage = loadPreimage(showingVoucher);
+    if (!preimage) return null;
+    return encodeVoucherQr(showingVoucher, preimage);
+  }, [showingVoucher]);
 
   return (
     <section>
@@ -247,6 +286,7 @@ export default function RewardsPage() {
           swaps to a "Voucher redeemed" view the moment the merchant settles. */}
       <VoucherStatusDialog
         voucherId={voucherId}
+        qrPayload={justCreatedQr}
         open={Boolean(voucherId)}
         onOpenChange={(o) => !o && setVoucherId(null)}
       />
@@ -254,6 +294,7 @@ export default function RewardsPage() {
       {/* Re-show an existing open voucher's QR; same status-watching dialog. */}
       <VoucherStatusDialog
         voucherId={showingVoucher}
+        qrPayload={showingQr}
         open={Boolean(showingVoucher)}
         onOpenChange={(o) => !o && setShowingVoucher(null)}
       />
@@ -324,7 +365,22 @@ function OpenVoucherRow({
       </div>
       <div className="flex items-center gap-2">
         {!expired ? (
-          <Button size="sm" variant="outline" onClick={() => onShow(voucher.id)}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              // Preimage lives in this device's localStorage. If it's missing
+              // (browser data cleared, different device, etc.) the QR can't
+              // be redeemed — surface that early instead of showing a dead QR.
+              if (!loadPreimage(voucher.id)) {
+                toast.error(
+                  "Voucher preimage missing on this device — wait for expiry and reclaim the LOY.",
+                );
+                return;
+              }
+              onShow(voucher.id);
+            }}
+          >
             <ScanLine className="h-4 w-4" />
             Show
           </Button>

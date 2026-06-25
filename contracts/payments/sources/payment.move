@@ -20,8 +20,8 @@ use std::type_name::TypeName;
 public struct Invoice has store {
     /// Snapshot of `merchant.payout_address` at issuance.
     payout_address: address,
-    /// Snapshot of `merchant.accepted_payment_type` at issuance. `merchant::pay<S>`
-    /// aborts if `S` does not match this, preventing settlement in self-minted
+    /// Snapshot of `merchant.accepted_payment_type` at issuance. `merchant::pay<C>`
+    /// aborts if `C` does not match this, preventing settlement in self-minted
     /// currencies.
     payment_type: TypeName,
     /// Line items with snapshot prices (stablecoin units).

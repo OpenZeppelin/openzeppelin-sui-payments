@@ -70,21 +70,13 @@ export function buildRemoveListingVariant(tx: Transaction, variantId: string): v
 
 // --- MerchantRole-gated identity / treasury ops ---
 
-export function buildSetPayoutAddress(tx: Transaction, addr: string): void {
-  const auth = buildAcAuth(tx, "MerchantRole");
-  tx.moveCall({
-    target: `${deployment.packageId}::merchant::set_payout_address`,
-    arguments: [tx.object(deployment.merchantId), auth, tx.pure.address(addr)],
-  });
-}
-
-export function buildSetDisplay(
+export function buildUpdateDisplay(
   tx: Transaction,
   args: { name: string; logoUrl: string | null },
 ): void {
   const auth = buildAcAuth(tx, "MerchantRole");
   tx.moveCall({
-    target: `${deployment.packageId}::merchant::set_display`,
+    target: `${deployment.packageId}::merchant::update_display`,
     arguments: [
       tx.object(deployment.merchantId),
       auth,
@@ -94,12 +86,19 @@ export function buildSetDisplay(
   });
 }
 
-export function buildSetConfig(
+/**
+ * Builds `config::new<C>(&Currency<C>, payout_address, coefficient, max, invoice_ttl, voucher_ttl)`
+ * then `merchant::update_config(self, &auth, cfg)`. The currency's decimals are
+ * snapshotted into the resulting Config on-chain, so all four "what coin do we
+ * accept" pieces — type tag, decimals, payout, and rate — flow through a single
+ * atomic `update_config` call.
+ */
+export function buildUpdateConfig(
   tx: Transaction,
   args: {
-    mintNumerator: bigint;
-    mintDenominator: bigint;
-    maxMintPerPayment: bigint;
+    payoutAddress: string;
+    loyaltyCoefficient: bigint;
+    maxLoyaltyPerPayment: bigint;
     invoiceTtlMs: bigint;
     voucherTtlMs: bigint;
   },
@@ -107,25 +106,18 @@ export function buildSetConfig(
   const auth = buildAcAuth(tx, "MerchantRole");
   const cfg = tx.moveCall({
     target: `${deployment.packageId}::config::new`,
+    typeArguments: [deployment.stablecoinType],
     arguments: [
-      tx.pure.u64(args.mintNumerator),
-      tx.pure.u64(args.mintDenominator),
-      tx.pure.u64(args.maxMintPerPayment),
+      tx.object(deployment.stablecoinCurrencyId),
+      tx.pure.address(args.payoutAddress),
+      tx.pure.u64(args.loyaltyCoefficient),
+      tx.pure.u64(args.maxLoyaltyPerPayment),
       tx.pure.u64(args.invoiceTtlMs),
       tx.pure.u64(args.voucherTtlMs),
     ],
   });
   tx.moveCall({
-    target: `${deployment.packageId}::merchant::set_config`,
+    target: `${deployment.packageId}::merchant::update_config`,
     arguments: [tx.object(deployment.merchantId), auth, cfg],
-  });
-}
-
-export function buildSetPaymentType(tx: Transaction, newPaymentType: string): void {
-  const auth = buildAcAuth(tx, "MerchantRole");
-  tx.moveCall({
-    target: `${deployment.packageId}::merchant::set_payment_type`,
-    typeArguments: [newPaymentType],
-    arguments: [tx.object(deployment.merchantId), auth],
   });
 }

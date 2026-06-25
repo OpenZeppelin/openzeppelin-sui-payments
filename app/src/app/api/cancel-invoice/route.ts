@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 
-import { sponsorKeypair } from "@/lib/sponsor-server";
+import { deployerKeypair } from "@/lib/deployer-server";
 import { NETWORK, networkConfig } from "@/lib/sui-client";
 
 const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID;
@@ -23,8 +23,8 @@ type CancelInvoiceResponseBody = {
  * POST /api/cancel-invoice
  *
  * `merchant::cancel_invoice(self, invoice_id, clock)` is permissionless after
- * the invoice's `expires_at_ms`, so the sponsor can sign + pay on the
- * merchant's behalf. Storage rebate goes to the sponsor.
+ * the invoice's `expires_at_ms`, so the server-side `deployerKeypair` signs +
+ * pays gas on the merchant's behalf. Storage rebate goes to that key.
  *
  * Aborts here also surface a useful error: `ENotExpired` if the client UI
  * marked something expired prematurely (e.g. clock skew), or `EInvoiceNotFound`
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const keypair = sponsorKeypair();
+  const keypair = deployerKeypair();
   const client = new SuiClient({ url: networkConfig[NETWORK].url });
 
   const tx = new Transaction();

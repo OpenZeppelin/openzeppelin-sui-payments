@@ -34,7 +34,7 @@ export function buildCreateInvoice(
 }
 
 /**
- * `merchant::pay<S>(self, invoice_id, send_request, policy_s, customer_loy_acct, clock)`.
+ * `merchant::pay<C>(self, invoice_id, send_request, policy_s, customer_loy_acct, clock)`.
  * PAS-based settlement: the customer's `send_funds` request hands the stablecoin to
  * the merchant's payout PAS account. The send request must already be built +
  * approved (see `lib/move/pas.ts` and `lib/move/stablecoin.ts`).
@@ -62,8 +62,8 @@ export function buildPay(
 }
 
 /**
- * `merchant::pay_with_coin<S>(self, invoice_id, coin, customer_loy_acct, clock)`.
- * Open-loop settlement: hand over a plain `Coin<S>` and the merchant routes it to
+ * `merchant::pay_with_coin<C>(self, invoice_id, coin, customer_loy_acct, clock)`.
+ * Open-loop settlement: hand over a plain `Coin<C>` and the merchant routes it to
  * the payout address. Loyalty still credits `customer_loyalty_account`. The
  * receipt's `customer` is whoever owns the loyalty account, not a proven payer.
  */

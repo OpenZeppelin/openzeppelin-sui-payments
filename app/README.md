@@ -83,17 +83,7 @@ app/
    NEXT_PUBLIC_GOOGLE_CLIENT_ID=...
    ```
    (Set up under the Enoki portal — it gets bound to the zkLogin nonce flow.)
-5. **Generate + fund the sponsor keypair** for gas-free transactions:
-   ```bash
-   sui keytool generate ed25519 --json
-   # Copy the printed `secret_key` into .env.local under SPONSOR_PRIVATE_KEY.
-   # Then fund the sponsor address with testnet SUI:
-   sui client faucet --address <sponsor-address>
-   ```
-   The /api/sponsor route uses this key to pay gas on the customer's behalf.
-   Top up the sponsor address when it runs dry; chain calls will fail with a
-   visible "sponsor has no SUI gas coins" error if it's empty.
-6. **Run the dev server:**
+5. **Run the dev server:**
    ```bash
    pnpm dev
    ```

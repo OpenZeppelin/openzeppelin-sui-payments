@@ -8,7 +8,7 @@ import { shortAddr, formatAmount } from "@/lib/utils";
 
 export default function BalancePage() {
   const merchant = useMerchant();
-  const payoutAddress = merchant.data?.payoutAddress ?? null;
+  const payoutAddress = merchant.data?.config.payoutAddress ?? null;
   const payoutAccount = usePasAccount(payoutAddress);
   const balances = useBalances(payoutAccount.data ?? null, [
     deployment.stablecoinType,

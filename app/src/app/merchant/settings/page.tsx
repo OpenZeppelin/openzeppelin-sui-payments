@@ -8,13 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { qk, useMerchant } from "@/hooks/queries";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
-import {
-  buildSetConfig,
-  buildSetDisplay,
-  buildSetPaymentType,
-  buildSetPayoutAddress,
-} from "@/lib/move/merchant";
-import type { Merchant } from "@/lib/move/types";
+import { buildUpdateConfig, buildUpdateDisplay } from "@/lib/move/merchant";
+import { LOYALTY_FLOAT_SCALING, type Merchant } from "@/lib/move/types";
 
 const MS_PER_MINUTE = 60_000n;
 
@@ -39,9 +34,7 @@ export default function MerchantSettingsPage() {
       ) : (
         <>
           <DisplayCard merchant={merchant.data} />
-          <PayoutCard merchant={merchant.data} />
           <ConfigCard merchant={merchant.data} />
-          <PaymentTypeCard merchant={merchant.data} />
         </>
       )}
     </section>
@@ -62,7 +55,7 @@ function DisplayCard({ merchant }: { merchant: Merchant }) {
 
   const save = useSponsoredMutation<{ name: string; logoUrl: string }>(
     (tx, args) => {
-      buildSetDisplay(tx, {
+      buildUpdateDisplay(tx, {
         name: args.name,
         logoUrl: args.logoUrl ? args.logoUrl : null,
       });
@@ -112,63 +105,36 @@ function DisplayCard({ merchant }: { merchant: Merchant }) {
 }
 
 // ---------------------------------------------------------------------------
-// Payout address — MerchantRole
+// Payout + loyalty + TTLs — single atomic update_config call, MerchantRole-gated
 // ---------------------------------------------------------------------------
 
-function PayoutCard({ merchant }: { merchant: Merchant }) {
-  const [addr, setAddr] = useState(merchant.payoutAddress);
-  useEffect(() => setAddr(merchant.payoutAddress), [merchant.payoutAddress]);
-
-  const save = useSponsoredMutation<string>(
-    (tx, next) => buildSetPayoutAddress(tx, next),
-    { invalidate: [qk.merchant()], successMessage: "Payout address updated" },
-  );
-
-  const unchanged = addr === merchant.payoutAddress;
-  const validAddr = /^0x[0-9a-fA-F]+$/.test(addr) && addr.length === 66;
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Payout address</CardTitle>
-        <CardDescription>
-          Address that receives customer stablecoin on settlement. Change rotates
-          where future invoices route — open invoices keep their snapshot.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <div className="grid gap-2">
-          <Label htmlFor="m-payout">Address (0x…)</Label>
-          <Input
-            id="m-payout"
-            value={addr}
-            onChange={(e) => setAddr(e.target.value.trim())}
-            placeholder="0x…"
-            className="font-mono text-sm"
-            required
-          />
-        </div>
-        <div className="flex justify-end">
-          <Button
-            onClick={() => save.mutate(addr)}
-            disabled={save.isPending || unchanged || !validAddr}
-          >
-            {save.isPending ? "Saving…" : "Save"}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
+/** Display-side helpers: raw u64 ↔ human decimal at `LOYALTY_FLOAT_SCALING`. */
+function coefficientToDecimal(raw: bigint): string {
+  // Avoid float drift for clean ratios (e.g. 1e8 → "0.1"): use bigint mod/div.
+  const scale = LOYALTY_FLOAT_SCALING;
+  if (raw === 0n) return "0";
+  const whole = raw / scale;
+  const frac = raw % scale;
+  if (frac === 0n) return whole.toString();
+  // Pad fractional part to 9 digits, then trim trailing zeros.
+  const fracStr = frac.toString().padStart(9, "0").replace(/0+$/, "");
+  return `${whole}.${fracStr}`;
 }
 
-// ---------------------------------------------------------------------------
-// Loyalty config + TTLs — MerchantRole
-// ---------------------------------------------------------------------------
+function decimalToCoefficient(value: string): bigint | null {
+  const trimmed = value.trim();
+  if (!/^\d+(\.\d{1,9})?$/.test(trimmed)) return null;
+  const [whole, frac = ""] = trimmed.split(".");
+  const fracPadded = (frac + "000000000").slice(0, 9);
+  return BigInt(whole) * LOYALTY_FLOAT_SCALING + BigInt(fracPadded);
+}
 
 function ConfigCard({ merchant }: { merchant: Merchant }) {
-  const [mintN, setMintN] = useState(merchant.config.mintNumerator.toString());
-  const [mintD, setMintD] = useState(merchant.config.mintDenominator.toString());
-  const [maxMint, setMaxMint] = useState(merchant.config.maxMintPerPayment.toString());
+  const [payout, setPayout] = useState(merchant.config.payoutAddress);
+  const [coefficient, setCoefficient] = useState(
+    coefficientToDecimal(merchant.config.loyaltyCoefficient),
+  );
+  const [maxMint, setMaxMint] = useState(merchant.config.maxLoyaltyPerPayment.toString());
   const [invoiceTtlMin, setInvoiceTtlMin] = useState(
     (merchant.config.invoiceTtlMs / MS_PER_MINUTE).toString(),
   );
@@ -176,29 +142,34 @@ function ConfigCard({ merchant }: { merchant: Merchant }) {
     (merchant.config.voucherTtlMs / MS_PER_MINUTE).toString(),
   );
   useEffect(() => {
-    setMintN(merchant.config.mintNumerator.toString());
-    setMintD(merchant.config.mintDenominator.toString());
-    setMaxMint(merchant.config.maxMintPerPayment.toString());
+    setPayout(merchant.config.payoutAddress);
+    setCoefficient(coefficientToDecimal(merchant.config.loyaltyCoefficient));
+    setMaxMint(merchant.config.maxLoyaltyPerPayment.toString());
     setInvoiceTtlMin((merchant.config.invoiceTtlMs / MS_PER_MINUTE).toString());
     setVoucherTtlMin((merchant.config.voucherTtlMs / MS_PER_MINUTE).toString());
   }, [merchant.config]);
 
   const save = useSponsoredMutation<{
-    mintNumerator: bigint;
-    mintDenominator: bigint;
-    maxMintPerPayment: bigint;
+    payoutAddress: string;
+    loyaltyCoefficient: bigint;
+    maxLoyaltyPerPayment: bigint;
     invoiceTtlMs: bigint;
     voucherTtlMs: bigint;
-  }>((tx, args) => buildSetConfig(tx, args), {
+  }>((tx, args) => buildUpdateConfig(tx, args), {
     invalidate: [qk.merchant()],
     successMessage: "Config updated",
   });
 
+  const coeffRaw = decimalToCoefficient(coefficient);
+  const validPayout = /^0x[0-9a-fA-F]+$/.test(payout) && payout.length === 66;
+  const canSave = coeffRaw !== null && validPayout && Boolean(maxMint && invoiceTtlMin && voucherTtlMin);
+
   function handleSave() {
+    if (coeffRaw === null) return;
     save.mutate({
-      mintNumerator: BigInt(mintN || "0"),
-      mintDenominator: BigInt(mintD || "1"),
-      maxMintPerPayment: BigInt(maxMint || "0"),
+      payoutAddress: payout,
+      loyaltyCoefficient: coeffRaw,
+      maxLoyaltyPerPayment: BigInt(maxMint || "0"),
       invoiceTtlMs: BigInt(invoiceTtlMin || "0") * MS_PER_MINUTE,
       voucherTtlMs: BigInt(voucherTtlMin || "0") * MS_PER_MINUTE,
     });
@@ -207,44 +178,49 @@ function ConfigCard({ merchant }: { merchant: Merchant }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Loyalty + TTLs</CardTitle>
+        <CardTitle>Payout + loyalty + TTLs</CardTitle>
         <CardDescription>
-          Mint ratio is loyalty per stablecoin unit. Cap and TTLs prevent
-          runaway mints / stale invoices &amp; vouchers.
+          One atomic update. The accepted payment currency is pinned at deploy
+          time and can&apos;t be rotated here. Open invoices keep their
+          snapshots — changes affect future issuances only.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
+        <div className="grid gap-2">
+          <Label htmlFor="m-payout">Payout address (0x…)</Label>
+          <Input
+            id="m-payout"
+            value={payout}
+            onChange={(e) => setPayout(e.target.value.trim())}
+            placeholder="0x…"
+            className="font-mono text-sm"
+            required
+          />
+        </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="grid gap-2">
-            <Label htmlFor="m-mint-n">Mint numerator</Label>
+            <Label htmlFor="m-coeff">Loyalty per unit</Label>
             <Input
-              id="m-mint-n"
-              type="number"
-              min="0"
-              value={mintN}
-              onChange={(e) => setMintN(e.target.value)}
+              id="m-coeff"
+              inputMode="decimal"
+              value={coefficient}
+              onChange={(e) => setCoefficient(e.target.value)}
+              placeholder="0.1"
             />
+            <p className="text-xs text-[color:var(--color-muted-foreground)]">
+              LOY minted per 1 stablecoin unit (max 9 decimal places).
+            </p>
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="m-mint-d">Mint denominator</Label>
+            <Label htmlFor="m-max-mint">Max LOY per payment</Label>
             <Input
-              id="m-mint-d"
+              id="m-max-mint"
               type="number"
-              min="1"
-              value={mintD}
-              onChange={(e) => setMintD(e.target.value)}
+              min="0"
+              value={maxMint}
+              onChange={(e) => setMaxMint(e.target.value)}
             />
           </div>
-        </div>
-        <div className="grid gap-2">
-          <Label htmlFor="m-max-mint">Max LOY per payment</Label>
-          <Input
-            id="m-max-mint"
-            type="number"
-            min="0"
-            value={maxMint}
-            onChange={(e) => setMaxMint(e.target.value)}
-          />
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="grid gap-2">
@@ -269,57 +245,7 @@ function ConfigCard({ merchant }: { merchant: Merchant }) {
           </div>
         </div>
         <div className="flex justify-end">
-          <Button onClick={handleSave} disabled={save.isPending}>
-            {save.isPending ? "Saving…" : "Save"}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Accepted payment type — MerchantRole (dangerous: rotates the coin currency)
-// ---------------------------------------------------------------------------
-
-function PaymentTypeCard({ merchant }: { merchant: Merchant }) {
-  const [next, setNext] = useState(merchant.acceptedPaymentType);
-  useEffect(() => setNext(merchant.acceptedPaymentType), [merchant.acceptedPaymentType]);
-
-  const save = useSponsoredMutation<string>(
-    (tx, ty) => buildSetPaymentType(tx, ty),
-    { invalidate: [qk.merchant()], successMessage: "Payment type updated" },
-  );
-
-  const unchanged = next === merchant.acceptedPaymentType;
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Accepted payment type</CardTitle>
-        <CardDescription>
-          Fully-qualified Move type, e.g. <code>0x…::stablecoin_mock::STABLECOIN_MOCK</code>.
-          Changing this only affects <strong>future</strong> invoices; open invoices
-          retain their snapshotted type and abort if you change it before they settle.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <div className="grid gap-2">
-          <Label htmlFor="m-pay-type">Type</Label>
-          <Input
-            id="m-pay-type"
-            value={next}
-            onChange={(e) => setNext(e.target.value.trim())}
-            placeholder="0x…::stablecoin_mock::STABLECOIN_MOCK"
-            className="font-mono text-sm"
-          />
-        </div>
-        <div className="flex justify-end">
-          <Button
-            onClick={() => save.mutate(next)}
-            disabled={save.isPending || unchanged || !next}
-            variant="destructive"
-          >
+          <Button onClick={handleSave} disabled={save.isPending || !canSave}>
             {save.isPending ? "Saving…" : "Save"}
           </Button>
         </div>

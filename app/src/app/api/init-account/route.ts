@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 
-import { sponsorKeypair } from "@/lib/sponsor-server";
+import { deployerKeypair } from "@/lib/deployer-server";
 import { NETWORK, networkConfig } from "@/lib/sui-client";
 
 const PAS_PACKAGE_ID = process.env.NEXT_PUBLIC_PAS_PACKAGE_ID;
@@ -24,8 +24,9 @@ type InitAccountResponseBody = {
  *
  * `pas::account::create_and_share(namespace, owner_address)` doesn't require an
  * `&Auth` from the owner — it just takes their address as a value parameter,
- * so anyone can create an account for anyone. We let the sponsor sign + pay so
- * the customer never has to open their wallet for this one-time setup.
+ * so anyone can create an account for anyone. The server-side `deployerKeypair`
+ * (funded by `pnpm bootstrap` on localnet) pays gas, so the customer never has
+ * to open their wallet for this one-time setup.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   let body: InitAccountRequestBody;
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const keypair = sponsorKeypair();
+  const keypair = deployerKeypair();
   const client = new SuiClient({ url: networkConfig[NETWORK].url });
 
   const tx = new Transaction();

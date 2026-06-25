@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 
-import { sponsorKeypair } from "@/lib/sponsor-server";
+import { deployerKeypair } from "@/lib/deployer-server";
 import { NETWORK, networkConfig } from "@/lib/sui-client";
 
 const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID;
@@ -29,7 +29,7 @@ type CancelVoucherResponseBody = { digest: string };
  *      dynamic field to read its `customer` address.
  *   2. devInspect `namespace::account_address(ns, customer)` to derive the
  *      deterministic PAS account id for that customer.
- *   3. Build + sign the cancel PTB as sponsor.
+ *   3. Build + sign the cancel PTB with the server-side `deployerKeypair`.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   let body: CancelVoucherRequestBody;
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const keypair = sponsorKeypair();
+  const keypair = deployerKeypair();
   const client = new SuiClient({ url: networkConfig[NETWORK].url });
 
   // 1. Read voucher from merchant.vouchers to find its customer address.

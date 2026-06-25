@@ -20,20 +20,29 @@ export type SuiObjectId = string;
 // ---------------------------------------------------------------------------
 
 export interface Config {
-  mintNumerator: bigint;
-  mintDenominator: bigint;
-  maxMintPerPayment: bigint;
+  payoutAddress: SuiAddress;
+  /** Fully-qualified TypeName, e.g. "0x..::stablecoin_mock::STABLECOIN_MOCK" */
+  acceptedPaymentType: string;
+  /** Decimals of the accepted stablecoin, snapshotted from `Currency<C>` at config-time. */
+  paymentDecimals: number;
+  /**
+   * Raw u64 coefficient scaled by `LOYALTY_FLOAT_SCALING = 1e9`. Divide by it to
+   * get the human decimal ("1.0" = 1 LOY per human unit). `0` disables minting.
+   */
+  loyaltyCoefficient: bigint;
+  /** Hard cap on minted LOYALTY per payment. */
+  maxLoyaltyPerPayment: bigint;
   invoiceTtlMs: bigint;
   voucherTtlMs: bigint;
 }
+
+/** Mirrors `LOYALTY_FLOAT_SCALING` in `config.move`. */
+export const LOYALTY_FLOAT_SCALING = 1_000_000_000n;
 
 export interface Merchant {
   id: SuiObjectId;
   name: string;
   logoUrl: string | null;
-  payoutAddress: SuiAddress;
-  /** Fully-qualified TypeName, e.g. "0x..::stablecoin_mock::STABLECOIN_MOCK" */
-  acceptedPaymentType: string;
   config: Config;
   /** Parent object id of `Table<ID, Listing>` — query dynamic fields to enumerate. */
   listingsTableId: SuiObjectId;
@@ -52,9 +61,11 @@ export interface Merchant {
 export function parseConfig(raw: any): Config {
   const f = raw.fields ?? raw;
   return {
-    mintNumerator: BigInt(f.mint_numerator),
-    mintDenominator: BigInt(f.mint_denominator),
-    maxMintPerPayment: BigInt(f.max_mint_per_payment),
+    payoutAddress: f.payout_address,
+    acceptedPaymentType: typeNameToString(f.accepted_payment_type),
+    paymentDecimals: Number(f.payment_decimals),
+    loyaltyCoefficient: BigInt(f.loyalty_coefficient),
+    maxLoyaltyPerPayment: BigInt(f.max_loyalty_per_payment),
     invoiceTtlMs: BigInt(f.invoice_ttl_ms),
     voucherTtlMs: BigInt(f.voucher_ttl_ms),
   };
@@ -66,8 +77,6 @@ export function parseMerchant(content: any): Merchant {
     id: f.id.id,
     name: f.name,
     logoUrl: optionToValue<string>(f.logo_url),
-    payoutAddress: f.payout_address,
-    acceptedPaymentType: typeNameToString(f.accepted_payment_type),
     config: parseConfig(f.config),
     listingsTableId: f.listings.fields.id.id,
     variantIndexTableId: f.variant_index.fields.id.id,

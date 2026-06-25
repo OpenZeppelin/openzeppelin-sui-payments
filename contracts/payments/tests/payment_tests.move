@@ -708,10 +708,20 @@ fun pay_clamps_loyalty_to_max() {
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
-        // Tighten the mint cap to 30. Default mint rate is 1/10, so 500 stable
-        // would otherwise mint 50 LOYALTY. The cap clamps it to 30.
-        let tight_cfg = config::new(1, 10, 30, 600_000, 600_000);
-        merchant.set_config(&merchant_auth, tight_cfg);
+        // Tighten the mint cap to 30. Default rate is 0.1 LOY per unit, so 500
+        // stable would otherwise mint 50 LOYALTY. The cap clamps it to 30.
+        let (cap_currency, cap_treasury) = test_setup::new_test_currency(1);
+        let tight_cfg = config::new<TEST_USD>(
+            &cap_currency,
+            PAYOUT,
+            config::loyalty_float_scaling() / 10,
+            30,
+            600_000,
+            600_000,
+        );
+        merchant.update_config(&merchant_auth, tight_cfg);
+        destroy(cap_currency);
+        destroy(cap_treasury);
 
         let _ = merchant.add_listing(&catalog_auth, listing);
 
@@ -1115,9 +1125,19 @@ fun pay_zero_loyalty_no_mint() {
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
-        // mint_numerator = 0 → compute_loyalty(_) = 0 for every payment.
-        let zero_cfg = config::new(0, 10, 1_000_000, 600_000, 600_000);
-        merchant.set_config(&merchant_auth, zero_cfg);
+        // loyalty_coefficient = 0 → compute_loyalty(_) = 0 for every payment.
+        let (zero_currency, zero_treasury) = test_setup::new_test_currency(1);
+        let zero_cfg = config::new<TEST_USD>(
+            &zero_currency,
+            PAYOUT,
+            0,
+            1_000_000,
+            600_000,
+            600_000,
+        );
+        merchant.update_config(&merchant_auth, zero_cfg);
+        destroy(zero_currency);
+        destroy(zero_treasury);
 
         let _ = merchant.add_listing(&catalog_auth, listing);
 

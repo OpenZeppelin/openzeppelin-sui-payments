@@ -55,6 +55,17 @@ export const deployment = {
       process.env.NEXT_PUBLIC_STABLECOIN_POLICY_ID,
     );
   },
+  /**
+   * Shared `Currency<STABLECOIN_MOCK>` object id, created by the stablecoin's
+   * `init` via `coin_registry::new_currency_with_otw`. Read by
+   * `config::new<C>(&Currency<C>, …)` whenever the merchant edits config.
+   */
+  get stablecoinCurrencyId(): string {
+    return required(
+      "NEXT_PUBLIC_STABLECOIN_CURRENCY_ID",
+      process.env.NEXT_PUBLIC_STABLECOIN_CURRENCY_ID,
+    );
+  },
   /** Fully-qualified type of the accepted stablecoin, e.g. `0xab..::stablecoin_mock::STABLECOIN_MOCK`. */
   get stablecoinType(): string {
     return required(

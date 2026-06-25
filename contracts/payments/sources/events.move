@@ -116,21 +116,14 @@ public struct VariantRemoved has copy, drop {
     variant_id: ID,
 }
 
-/// Emitted when a merchant replaces its loyalty mint `Config`. Pulse only -
-/// query `Merchant.config` for the current values.
+/// Emitted when a merchant replaces its `Config` (which now subsumes payout
+/// address and accepted payment type). Pulse only — query `Merchant.config`
+/// for the current values.
 public struct ConfigUpdated has copy, drop {}
 
-/// Emitted when a merchant rotates its payout address. Pulse only - query
-/// `Merchant.payout_address` for the current value.
-public struct PayoutAddressChanged has copy, drop {}
-
-/// Emitted when a merchant rotates its accepted payment currency. Pulse only -
-/// query `Merchant.accepted_payment_type` for the current value.
-public struct PaymentTypeChanged has copy, drop {}
-
-/// Emitted when a merchant updates its display name or logo. Pulse only -
+/// Emitted when a merchant updates its display name or logo. Pulse only —
 /// query `Merchant.name` / `Merchant.logo_url` for the current values.
-public struct DisplayChanged has copy, drop {}
+public struct DisplayUpdated has copy, drop {}
 
 // === Package Functions ===
 
@@ -226,19 +219,9 @@ public(package) fun emit_config_updated() {
     event::emit(ConfigUpdated {});
 }
 
-/// Emit `PayoutAddressChanged`.
-public(package) fun emit_payout_address_changed() {
-    event::emit(PayoutAddressChanged {});
-}
-
-/// Emit `PaymentTypeChanged`.
-public(package) fun emit_payment_type_changed() {
-    event::emit(PaymentTypeChanged {});
-}
-
-/// Emit `DisplayChanged`.
-public(package) fun emit_display_changed() {
-    event::emit(DisplayChanged {});
+/// Emit `DisplayUpdated`.
+public(package) fun emit_display_updated() {
+    event::emit(DisplayUpdated {});
 }
 
 // === Test-Only Helpers ===
@@ -323,16 +306,6 @@ public fun config_updated(): ConfigUpdated {
 }
 
 #[test_only]
-public fun payout_address_changed(): PayoutAddressChanged {
-    PayoutAddressChanged {}
-}
-
-#[test_only]
-public fun payment_type_changed(): PaymentTypeChanged {
-    PaymentTypeChanged {}
-}
-
-#[test_only]
-public fun display_changed(): DisplayChanged {
-    DisplayChanged {}
+public fun display_updated(): DisplayUpdated {
+    DisplayUpdated {}
 }

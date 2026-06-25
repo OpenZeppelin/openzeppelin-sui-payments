@@ -12,16 +12,12 @@ use openzeppelin_payments::merchant::{Self, Merchant, MERCHANT, MerchantRole, Ca
 use openzeppelin_payments::test_helpers::assert_emitted;
 use openzeppelin_payments::test_setup::{Self, TEST_USD};
 use pas::e2e;
-use std::type_name;
 use std::unit_test::{assert_eq, destroy};
 use sui::coin;
 use sui::test_scenario;
 
 const ADMIN: address = @0xA;
 const PAYOUT: address = @0xB;
-
-/// Second mock currency used to exercise `set_payment_type` rotation.
-public struct OTHER_USD has drop {}
 
 #[test]
 fun merchant_create_and_share() {
@@ -38,9 +34,8 @@ fun merchant_create_and_share() {
 
         assert_eq!(*merchant.name(), b"Test Shop".to_string());
         assert_eq!(merchant.payout_address(), PAYOUT);
-        assert_eq!(merchant.config().mint_numerator(), 1);
-        assert_eq!(merchant.config().mint_denominator(), 10);
-        assert_eq!(merchant.config().max_mint_per_payment(), 1_000_000);
+        assert_eq!(merchant.config().loyalty_coefficient(), config::loyalty_float_scaling() / 10);
+        assert_eq!(merchant.config().max_loyalty_per_payment(), 1_000_000);
         assert_eq!(merchant.config().invoice_ttl_ms(), 600_000);
         assert_eq!(merchant.config().voucher_ttl_ms(), 600_000);
 
@@ -301,7 +296,7 @@ fun set_listing_status_same_aborts() {
 }
 
 #[test]
-fun set_config_updates_values() {
+fun update_config_updates_values() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
@@ -316,24 +311,38 @@ fun set_config_updates_values() {
         ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
-        let new_cfg = config::new(2, 20, 500_000, 300_000, 300_000);
-        merchant.set_config(&merchant_auth, new_cfg);
+        // Build a second Currency for the new config — distinct from the one
+        // setup_merchant consumed (each `new_test_currency` call uses its own
+        // dummy CoinRegistry).
+        let (currency, treasury) = test_setup::new_test_currency(1);
+        let new_coefficient = config::loyalty_float_scaling() / 5; // 0.2 LOY per unit
+        let new_cfg = config::new<TEST_USD>(
+            &currency,
+            @0xC0FFEE,
+            new_coefficient,
+            500_000,
+            300_000,
+            300_000,
+        );
+        merchant.update_config(&merchant_auth, new_cfg);
 
-        assert_eq!(merchant.config().mint_numerator(), 2);
-        assert_eq!(merchant.config().mint_denominator(), 20);
-        assert_eq!(merchant.config().max_mint_per_payment(), 500_000);
+        assert_eq!(merchant.payout_address(), @0xC0FFEE);
+        assert_eq!(merchant.config().loyalty_coefficient(), new_coefficient);
+        assert_eq!(merchant.config().max_loyalty_per_payment(), 500_000);
         assert_eq!(merchant.config().invoice_ttl_ms(), 300_000);
         assert_eq!(merchant.config().voucher_ttl_ms(), 300_000);
         assert_emitted!(events::config_updated());
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
+        destroy(currency);
+        destroy(treasury);
         destroy(test_usd_cap);
     });
 }
 
 #[test, expected_failure(abort_code = merchant::EConfigUnchanged)]
-fun set_config_unchanged_aborts() {
+fun update_config_unchanged_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
@@ -348,18 +357,29 @@ fun set_config_unchanged_aborts() {
         ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
-        // Same values as setup_merchant defaults.
-        let same_cfg = config::new(1, 10, 1_000_000, 600_000, 600_000);
-        merchant.set_config(&merchant_auth, same_cfg);
+        // Same values as setup_merchant defaults — update_config aborts.
+        let (currency, treasury) = test_setup::new_test_currency(1);
+        let same_cfg = config::new<TEST_USD>(
+            &currency,
+            PAYOUT,
+            config::loyalty_float_scaling() / 10,
+            1_000_000,
+            600_000,
+            600_000,
+        );
+        merchant.update_config(&merchant_auth, same_cfg);
 
+        // Unreachable cleanup.
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
+        destroy(currency);
+        destroy(treasury);
         destroy(test_usd_cap);
     });
 }
 
 #[test]
-fun set_payout_address_rotates_payout() {
+fun update_display_updates_name_and_logo() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
@@ -374,65 +394,14 @@ fun set_payout_address_rotates_payout() {
         ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
-        merchant.set_payout_address(&merchant_auth, @0xC0FFEE);
-        assert_eq!(merchant.payout_address(), @0xC0FFEE);
-        assert_emitted!(events::payout_address_changed());
-
-        test_scenario::return_shared(merchant);
-        test_scenario::return_shared(ac);
-        destroy(test_usd_cap);
-    });
-}
-
-#[test, expected_failure(abort_code = merchant::EPayoutAddressUnchanged)]
-fun set_payout_address_unchanged_aborts() {
-    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        merchant::init_for_testing(scenario.ctx());
-        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
-            ns,
-            PAYOUT,
-            scenario.ctx(),
-        );
-
-        scenario.next_tx(ADMIN);
-        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
-        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
-
-        // Same as setup_merchant default — must abort.
-        merchant.set_payout_address(&merchant_auth, PAYOUT);
-
-        test_scenario::return_shared(merchant);
-        test_scenario::return_shared(ac);
-        destroy(test_usd_cap);
-    });
-}
-
-#[test]
-fun set_display_updates_name_and_logo() {
-    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        merchant::init_for_testing(scenario.ctx());
-        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
-            ns,
-            PAYOUT,
-            scenario.ctx(),
-        );
-
-        scenario.next_tx(ADMIN);
-        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
-        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
-
-        merchant.set_display(
+        merchant.update_display(
             &merchant_auth,
             b"Renamed Shop".to_string(),
             std::option::some(b"https://example.com/logo.png".to_string()),
         );
         assert_eq!(*merchant.name(), b"Renamed Shop".to_string());
         assert_eq!(*merchant.logo_url().borrow(), b"https://example.com/logo.png".to_string());
-        assert_emitted!(events::display_changed());
+        assert_emitted!(events::display_updated());
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -441,7 +410,7 @@ fun set_display_updates_name_and_logo() {
 }
 
 #[test, expected_failure(abort_code = merchant::EDisplayUnchanged)]
-fun set_display_unchanged_aborts() {
+fun update_display_unchanged_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
@@ -457,54 +426,8 @@ fun set_display_unchanged_aborts() {
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
         // Same as setup_merchant defaults (name="Test Shop", logo=None) — must abort.
-        merchant.set_display(&merchant_auth, b"Test Shop".to_string(), std::option::none());
+        merchant.update_display(&merchant_auth, b"Test Shop".to_string(), std::option::none());
 
-        test_scenario::return_shared(merchant);
-        test_scenario::return_shared(ac);
-        destroy(test_usd_cap);
-    });
-}
-
-#[test]
-fun set_payment_type_rotates() {
-    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        merchant::init_for_testing(scenario.ctx());
-        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
-
-        scenario.next_tx(ADMIN);
-        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
-        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
-
-        // setup_merchant pins TEST_USD; rotate to OTHER_USD.
-        assert_eq!(merchant.accepted_payment_type(), type_name::with_defining_ids<TEST_USD>());
-        merchant.set_payment_type<OTHER_USD>(&merchant_auth);
-        assert_eq!(merchant.accepted_payment_type(), type_name::with_defining_ids<OTHER_USD>());
-        assert_emitted!(events::payment_type_changed());
-
-        test_scenario::return_shared(merchant);
-        test_scenario::return_shared(ac);
-        destroy(test_usd_cap);
-    });
-}
-
-#[test, expected_failure(abort_code = merchant::EPaymentTypeUnchanged)]
-fun set_payment_type_unchanged_aborts() {
-    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
-        merchant::init_for_testing(scenario.ctx());
-        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
-
-        scenario.next_tx(ADMIN);
-        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
-        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
-        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
-        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
-
-        // Already TEST_USD — setting it to the same currency aborts.
-        merchant.set_payment_type<TEST_USD>(&merchant_auth);
-
-        // Unreachable cleanup.
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
         destroy(test_usd_cap);
@@ -663,24 +586,33 @@ fun create_empty_name_aborts() {
         // then create a Merchant with an empty name — aborts on `EEmptyName`.
         let loyalty_cap = coin::create_treasury_cap_for_testing<LOYALTY>(scenario.ctx());
         let loyalty_bundle = loyalty::create(ns, loyalty_cap);
-        let cfg = config::new(1, 10, 1_000_000, 600_000, 600_000);
+        let (currency, treasury) = test_setup::new_test_currency(1);
+        let cfg = config::new<TEST_USD>(
+            &currency,
+            PAYOUT,
+            config::loyalty_float_scaling() / 10,
+            1_000_000,
+            600_000,
+            600_000,
+        );
 
-        let _m = merchant::create<TEST_USD>(
+        let _m = merchant::create(
             loyalty_bundle,
             cfg,
             b"".to_string(),
             std::option::none(),
-            PAYOUT,
             scenario.ctx(),
         );
 
         // Unreachable.
         merchant::share(_m);
+        destroy(currency);
+        destroy(treasury);
     });
 }
 
 #[test, expected_failure(abort_code = merchant::EEmptyName)]
-fun set_display_empty_name_aborts() {
+fun update_display_empty_name_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
@@ -691,7 +623,7 @@ fun set_display_empty_name_aborts() {
         ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
-        merchant.set_display(&merchant_auth, b"".to_string(), std::option::none());
+        merchant.update_display(&merchant_auth, b"".to_string(), std::option::none());
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);

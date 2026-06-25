@@ -41,7 +41,9 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { SuiClient } from "@mysten/sui/client";
+import { getFaucetHost, requestSuiFromFaucetV2 } from "@mysten/sui/faucet";
 import { Transaction } from "@mysten/sui/transactions";
 
 type ObjectChange = Record<string, unknown>;
@@ -149,6 +151,24 @@ function publishPackage(
 
 function findCreated(r: PublishResult, p: (o: PublishObject) => boolean): string | null {
   return r.createdObjects.find(p)?.objectId ?? null;
+}
+
+/**
+ * Read a single `KEY=value` line from `.env.local` without loading any dotenv
+ * machinery. Used by `resolveCustomerKeypair` so a Slush-imported key pinned in
+ * the env file survives a re-bootstrap.
+ */
+function readEnvFile(key: string): string | undefined {
+  let raw = "";
+  try {
+    raw = readFileSync(APP_ENV, "utf8");
+  } catch {
+    return undefined;
+  }
+  const prefix = `${key}=`;
+  const line = raw.split("\n").find((l) => l.startsWith(prefix));
+  if (!line) return undefined;
+  return line.slice(prefix.length).trim();
 }
 
 function patchEnv(updates: Record<string, string>) {
@@ -309,6 +329,44 @@ function deployerPrivateKey(address: string): string {
 }
 
 /**
+ * Resolve a stable customer keypair for local-dev signing. Reuses
+ * `NON_SPONSORED_CUSTOMER_PRIVATE_KEY` from `.env.local` when present (so re-bootstrapping
+ * the same chain doesn't churn the address); otherwise mints a fresh ed25519
+ * key. Caller is responsible for funding it via the faucet on local chains.
+ *
+ * Used by `/api/init-account` to sign the `account::create_and_share` tx on
+ * behalf of any customer wallet that connects — replaces the old sponsor-keypair
+ * path now that customer/merchant Slush wallets pay their own gas.
+ */
+function resolveCustomerKeypair(): { keypair: Ed25519Keypair; privateKey: string } {
+  // tsx doesn't auto-load `.env.local`, so process.env is empty here even if the
+  // file has a value. Read the file directly as a fallback before generating
+  // anything new — this is what lets users pin a Slush-imported key and have
+  // bootstrap fund that exact address.
+  const existing =
+    process.env.NON_SPONSORED_CUSTOMER_PRIVATE_KEY ?? readEnvFile("NON_SPONSORED_CUSTOMER_PRIVATE_KEY");
+  if (existing && existing.length > 0) {
+    const { schema, secretKey } = decodeSuiPrivateKey(existing);
+    if (schema === "ED25519") {
+      const keypair = Ed25519Keypair.fromSecretKey(secretKey);
+      return { keypair, privateKey: existing };
+    }
+    console.warn(
+      `  NON_SPONSORED_CUSTOMER_PRIVATE_KEY schema is "${schema}"; regenerating an ed25519 key.`,
+    );
+  }
+  const keypair = new Ed25519Keypair();
+  return { keypair, privateKey: keypair.getSecretKey() };
+}
+
+async function fundFromLocalFaucet(address: string): Promise<void> {
+  await requestSuiFromFaucetV2({
+    host: getFaucetHost("localnet"),
+    recipient: address,
+  });
+}
+
+/**
  * On a fresh chain only — wire pas's Namespace to its UpgradeCap and
  * create the shared `Templates` registry. Must run in its own transaction
  * because `templates::setup` shares the object directly, so its id isn't
@@ -358,6 +416,69 @@ async function setupPasOnFreshChain(
   return { templatesId: templates.objectId };
 }
 
+/**
+ * Promotes the publish-time `Currency<STABLECOIN_MOCK>` from its TTO state under
+ * `CoinRegistry` (@0xc) to a derived-address shared object via
+ * `coin_registry::finalize_registration<C>`. Returns the id of the now-shared
+ * Currency, discovered from the tx's `objectChanges`.
+ */
+async function finalizeStablecoinCurrency({
+  client,
+  keypair,
+  ttoCurrencyId,
+  stablecoinType,
+}: {
+  client: SuiClient;
+  keypair: Ed25519Keypair;
+  ttoCurrencyId: string;
+  stablecoinType: string;
+}): Promise<string> {
+  console.log(`\n→ finalizing Currency<${stablecoinType}>`);
+
+  const ttoObject = await client.getObject({
+    id: ttoCurrencyId,
+    options: { showOwner: true },
+  });
+  if (!ttoObject.data) {
+    throw new Error(`Could not fetch TTO Currency ${ttoCurrencyId}`);
+  }
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `0x2::coin_registry::finalize_registration`,
+    typeArguments: [stablecoinType],
+    arguments: [
+      tx.object("0xc"),
+      tx.receivingRef({
+        objectId: ttoCurrencyId,
+        version: ttoObject.data.version,
+        digest: ttoObject.data.digest,
+      }),
+    ],
+  });
+  tx.setGasBudget(100_000_000n);
+  const result = await client.signAndExecuteTransaction({
+    transaction: tx,
+    signer: keypair,
+    options: { showEffects: true, showObjectChanges: true },
+  });
+  if (result.effects?.status?.status !== "success") {
+    throw new Error(`finalize_registration failed: ${JSON.stringify(result.effects)}`);
+  }
+  await client.waitForTransaction({ digest: result.digest });
+
+  const created = (result.objectChanges ?? []).filter(
+    (c): c is Extract<typeof c, { type: "created" }> => c.type === "created",
+  );
+  const sharedCurrency = created.find((c) =>
+    c.objectType?.includes(`::coin_registry::Currency<${stablecoinType}>`),
+  );
+  if (!sharedCurrency) {
+    throw new Error("finalize_registration did not produce a shared Currency");
+  }
+  console.log(`  shared Currency  ${sharedCurrency.objectId}`);
+  return sharedCurrency.objectId;
+}
+
 async function postPublishPTB({
   rpcUrl,
   pasPkg,
@@ -365,6 +486,7 @@ async function postPublishPTB({
   paymentsPkg,
   stablecoinPkg,
   stablecoinType,
+  stablecoinCurrencyId,
   namespaceId,
   templatesId,
   loyaltyCapId,
@@ -379,6 +501,7 @@ async function postPublishPTB({
   paymentsPkg: string;
   stablecoinPkg: string;
   stablecoinType: string;
+  stablecoinCurrencyId: string;
   namespaceId: string;
   templatesId: string;
   loyaltyCapId: string;
@@ -413,28 +536,31 @@ async function postPublishPTB({
     arguments: [tx.object(namespaceId), tx.object(loyaltyCapId)],
   });
 
-  // (c) cfg = config::new(1, 10, 1_000_000, 600_000, 600_000)
+  // (c) cfg = config::new<STABLE>(&Currency<STABLE>, payout, 1e9 ("1.0"), 1_000_000, 600_000, 600_000)
   const cfg = tx.moveCall({
     target: `${paymentsPkg}::config::new`,
+    typeArguments: [stablecoinType],
     arguments: [
-      tx.pure.u64(1),
-      tx.pure.u64(10),
-      tx.pure.u64(1_000_000),
-      tx.pure.u64(600_000),
-      tx.pure.u64(600_000),
+      tx.object(stablecoinCurrencyId),
+      tx.pure.address(payoutAddress),
+      // `LOYALTY_FLOAT_SCALING` — 1 LOY per stablecoin unit.
+      tx.pure.u64(1_000_000_000n),
+      tx.pure.u64(1_000_000n),
+      tx.pure.u64(600_000n),
+      tx.pure.u64(600_000n),
     ],
   });
 
-  // (d) merchant = merchant::create<STABLE>(loyalty, cfg, name, none, payout, ctx)
+  // (d) merchant = merchant::create(loyalty, cfg, name, none, ctx)
+  // `create` is no longer generic on the coin and no longer takes `payout_address`
+  // — both are pinned through Config above.
   const merchant = tx.moveCall({
     target: `${paymentsPkg}::merchant::create`,
-    typeArguments: [stablecoinType],
     arguments: [
       loyaltyBundle,
       cfg,
       tx.pure.string("Demo Merchant"),
       tx.pure.option("string", null),
-      tx.pure.address(payoutAddress),
     ],
   });
   // (e) merchant::share(merchant)
@@ -635,6 +761,28 @@ async function main() {
 
   const stablecoinType = `${stable.packageId}::stablecoin_mock::STABLECOIN_MOCK`;
 
+  // `stablecoin_mock::init` runs the OTW path of `coin_registry::new_currency_with_otw`,
+  // which transfers the `Currency<STABLECOIN_MOCK>` to the system `CoinRegistry`
+  // (@0xc) as a TTO — NOT a shared object. We have to run `finalize_registration`
+  // in its own tx before the post-publish PTB can reference the Currency as a
+  // shared input (PTBs can't reference an object that's only shared mid-execution).
+  const stablecoinCurrencyType = `Currency<${stablecoinType}>`;
+  const ttoCurrencyId = findCreated(stable, (o) =>
+    Boolean(
+      o.objectType?.includes("::coin_registry::") &&
+        o.objectType?.includes(stablecoinCurrencyType),
+    ),
+  );
+  if (!ttoCurrencyId) {
+    throw new Error(`Could not find ${stablecoinCurrencyType} in publish effects`);
+  }
+  const stablecoinCurrencyId = await finalizeStablecoinCurrency({
+    client,
+    keypair: deployerKeypair(deployer),
+    ttoCurrencyId,
+    stablecoinType,
+  });
+
   const { merchantId, loyaltyPolicyId, stablecoinPolicyId } = await postPublishPTB({
     rpcUrl,
     pasPkg: pasPackageId,
@@ -642,6 +790,7 @@ async function main() {
     paymentsPkg: payments.packageId!,
     stablecoinPkg: stable.packageId!,
     stablecoinType,
+    stablecoinCurrencyId,
     namespaceId,
     templatesId: templatesId!,
     loyaltyCapId,
@@ -651,6 +800,17 @@ async function main() {
     deployer,
   });
 
+  // Customer-side gas signer for server-routed flows (currently `/api/init-account`).
+  // Persisted in `.env.local` so subsequent runs reuse the same address; topped up
+  // from the localnet faucet on every bootstrap so a freshly-regenesised chain
+  // doesn't leave the customer key broke.
+  const customer = resolveCustomerKeypair();
+  const customerAddress = customer.keypair.toSuiAddress();
+  if (ephemeral) {
+    console.log(`\n→ funding customer address ${customerAddress}`);
+    await fundFromLocalFaucet(customerAddress);
+  }
+
   patchEnv({
     NEXT_PUBLIC_PACKAGE_ID: payments.packageId!,
     NEXT_PUBLIC_MERCHANT_ID: merchantId,
@@ -658,6 +818,7 @@ async function main() {
     NEXT_PUBLIC_LOYALTY_POLICY_ID: loyaltyPolicyId,
     NEXT_PUBLIC_STABLECOIN_PACKAGE_ID: stable.packageId!,
     NEXT_PUBLIC_STABLECOIN_POLICY_ID: stablecoinPolicyId,
+    NEXT_PUBLIC_STABLECOIN_CURRENCY_ID: stablecoinCurrencyId,
     NEXT_PUBLIC_STABLECOIN_TYPE: stablecoinType,
     NEXT_PUBLIC_NAMESPACE_ID: namespaceId,
     NEXT_PUBLIC_PAS_PACKAGE_ID: pasPackageId,
@@ -667,6 +828,10 @@ async function main() {
     // stablecoin faucet. Treat as sensitive even though it's gitignored;
     // do NOT enable this on mainnet without first rotating the deployer.
     DEPLOYER_PRIVATE_KEY: deployerPrivateKey(deployer),
+    // Customer key — server-only, used by `/api/init-account` to sign the
+    // PAS `account::create_and_share` on behalf of any connecting customer
+    // wallet. Local-dev only; rotate before any non-dev deployment.
+    NON_SPONSORED_CUSTOMER_PRIVATE_KEY: customer.privateKey,
   });
 
   console.log(`\n✓ Bootstrap complete. .env.local patched.\n`);

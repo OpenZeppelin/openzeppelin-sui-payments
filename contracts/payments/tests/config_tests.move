@@ -48,7 +48,7 @@ fun config_zero_voucher_ttl_aborts() {
 
 #[test, expected_failure(abort_code = config::ETtlTooLarge)]
 fun config_invoice_ttl_too_large_aborts() {
-    // 1e18 ms ≫ MAX_TTL_MS (~10 years) — aborts.
+    // 1e18 ms ≫ MAX_TTL_MS (7 days) — aborts.
     expect_aborts!(
         |c| config::new<TEST_USD>(
             c,

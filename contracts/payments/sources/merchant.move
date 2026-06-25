@@ -120,8 +120,7 @@ const EWrongPreimage: vector<u8> =
 #[error(code = 27)]
 const EOrderRefTooLong: vector<u8> = "order_ref exceeds MAX_ORDER_REF_LEN (256 bytes)";
 #[error(code = 28)]
-const EItemsTooMany: vector<u8> =
-    "listing_variant_ids exceeds MAX_INVOICE_ITEMS (256 items)";
+const EItemsTooMany: vector<u8> = "listing_variant_ids exceeds MAX_INVOICE_ITEMS (256 items)";
 
 // === Constants ===
 
@@ -543,7 +542,7 @@ public fun create_voucher(
     );
     assert!(amount == receipt::compute_total(&items), EInvalidAmount);
 
-    // Cannot overflow: `config::new` caps the TTL at `MAX_TTL_MS` (~10 years), far below u64.
+    // Cannot overflow: `config::new` caps the TTL at `MAX_TTL_MS` (7 days), far below u64.
     let expires_at_ms = clock.timestamp_ms() + self.config.voucher_ttl_ms();
 
     // Extract funds from customer's PAS account and lock them in the voucher.
@@ -995,7 +994,7 @@ public fun create_invoice(
     // Amount should not be zero, since individual prices and quantities enforced to be non-zero.
     let amount = receipt::compute_total(&items);
     let loyalty = self.config.compute_loyalty(amount);
-    // Cannot overflow: `config::new` caps the TTL at `MAX_TTL_MS` (~10 years), far below u64.
+    // Cannot overflow: `config::new` caps the TTL at `MAX_TTL_MS` (7 days), far below u64.
     let expires_at_ms = clock.timestamp_ms() + self.config.invoice_ttl_ms();
 
     let invoice = payment::new(

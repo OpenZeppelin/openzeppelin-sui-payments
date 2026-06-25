@@ -41,9 +41,13 @@ const EDecimalsTooLarge: vector<u8> = "Currency decimals must be no greater than
 
 // === Constants ===
 
-/// Upper bound (ms) on invoice/voucher TTLs (~10 years — generous for any POS).
-/// Keeps the issuance-time `clock.timestamp_ms() + ttl_ms` computation well below `u64` overflow.
-const MAX_TTL_MS: u64 = 10 * 365 * 24 * 60 * 60 * 1000;
+/// Upper bound (ms) on invoice/voucher TTLs — 7 days. Bounds how long an
+/// open invoice or voucher can keep merchant state / customer-locked LOY
+/// stuck, while still covering realistic POS flows (point-of-sale checkouts
+/// complete in minutes; pay-this-bill links typically resolve within hours
+/// to a few days). Doubles as a `u64`-overflow guard on the issuance-time
+/// `clock.timestamp_ms() + ttl_ms` computation.
+const MAX_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 
 /// Hard cap on currency decimals. `10^18` still fits in u64; anything bigger
 /// would make the scale factor in `compute_loyalty` overflow u128 in pathological

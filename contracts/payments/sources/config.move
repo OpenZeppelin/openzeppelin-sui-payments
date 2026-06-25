@@ -103,6 +103,11 @@ public struct Config has drop, store {
 /// #### Parameters
 /// - `currency`: The `Currency<C>` shared object — only its `decimals()` is read.
 /// - `payout_address`: Address that receives customer stablecoin on settlement.
+///   MUST be an externally-owned account address, not an object ID. On Sui,
+///   addresses and object IDs share one 32-byte space and cannot be
+///   distinguished on-chain, so this is the admin's responsibility: pointing
+///   payouts at an object ID makes settlements transfer-to-object, where funds
+///   may be unrecoverable or receivable by an unintended party.
 /// - `loyalty_coefficient`: Mint rate as a fixed-point u64 scaled by
 ///   `LOYALTY_FLOAT_SCALING` (1e9). `LOYALTY_FLOAT_SCALING` == "1 LOY per
 ///   human unit"; `0` disables loyalty mint.

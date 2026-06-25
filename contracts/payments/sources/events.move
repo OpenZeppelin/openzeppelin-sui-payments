@@ -24,6 +24,11 @@ public struct VoucherCreated has copy, drop {
 
 /// Emitted when a customer settles an `Invoice`. Indexer resolves
 /// `invoice_id`/`order_ref` -> settled.
+///
+/// Carries `payout_address` + `payment_type` (mirroring `InvoiceCanceled`) so
+/// the event stream remains self-describing after the merchant prunes stored
+/// receipts via `prune_invoice_receipts`. Without this, the stored Receipt would
+/// be the only place the historical payout/currency lived — pruning would erase it.
 public struct InvoicePaid has copy, drop {
     /// ID of the settled `Invoice` (now destroyed).
     invoice_id: ID,
@@ -31,6 +36,11 @@ public struct InvoicePaid has copy, drop {
     order_ref: vector<u8>,
     /// Address that paid (recorded as `customer` on the stored `Receipt`).
     customer: address,
+    /// Payout address recorded on the invoice at issuance (snapshotted from
+    /// `Config.payout_address`).
+    payout_address: address,
+    /// `TypeName` of the stablecoin the invoice was settled in.
+    payment_type: TypeName,
     /// Stablecoin amount settled.
     amount: u64,
     /// LOYALTY units minted to the customer.
@@ -142,6 +152,8 @@ public(package) fun emit_invoice_paid(
     invoice_id: ID,
     order_ref: vector<u8>,
     customer: address,
+    payout_address: address,
+    payment_type: TypeName,
     amount: u64,
     loyalty: u64,
     timestamp_ms: u64,
@@ -151,6 +163,8 @@ public(package) fun emit_invoice_paid(
         invoice_id,
         order_ref,
         customer,
+        payout_address,
+        payment_type,
         amount,
         loyalty,
         timestamp_ms,
@@ -231,12 +245,24 @@ public fun invoice_paid(
     invoice_id: ID,
     order_ref: vector<u8>,
     customer: address,
+    payout_address: address,
+    payment_type: TypeName,
     amount: u64,
     loyalty: u64,
     timestamp_ms: u64,
     paid_with_coin: bool,
 ): InvoicePaid {
-    InvoicePaid { invoice_id, order_ref, customer, amount, loyalty, timestamp_ms, paid_with_coin }
+    InvoicePaid {
+        invoice_id,
+        order_ref,
+        customer,
+        payout_address,
+        payment_type,
+        amount,
+        loyalty,
+        timestamp_ms,
+        paid_with_coin,
+    }
 }
 
 #[test_only]

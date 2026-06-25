@@ -363,7 +363,17 @@ public fun pay<C>(
     );
     self.invoice_receipts.add(invoice_id, receipt);
 
-    events::emit_invoice_paid(invoice_id, order_ref, sender, amount, loyalty, now, false);
+    events::emit_invoice_paid(
+        invoice_id,
+        order_ref,
+        sender,
+        payout_address,
+        payment_type,
+        amount,
+        loyalty,
+        now,
+        false,
+    );
 }
 
 /// Customer settles an open invoice with a plain, unrestricted `Coin<C>`.
@@ -446,7 +456,17 @@ public fun pay_with_coin<C>(
     );
     self.invoice_receipts.add(invoice_id, receipt);
 
-    events::emit_invoice_paid(invoice_id, order_ref, customer, amount, loyalty, now, true);
+    events::emit_invoice_paid(
+        invoice_id,
+        order_ref,
+        customer,
+        payout_address,
+        payment_type,
+        amount,
+        loyalty,
+        now,
+        true,
+    );
 }
 
 /// Permissionless cleanup of an expired invoice.

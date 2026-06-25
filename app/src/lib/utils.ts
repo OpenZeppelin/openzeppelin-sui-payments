@@ -31,7 +31,7 @@ export function formatAmount(units: bigint | number, decimals: number): string {
 /**
  * Inverse of `formatAmount` — convert a human decimal string ("500.50") to
  * u64 base units (multiplied by 10**decimals). Throws on too many fractional
- * digits or unparseable input.
+ * digits or unparsable input.
  */
 export function toBaseUnits(human: string, decimals: number): bigint {
   const trimmed = human.trim();

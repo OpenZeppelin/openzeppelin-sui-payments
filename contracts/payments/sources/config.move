@@ -161,6 +161,14 @@ public fun new<C>(
 ///     `coefficient = 2 * LOYALTY_FLOAT_SCALING` (2e9, "2.0"), `payment_amount = 1_000_000` ($1)
 ///          → `loyalty = 2`.
 ///     `coefficient = 0` disables loyalty mint entirely (`loyalty = 0` for any payment).
+///
+/// #### Parameters
+/// - `self`: The merchant's `Config` (read-only).
+/// - `payment_amount`: Settled stablecoin amount in raw u64 units (matching
+///   `self.payment_decimals`).
+///
+/// #### Returns
+/// - The LOYALTY units to mint, clamped to `max_loyalty_per_payment`.
 public fun compute_loyalty(self: &Config, payment_amount: u64): u64 {
     let scale = 10u128.pow(self.payment_decimals);
 

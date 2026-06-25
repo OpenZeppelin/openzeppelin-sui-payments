@@ -252,8 +252,8 @@ public fun create(
 /// Share the `Merchant`. Required because `Merchant` is `key`-only (no `store`),
 /// so `transfer::share_object` can only be called from this module — an external
 /// caller can't share it directly. Call after `create` and any same-PTB setup.
-public fun share(m: Merchant) {
-    transfer::share_object(m);
+public fun share(self: Merchant) {
+    transfer::share_object(self);
 }
 
 /// Customer settles an open invoice with a permissioned (PAS) stablecoin.
@@ -269,6 +269,17 @@ public fun share(m: Merchant) {
 /// #### Generics
 /// - `C`: The settlement coin type; must match the merchant's accepted payment
 ///   type (checked at runtime via `config.accepted_payment_type`).
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `invoice_id`: Issuance id of the open invoice being settled.
+/// - `send_request`: Customer-approved `send_funds` request whose recipient is
+///   the invoice's `payout_address` and whose amount is exactly `invoice.amount`.
+/// - `policy_s`: Shared `Policy<Balance<C>>` for the stablecoin. Consulted by
+///   `send_funds::resolve_balance` to validate the request's approvals.
+/// - `customer_loyalty_account`: PAS Account that receives the minted LOYALTY.
+///   Its owner must equal the send request's sender.
+/// - `clock`: System clock (for expiry).
 ///
 /// #### Aborts
 /// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
@@ -352,6 +363,15 @@ public fun pay<C>(
 /// - `C`: The settlement coin type; must match the merchant's accepted payment
 ///   type (checked at runtime via `config.accepted_payment_type`).
 ///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `invoice_id`: Issuance id of the open invoice being settled.
+/// - `coin`: Payment coin. Its value must equal the invoice's `amount`; the full
+///   coin is transferred to the snapshotted `payout_address`.
+/// - `customer_loyalty_account`: PAS Account that receives the minted LOYALTY.
+///   Its owner is recorded as the receipt's `customer`.
+/// - `clock`: System clock (for expiry).
+///
 /// #### Aborts
 /// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
 /// - `EInvoiceExpired` if the invoice has expired.
@@ -413,6 +433,11 @@ public fun pay_with_coin<C>(
 /// No balance is held by the invoice (customer funds stay in their Account until
 /// settlement), so this is just removal + event. Emits `InvoiceCanceled`.
 ///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `invoice_id`: Issuance id of the open invoice to cancel.
+/// - `clock`: System clock (for expiry).
+///
 /// #### Aborts
 /// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
 /// - `ENotExpired` if the invoice has not yet expired.
@@ -435,6 +460,19 @@ public fun cancel_invoice(self: &mut Merchant, invoice_id: ID, clock: &Clock) {
 /// the unlocked amount matches the items' total, resolves the unlock request into
 /// a `Balance<LOYALTY>`, and stores the `Voucher` under a freshly minted ID (the
 /// QR value). Emits `VoucherCreated`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `unlock_req`: Customer-approved `unlock_funds` request whose amount equals
+///   the items' total `loyalty_price`. Resolved into a locked `Balance<LOYALTY>`.
+/// - `policy_loyalty`: Shared `Policy<Balance<LOYALTY>>` consulted by
+///   `unlock_funds::resolve_balance` to validate the request's approvals.
+/// - `listing_variant_ids`: Variants to redeem against, same length as `quantities`.
+/// - `quantities`: Per-variant quantities; each must be non-zero.
+/// - `redeem_hash`: 32-byte blake2b256 commitment to a customer-chosen secret.
+///   The preimage is required at `redeem` time.
+/// - `clock`: System clock (for expiry computation).
+/// - `ctx`: Transaction context (used to mint the voucher's fresh id).
 ///
 /// #### Returns
 /// - The issuance ID (the `Table` key and QR value).
@@ -500,6 +538,13 @@ public fun create_voucher(
 
 /// Permissionless cleanup after expiry - deposits the locked balance back into
 /// the customer's PAS Account. Emits `VoucherCanceled`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `voucher_id`: Issuance id of the open voucher to cancel.
+/// - `customer_loyalty_account`: PAS Account that receives the refunded LOYALTY.
+///   Its owner must equal the voucher's `customer`.
+/// - `clock`: System clock (for expiry).
 ///
 /// #### Aborts
 /// - `EVoucherNotFound` if no open voucher with `voucher_id` is stored.
@@ -887,6 +932,16 @@ public fun remove_listing_variant(
 /// resulting `Invoice` is stored in `Merchant.invoices` under a freshly minted ID
 /// (the QR value). Gated by `CashierRole`. Emits `InvoiceCreated`.
 ///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `CashierRole` authorization.
+/// - `listing_variant_ids`: Variants to bill, same length as `quantities`.
+/// - `quantities`: Per-variant quantities; each must be non-zero.
+/// - `order_ref`: Opaque merchant-supplied tag (e.g. POS order number). Echoed
+///   on the receipt and the `InvoicePaid` event.
+/// - `clock`: System clock (for expiry computation).
+/// - `ctx`: Transaction context (used to mint the invoice's fresh id).
+///
 /// #### Returns
 /// - The issuance ID (the `Table` key and QR value).
 ///
@@ -948,6 +1003,13 @@ public fun create_invoice(
 /// the till). The preimage is opaque random bytes the customer's dApp
 /// generates client-side and stores locally — it never appears on chain
 /// until reveal time.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `CashierRole` authorization.
+/// - `voucher_id`: Issuance id of the open voucher being redeemed.
+/// - `preimage`: 32-byte secret matching the voucher's `redeem_hash` commitment.
+/// - `clock`: System clock (for expiry).
 ///
 /// #### Aborts
 /// - `EVoucherNotFound` if no open voucher with `voucher_id` is stored.

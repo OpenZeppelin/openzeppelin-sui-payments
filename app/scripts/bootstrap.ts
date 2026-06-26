@@ -869,6 +869,8 @@ async function main() {
     await fundFromLocalFaucet(customerAddress);
   }
 
+  // Public deployment IDs — always written; no risk if exposed (they're
+  // already on chain, and the FE imports them client-side via NEXT_PUBLIC_*).
   patchEnv({
     NEXT_PUBLIC_PACKAGE_ID: payments.packageId!,
     NEXT_PUBLIC_MERCHANT_ID: merchantId,
@@ -882,15 +884,27 @@ async function main() {
     NEXT_PUBLIC_PAS_PACKAGE_ID: pasPackageId,
     NEXT_PUBLIC_OZ_ACCESS_PACKAGE_ID: ozAccessPkg,
     NEXT_PUBLIC_TEMPLATES_ID: templatesId!,
-    // Deployer key — server-only, used by `/api/topup` to sign the
-    // stablecoin faucet. Treat as sensitive even though it's gitignored;
-    // do NOT enable this on mainnet without first rotating the deployer.
-    DEPLOYER_PRIVATE_KEY: deployerPrivateKey(deployer),
-    // Customer key — server-only, used by `/api/init-account` to sign the
-    // PAS `account::create_and_share` on behalf of any connecting customer
-    // wallet. Local-dev only; rotate before any non-dev deployment.
-    NON_SPONSORED_CUSTOMER_PRIVATE_KEY: customer.privateKey,
   });
+
+  // Server-side signing keys — only persist on ephemeral (localnet) chains. On
+  // testnet/mainnet, auto-exporting these would turn the deployed app's
+  // `/api/topup` route into an unauthenticated mint endpoint (deployer holds
+  // `TreasuryCap<STABLECOIN_MOCK>`). Operators who genuinely want the dev
+  // faucet on a shared chain must populate these manually with full awareness.
+  if (ephemeral) {
+    patchEnv({
+      // Used by `/api/topup` to sign the stablecoin faucet mint.
+      DEPLOYER_PRIVATE_KEY: deployerPrivateKey(deployer),
+      // Used by `/api/init-account` + `/api/cancel-*` for permissionless server-routed flows.
+      NON_SPONSORED_CUSTOMER_PRIVATE_KEY: customer.privateKey,
+    });
+  } else {
+    console.log(
+      `\n⚠ ${envAlias}: skipping DEPLOYER_PRIVATE_KEY / NON_SPONSORED_CUSTOMER_PRIVATE_KEY ` +
+        `auto-export. /api/topup is gated to localnet at the route layer regardless; ` +
+        `populate these manually only if you understand the implications.`,
+    );
+  }
 
   console.log(`\n✓ Bootstrap complete. .env.local patched.\n`);
   console.log(`  pas package          ${pasPackageId}`);

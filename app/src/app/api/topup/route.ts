@@ -30,10 +30,27 @@ type TopupResponseBody = {
  * PAS Account. Backed by `stablecoin_mock::faucet`, which requires the holder
  * of `TreasuryCap<STABLECOIN_MOCK>` — owned by the deployer after bootstrap.
  *
- * Demo / testnet only. There is no rate limit and no auth beyond the deployer
- * key sitting in `.env.local`.
+ * Localnet-only. There is no rate limit and no auth beyond the deployer key
+ * sitting in `.env.local`, so on any shared chain this would be an
+ * unauthenticated mint endpoint — the route hard-aborts unless `NETWORK ===
+ * "localnet"`. Bootstrap is also gated to only persist `DEPLOYER_PRIVATE_KEY`
+ * on localnet; this route check is defense-in-depth against a copied env.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  // Kill switch: refuse to serve outside localnet regardless of env state.
+  if (NETWORK !== "localnet") {
+    return NextResponse.json(
+      {
+        error:
+          "/api/topup is a dev-only faucet and is disabled outside localnet. " +
+          "On testnet/mainnet, mint via the underlying stablecoin's real faucet " +
+          "(or, for stablecoin-mock specifically, sign a `stablecoin_mock::faucet` " +
+          "PTB with the deployer key directly).",
+      },
+      { status: 410 },
+    );
+  }
+
   let body: TopupRequestBody;
   try {
     body = (await req.json()) as TopupRequestBody;

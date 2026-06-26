@@ -30,13 +30,13 @@ use sui::coin_registry::Currency;
 
 // === Errors ===
 
-#[error(code = 1)]
+#[error(code = 0)]
 const EZeroInvoiceTtl: vector<u8> = "invoice_ttl_ms must be greater than zero";
-#[error(code = 2)]
+#[error(code = 1)]
 const EZeroVoucherTtl: vector<u8> = "voucher_ttl_ms must be greater than zero";
-#[error(code = 3)]
+#[error(code = 2)]
 const ETtlTooLarge: vector<u8> = "TTL exceeds the maximum allowed (MAX_TTL_MS)";
-#[error(code = 4)]
+#[error(code = 3)]
 const EDecimalsTooLarge: vector<u8> = "Currency decimals must be no greater than 18";
 
 // === Constants ===

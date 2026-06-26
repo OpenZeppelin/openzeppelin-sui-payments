@@ -143,6 +143,7 @@ export default function CataloguePage() {
                           <Button
                             variant="ghost"
                             size="icon"
+                            aria-label={`Decrease quantity of ${v.name}`}
                             onClick={() =>
                               adjust(
                                 {
@@ -165,6 +166,7 @@ export default function CataloguePage() {
                           <Button
                             variant="ghost"
                             size="icon"
+                            aria-label={`Increase quantity of ${v.name}`}
                             onClick={() =>
                               adjust(
                                 {
@@ -185,6 +187,7 @@ export default function CataloguePage() {
                             variant="ghost"
                             size="icon"
                             title="Remove variant"
+                            aria-label={`Remove ${v.name} from ${listing.name}`}
                             onClick={() => {
                               if (
                                 window.confirm(

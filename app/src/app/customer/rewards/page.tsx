@@ -214,6 +214,7 @@ export default function RewardsPage() {
                   <Button
                     variant="ghost"
                     size="icon"
+                    aria-label={`Decrease quantity of ${variant.name}`}
                     onClick={() =>
                       adjust(
                         {
@@ -235,6 +236,7 @@ export default function RewardsPage() {
                   <Button
                     variant="ghost"
                     size="icon"
+                    aria-label={`Increase quantity of ${variant.name}`}
                     onClick={() =>
                       adjust(
                         {

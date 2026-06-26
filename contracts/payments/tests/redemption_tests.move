@@ -1171,6 +1171,26 @@ fun cancel_voucher_unknown_id_aborts() {
     });
 }
 
+// Pins branch: merchant::voucher_receipt / given receipt missing / it aborts EReceiptNotFound.
+// Locks the view-fn contract independently of the prune-with-unknown-id path.
+#[test, expected_failure(abort_code = merchant::EReceiptNotFound)]
+fun voucher_receipt_unknown_id_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        let _r = merchant.voucher_receipt(phantom);
+
+        // Unreachable.
+        test_scenario::return_shared(merchant);
+        destroy(test_usd_cap);
+    });
+}
+
 #[test, expected_failure(abort_code = merchant::EReceiptNotFound)]
 fun prune_voucher_receipts_unknown_id_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
@@ -1252,6 +1272,58 @@ fun create_voucher_zero_quantity_aborts() {
         test_setup::return_loyalty_policy(loyalty_policy);
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+// Pins branch: create_voucher / given variant_id not in variant_index / it aborts EVariantNotFound.
+// Symmetric with `new_variant_not_found_aborts` on the invoice path. The lookup
+// goes through `price_loyalty_item` → `active_listing_variant`.
+#[test, expected_failure(abort_code = merchant::EVariantNotFound)]
+fun create_voucher_variant_not_found_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
+        customer_account.share();
+
+        // Merchant has no listings — variant_index is empty.
+        scenario.next_tx(CUSTOMER);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut customer_account_shared = scenario.take_shared_by_id<Account>(
+            customer_account_id,
+        );
+        let loyalty_policy = test_setup::take_loyalty_policy(scenario);
+
+        let customer_auth = account::new_auth(scenario.ctx());
+        let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
+            &customer_auth,
+            50,
+            scenario.ctx(),
+        );
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // Phantom variant id — not in variant_index → EVariantNotFound.
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        let _voucher_id = merchant.create_voucher(
+            unlock_req,
+            &loyalty_policy,
+            vector[phantom],
+            vector[1],
+            test_hash(),
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Unreachable cleanup.
+        test_setup::return_loyalty_policy(loyalty_policy);
+        test_scenario::return_shared(merchant);
         test_scenario::return_shared(customer_account_shared);
         destroy(test_usd_cap);
         destroy(test_clock);

@@ -51,6 +51,16 @@ public fun approve_test_usd(request: &mut Request<SendFunds<Balance<TEST_USD>>>)
 /// pass any unique `u64` per call site (e.g. `0` for the first call, `1` for the
 /// second, etc.).
 public fun new_test_currency(hint: u64): (Currency<TEST_USD>, TreasuryCap<TEST_USD>) {
+    new_test_currency_with_decimals(0, hint)
+}
+
+/// Like `new_test_currency` but with a caller-chosen `decimals`. Useful for tests
+/// that need to exercise `config::new`'s decimals branches (e.g. boundary at
+/// `MAX_DECIMALS = 18`, or the abort at `19`).
+public fun new_test_currency_with_decimals(
+    decimals: u8,
+    hint: u64,
+): (Currency<TEST_USD>, TreasuryCap<TEST_USD>) {
     let ctx =
         &mut tx_context::new(
             @0x0,
@@ -62,7 +72,7 @@ public fun new_test_currency(hint: u64): (Currency<TEST_USD>, TreasuryCap<TEST_U
     let mut registry = coin_registry::create_coin_data_registry_for_testing(ctx);
     let (init, treasury_cap) = coin_registry::new_currency<TEST_USD>(
         &mut registry,
-        0,
+        decimals,
         b"USD".to_string(),
         b"Test USD".to_string(),
         b"Test stablecoin used by openzeppelin_payments tests.".to_string(),

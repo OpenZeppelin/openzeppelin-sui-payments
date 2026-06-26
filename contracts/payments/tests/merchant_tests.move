@@ -108,6 +108,29 @@ fun listing_variant_not_found_aborts() {
     });
 }
 
+// Pins branch: active_listing_variant / given variant missing / it aborts EVariantNotFound.
+// Mirrors `listing_variant_not_found_aborts` for the active-checked view-fn variant.
+#[test, expected_failure(abort_code = merchant::EVariantNotFound)]
+fun active_listing_variant_not_found_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        scenario.next_tx(ADMIN);
+        let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        let _v = merchant.active_listing_variant(&phantom);
+
+        test_scenario::return_shared(merchant);
+        destroy(test_usd_cap);
+    });
+}
+
 #[test]
 fun remove_listing_drops_variant_index() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
@@ -402,6 +425,68 @@ fun update_display_updates_name_and_logo() {
         assert_eq!(*merchant.name(), b"Renamed Shop".to_string());
         assert_eq!(*merchant.logo_url().borrow(), b"https://example.com/logo.png".to_string());
         assert_emitted!(events::display_updated());
+
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+// Pins branch: update_display / given different name + same logo / it updates (no abort).
+// Exercises the `||` in `EDisplayUnchanged` — name-differs side of the OR.
+#[test]
+fun update_display_name_only_updates() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        // Defaults are name="Test Shop", logo=None. Change only the name.
+        merchant.update_display(&merchant_auth, b"Renamed".to_string(), std::option::none());
+        assert_eq!(*merchant.name(), b"Renamed".to_string());
+        assert!(merchant.logo_url().is_none());
+
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+    });
+}
+
+// Pins branch: update_display / given same name + different logo / it updates.
+// Exercises the `||` in `EDisplayUnchanged` — logo-differs side of the OR.
+#[test]
+fun update_display_logo_only_updates() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        // Keep the default name; add a logo URL.
+        merchant.update_display(
+            &merchant_auth,
+            b"Test Shop".to_string(),
+            std::option::some(b"https://example.com/logo.png".to_string()),
+        );
+        assert_eq!(*merchant.name(), b"Test Shop".to_string());
+        assert_eq!(*merchant.logo_url().borrow(), b"https://example.com/logo.png".to_string());
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);

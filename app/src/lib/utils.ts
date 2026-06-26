@@ -36,6 +36,13 @@ export function formatAmount(units: bigint | number, decimals: number): string {
 export function toBaseUnits(human: string, decimals: number): bigint {
   const trimmed = human.trim();
   if (!trimmed) throw new Error("amount required");
+  // Strict shape check: integer, "N.M" decimal, or ".M" leading-dot decimal.
+  // `split(".")` alone happily turns "1.2.3" into 1.200000 (taking just the
+  // first two segments) and "." into 0 — both should surface as user errors
+  // rather than silently submit the wrong amount.
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(trimmed)) {
+    throw new Error("invalid amount");
+  }
   const [whole, fraction = ""] = trimmed.split(".");
   if (fraction.length > decimals) {
     throw new Error(`max ${decimals} fractional digits`);

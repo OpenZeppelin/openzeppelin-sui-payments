@@ -79,6 +79,58 @@ function isSystemEnv(envAlias: string): boolean {
   return SYSTEM_ENVS.has(envAlias);
 }
 
+/// Canonical chain identifiers returned by `sui_getChainIdentifier`. Stable across
+/// upgrades of the framework; used to verify that the CLI alias the user picked
+/// actually points at the chain they think it does. Without this check, an alias
+/// renamed `"testnet"` that resolves to devnet — or a local alias that happens to
+/// resolve to real testnet — would silently take the wrong bootstrap branch.
+const KNOWN_NETWORK_IDS = {
+  mainnet: "35834a8a",
+  testnet: "4c78adac",
+} as const;
+
+async function assertEnvMatchesChain(
+  client: SuiClient,
+  envAlias: string,
+): Promise<void> {
+  const chainId = await client.getChainIdentifier();
+
+  // Alias claims a canonical network — the chain must match.
+  if (envAlias === "mainnet" && chainId !== KNOWN_NETWORK_IDS.mainnet) {
+    throw new Error(
+      `CLI alias "mainnet" resolves to chain ${chainId}, not the canonical Sui ` +
+        `mainnet (${KNOWN_NETWORK_IDS.mainnet}). Refusing to bootstrap with this ` +
+        `misconfiguration — your alias points somewhere else.`,
+    );
+  }
+  if (envAlias === "testnet" && chainId !== KNOWN_NETWORK_IDS.testnet) {
+    throw new Error(
+      `CLI alias "testnet" resolves to chain ${chainId}, not the canonical Sui ` +
+        `testnet (${KNOWN_NETWORK_IDS.testnet}). Refusing to bootstrap with this ` +
+        `misconfiguration — your alias points somewhere else.`,
+    );
+  }
+
+  // Alias is anything else (treated as ephemeral) but the chain is canonical —
+  // refuse, so we don't accidentally run `test-publish` against real testnet/mainnet.
+  if (!isSystemEnv(envAlias)) {
+    if (chainId === KNOWN_NETWORK_IDS.mainnet) {
+      throw new Error(
+        `CLI alias "${envAlias}" resolves to Sui mainnet (${chainId}). Bootstrap ` +
+          `would treat this as ephemeral and run test-publish — refusing. Rename ` +
+          `the alias to "mainnet" if this is intentional.`,
+      );
+    }
+    if (chainId === KNOWN_NETWORK_IDS.testnet) {
+      throw new Error(
+        `CLI alias "${envAlias}" resolves to Sui testnet (${chainId}). Bootstrap ` +
+          `would treat this as ephemeral and run test-publish — refusing. Rename ` +
+          `the alias to "testnet" if this is intentional.`,
+      );
+    }
+  }
+}
+
 function run(cmd: string, args: string[], cwd: string): string {
   const result = spawnSync(cmd, args, { cwd, encoding: "utf8" });
   if (result.status !== 0) {
@@ -628,6 +680,12 @@ async function main() {
   const rpcUrl = getActiveRpcUrl(envAlias);
   const deployer = getActiveAddress();
   const client = new SuiClient({ url: rpcUrl });
+
+  // Verify the CLI alias actually points where it claims. `sui client active-env`
+  // is a user-defined label, not an identity check — without this guard a
+  // renamed alias can flip the bootstrap branch silently.
+  await assertEnvMatchesChain(client, envAlias);
+
   const ephemeral = !isSystemEnv(envAlias);
 
   console.log(`active env: ${envAlias} (${rpcUrl})  ${ephemeral ? "[ephemeral]" : ""}`);

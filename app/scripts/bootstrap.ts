@@ -804,16 +804,31 @@ async function main() {
   console.log(`  Namespace      ${namespaceId}`);
   if (pasUpgradeCapId) console.log(`  pas UpgradeCap ${pasUpgradeCapId}`);
 
-  // Discover deployer-owned TreasuryCaps after both publishes.
-  const { data: ownedAfter } = await client.getOwnedObjects({
-    owner: deployer,
-    options: { showType: true },
-  });
+  // Discover deployer-owned TreasuryCaps after both publishes. Page-walk so
+  // the lookup doesn't depend on both caps landing on the first page (deployers
+  // with many owned objects would otherwise miss one or both).
   const wantLoyalty = `TreasuryCap<${payments.packageId}::loyalty::LOYALTY>`;
   const wantStable = `TreasuryCap<${stable.packageId}::stablecoin_mock::STABLECOIN_MOCK>`;
-  const loyaltyCapId = ownedAfter.find((o) => o.data?.type?.includes(wantLoyalty))?.data?.objectId;
-  const stablecoinCapId = ownedAfter.find((o) => o.data?.type?.includes(wantStable))?.data
-    ?.objectId;
+  let loyaltyCapId: string | undefined;
+  let stablecoinCapId: string | undefined;
+  let cursor: string | null = null;
+  do {
+    const page = await client.getOwnedObjects({
+      owner: deployer,
+      options: { showType: true },
+      cursor: cursor ?? undefined,
+    });
+    for (const o of page.data) {
+      const t = o.data?.type;
+      const id = o.data?.objectId;
+      if (!t || !id) continue;
+      if (!loyaltyCapId && t.includes(wantLoyalty)) loyaltyCapId = id;
+      else if (!stablecoinCapId && t.includes(wantStable)) stablecoinCapId = id;
+      if (loyaltyCapId && stablecoinCapId) break;
+    }
+    if (loyaltyCapId && stablecoinCapId) break;
+    cursor = page.hasNextPage ? (page.nextCursor ?? null) : null;
+  } while (cursor);
   if (!loyaltyCapId) throw new Error(`Could not find ${wantLoyalty} owned by deployer`);
   if (!stablecoinCapId) throw new Error(`Could not find ${wantStable} owned by deployer`);
 

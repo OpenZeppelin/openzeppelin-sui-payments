@@ -26,9 +26,9 @@ public struct VoucherCreated has copy, drop {
 /// `invoice_id`/`order_ref` -> settled.
 ///
 /// Carries `payout_address` + `payment_type` (mirroring `InvoiceCanceled`) so
-/// the event stream remains self-describing after the merchant prunes stored
-/// receipts via `prune_invoice_receipts`. Without this, the stored Receipt would
-/// be the only place the historical payout/currency lived - pruning would erase it.
+/// the historical payout/currency survives `prune_invoice_receipts`. The
+/// Receipt's `items` line-item breakdown is NOT mirrored here and is lost on
+/// prune - off-chain indexers needing it must capture it beforehand.
 public struct InvoicePaid has copy, drop {
     /// ID of the settled `Invoice` (now destroyed).
     invoice_id: ID,

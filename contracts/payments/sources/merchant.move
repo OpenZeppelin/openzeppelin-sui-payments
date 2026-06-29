@@ -1093,13 +1093,15 @@ public fun redeem(
     events::emit_voucher_redeemed(voucher_id, customer, amount, now);
 }
 
-/// Reclaim storage by pruning the listed payment receipts.
+/// Reclaim storage by pruning the listed payment receipts. Frees the
+/// merchant's storage deposit (refunded to the caller).
 ///
-/// Receipts are redundant with the permanent `InvoicePaid` event stream, so
-/// pruning loses no canonical history - it only frees the merchant's storage
-/// deposit (refunded to the caller). The merchant computes which receipts to drop
-/// off-chain (a `Table` can't be iterated on-chain) and passes their `ids`. Gated
-/// by `MerchantRole`.
+/// The `InvoicePaid` event survives; the receipt's `items` line-item
+/// breakdown does NOT, and is unrecoverable from chain history once pruned -
+/// off-chain indexers needing it must capture it beforehand.
+///
+/// The merchant computes which receipts to drop off-chain (a `Table` can't
+/// be iterated on-chain) and passes their `ids`. Gated by `MerchantRole`.
 ///
 /// #### Parameters
 /// - `self`: The merchant to mutate.
@@ -1119,9 +1121,9 @@ public fun prune_invoice_receipts(
     });
 }
 
-/// Reclaim storage by pruning the listed redemption receipts.
-///
-/// Mirror of `prune_invoice_receipts` for the `VoucherRedeemed` side. Gated by
+/// Reclaim storage by pruning the listed redemption receipts. Mirror of
+/// `prune_invoice_receipts` for the `VoucherRedeemed` side: the event
+/// survives, the receipt's `items` line-item breakdown does not. Gated by
 /// `MerchantRole`.
 ///
 /// #### Parameters

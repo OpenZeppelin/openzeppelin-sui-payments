@@ -1,7 +1,7 @@
 "use client";
 
 import { useSuiClient } from "@mysten/dapp-kit";
-import type { SuiClient } from "@mysten/sui/client";
+import type { SuiClient, SuiEvent, SuiEventFilter } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 import { useQuery } from "@tanstack/react-query";
 
@@ -117,6 +117,26 @@ async function readTableValueByIdKey<T>(
   const content = (o.data?.content ?? null) as any;
   if (!content?.fields?.value) return null;
   return parse(key, { fields: content.fields.value.fields });
+}
+
+/** Walk `queryEvents` to exhaustion via `hasNextPage` / `nextCursor`. */
+async function queryAllEvents(
+  client: SuiClient,
+  query: SuiEventFilter,
+): Promise<SuiEvent[]> {
+  const out: SuiEvent[] = [];
+  let cursor: Parameters<SuiClient["queryEvents"]>[0]["cursor"] = null;
+  do {
+    const page = await client.queryEvents({
+      query,
+      cursor,
+      limit: 200,
+      order: "descending",
+    });
+    out.push(...page.data);
+    cursor = page.hasNextPage ? page.nextCursor : null;
+  } while (cursor);
+  return out;
 }
 
 /**
@@ -294,46 +314,45 @@ export function useReceipts(address: string | null | undefined) {
     enabled: Boolean(address) && Boolean(merchantQuery.data),
     queryFn: async () => {
       const merchant = merchantQuery.data!;
+      // Server-side filter by customer (MoveEventField + MoveEventType compound)
+      // returns only this customer's events, so we never lose old receipts to a
+      // 200-event global window. Page-walked to exhaustion via hasNextPage.
+      // `All` is typed as `[]` in @mysten/sui — cast via unknown to bypass the
+      // empty-tuple SDK type bug; runtime accepts the array.
       const [paid, redeemed] = await Promise.all([
-        client.queryEvents({
-          query: { MoveEventType: `${deployment.packageId}::events::InvoicePaid` },
-          limit: 200,
-          order: "descending",
-        }),
-        client.queryEvents({
-          query: { MoveEventType: `${deployment.packageId}::events::VoucherRedeemed` },
-          limit: 200,
-          order: "descending",
-        }),
+        queryAllEvents(client, {
+          All: [
+            { MoveEventType: `${deployment.packageId}::events::InvoicePaid` },
+            { MoveEventField: { path: "/customer", value: address } },
+          ],
+        } as unknown as SuiEventFilter),
+        queryAllEvents(client, {
+          All: [
+            { MoveEventType: `${deployment.packageId}::events::VoucherRedeemed` },
+            { MoveEventField: { path: "/customer", value: address } },
+          ],
+        } as unknown as SuiEventFilter),
       ]);
 
-      const mine = (e: any) =>
-        ((e.parsedJson as Record<string, unknown> | undefined)?.customer as string | undefined) ===
-        address;
-
       const paymentReceipts = await Promise.all(
-        paid.data
-          .filter(mine)
-          .map((e) =>
-            readTableValueByIdKey(
-              client,
-              merchant.invoiceReceiptsTableId,
-              (e.parsedJson as { invoice_id: string }).invoice_id,
-              parsePaymentReceipt,
-            ),
+        paid.map((e) =>
+          readTableValueByIdKey(
+            client,
+            merchant.invoiceReceiptsTableId,
+            (e.parsedJson as { invoice_id: string }).invoice_id,
+            parsePaymentReceipt,
           ),
+        ),
       );
       const redemptionReceipts = await Promise.all(
-        redeemed.data
-          .filter(mine)
-          .map((e) =>
-            readTableValueByIdKey(
-              client,
-              merchant.voucherReceiptsTableId,
-              (e.parsedJson as { voucher_id: string }).voucher_id,
-              parseRedemptionReceipt,
-            ),
+        redeemed.map((e) =>
+          readTableValueByIdKey(
+            client,
+            merchant.voucherReceiptsTableId,
+            (e.parsedJson as { voucher_id: string }).voucher_id,
+            parseRedemptionReceipt,
           ),
+        ),
       );
 
       const payment = paymentReceipts.filter((r): r is PaymentReceipt => r !== null);

@@ -1832,8 +1832,8 @@ fun create_invoice_order_ref_too_long_aborts() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // Cap is 256 bytes; build a 257-byte `order_ref` to trip the bound.
-        let mut order_ref = vector::empty<u8>();
-        let mut i = 0;
+        let mut order_ref = vector[];
+        let mut i: u64 = 0;
         while (i < 257) {
             order_ref.push_back(b"x"[0]);
             i = i + 1;
@@ -1883,9 +1883,9 @@ fun create_invoice_too_many_items_aborts() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // Cap is 256 items; build 257-entry parallel vectors to trip the bound.
-        let mut ids = vector::empty<ID>();
-        let mut qtys = vector::empty<u64>();
-        let mut i = 0;
+        let mut ids = vector[];
+        let mut qtys = vector[];
+        let mut i: u64 = 0;
         while (i < 257) {
             ids.push_back(variant_id);
             qtys.push_back(1);
@@ -1938,8 +1938,8 @@ fun create_invoice_at_items_cap_succeeds() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // Exactly 256 items — boundary value (should pass).
-        let mut ids = vector::empty<ID>();
-        let mut qtys = vector::empty<u64>();
+        let mut ids = vector[];
+        let mut qtys = vector[];
         let mut i: u64 = 0;
         while (i < 256) {
             ids.push_back(variant_id);
@@ -1993,7 +1993,7 @@ fun create_invoice_at_order_ref_cap_succeeds() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // Exactly 256-byte order_ref — boundary value.
-        let mut order_ref = vector::empty<u8>();
+        let mut order_ref = vector[];
         let mut i: u64 = 0;
         while (i < 256) {
             order_ref.push_back(b"x"[0]);

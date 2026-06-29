@@ -13,7 +13,7 @@
 ///   exposes this as a decimal (`1.0`, `0.5`, `2.0`); the contract stores the raw
 ///   scaled integer. Decimals-aware:
 ///       `loyalty = (payment_units * loyalty_coefficient) / (LOYALTY_FLOAT_SCALING * 10^payment_decimals)`
-///   capped at `max_loyalty_per_payment`. So "1 LOY per $1" → `loyalty_coefficient = 1e9`
+///   capped at `max_loyalty_per_payment`. So "1 LOY per $1" -> `loyalty_coefficient = 1e9`
 ///   regardless of the coin's decimals.
 /// - **TTLs** applied to issued invoices and customer-issued vouchers:
 ///       `invoice.expires_at_ms = clock + invoice_ttl_ms`
@@ -41,7 +41,7 @@ const EDecimalsTooLarge: vector<u8> = "Currency decimals must be no greater than
 
 // === Constants ===
 
-/// Upper bound (ms) on invoice/voucher TTLs — 7 days. Bounds how long an
+/// Upper bound (ms) on invoice/voucher TTLs - 7 days. Bounds how long an
 /// open invoice or voucher can keep merchant state / customer-locked LOY
 /// stuck, while still covering realistic POS flows (point-of-sale checkouts
 /// complete in minutes; pay-this-bill links typically resolve within hours
@@ -70,7 +70,7 @@ public struct Config has drop, store {
     /// `Invoice` at `create_invoice` time, so changing this mid-flight does not
     /// affect open invoices.
     payout_address: address,
-    /// `TypeName` of `C` — used at runtime to reject `pay<C'>` calls with a
+    /// `TypeName` of `C` - used at runtime to reject `pay<C'>` calls with a
     /// non-matching currency. Off-chain readers can identify the accepted
     /// currency from this without parsing type tags from BCS.
     accepted_payment_type: TypeName,
@@ -97,13 +97,13 @@ public struct Config has drop, store {
 /// `type_name::with_defining_ids<C>()`, so the config is internally consistent
 /// with `C` regardless of what the caller might claim.
 ///
-/// `loyalty_coefficient = 0` and/or `max_loyalty_per_payment = 0` are permitted —
+/// `loyalty_coefficient = 0` and/or `max_loyalty_per_payment = 0` are permitted -
 /// loyalty mint becomes a no-op. Pass the returned value to `merchant::create<C>`
 /// (initial setup) or `merchant::update_config` (replacement).
 ///
 /// Note for merchants: this config is the live source for *future* invoices
 /// only. Each issued `Invoice` snapshots `payout_address`, `payment_type`,
-/// item prices, `amount`, and `loyalty` at creation time and is binding — a
+/// item prices, `amount`, and `loyalty` at creation time and is binding - a
 /// later `update_config` does not retro-mutate open invoices. See
 /// `payment::Invoice` for the full snapshot semantics.
 ///
@@ -111,7 +111,7 @@ public struct Config has drop, store {
 /// - `C`: The stablecoin currency this merchant accepts.
 ///
 /// #### Parameters
-/// - `currency`: The `Currency<C>` shared object — only its `decimals()` is read.
+/// - `currency`: The `Currency<C>` shared object - only its `decimals()` is read.
 /// - `payout_address`: Address that receives customer stablecoin on settlement.
 ///   MUST be an externally-owned account address, not an object ID. On Sui,
 ///   addresses and object IDs share one 32-byte space and cannot be
@@ -162,19 +162,19 @@ public fun new<C>(
 /// rounding down. Done in u128 internally to avoid intermediate overflow.
 ///
 /// NOTE: integer division rounds the fractional remainder away. Payments whose
-/// `loyalty < 1` round down to `0` — small purchases at low coefficients earn
+/// `loyalty < 1` round down to `0` - small purchases at low coefficients earn
 /// nothing on chain. If the result exceeds `max_loyalty_per_payment` it is clamped
 /// rather than aborting.
 ///
-/// E.g (assuming `payment_decimals = 6` — USDC — and a large enough `max`):
+/// E.g (assuming `payment_decimals = 6` - USDC - and a large enough `max`):
 ///     `coefficient = LOYALTY_FLOAT_SCALING` (1e9, "1.0"), `payment_amount = 1_000_000` ($1)
-///          → `loyalty = 1`.
+///          -> `loyalty = 1`.
 ///     `coefficient = LOYALTY_FLOAT_SCALING / 2` (5e8, "0.5"), `payment_amount = 2_000_000` ($2)
-///          → `loyalty = 1`.
+///          -> `loyalty = 1`.
 ///     `coefficient = LOYALTY_FLOAT_SCALING / 2` (5e8, "0.5"), `payment_amount = 1_000_000` ($1)
-///          → `loyalty = 0` (rounded down from 0.5).
+///          -> `loyalty = 0` (rounded down from 0.5).
 ///     `coefficient = 2 * LOYALTY_FLOAT_SCALING` (2e9, "2.0"), `payment_amount = 1_000_000` ($1)
-///          → `loyalty = 2`.
+///          -> `loyalty = 2`.
 ///     `coefficient = 0` disables loyalty mint entirely (`loyalty = 0` for any payment).
 ///
 /// #### Parameters

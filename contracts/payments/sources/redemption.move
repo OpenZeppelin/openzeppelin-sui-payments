@@ -33,7 +33,7 @@ public struct Voucher has store {
     /// becomes permissionless.
     expires_at_ms: u64,
     /// 32-byte blake2b256 commitment to a customer-chosen secret preimage.
-    /// `merchant::redeem` requires the matching preimage — proves the
+    /// `merchant::redeem` requires the matching preimage - proves the
     /// redeemer holds the secret the customer revealed at the till and
     /// prevents `CashierRole` alone from sweeping vouchers observed in
     /// public `VoucherCreated` events.

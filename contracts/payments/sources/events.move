@@ -28,7 +28,7 @@ public struct VoucherCreated has copy, drop {
 /// Carries `payout_address` + `payment_type` (mirroring `InvoiceCanceled`) so
 /// the event stream remains self-describing after the merchant prunes stored
 /// receipts via `prune_invoice_receipts`. Without this, the stored Receipt would
-/// be the only place the historical payout/currency lived — pruning would erase it.
+/// be the only place the historical payout/currency lived - pruning would erase it.
 public struct InvoicePaid has copy, drop {
     /// ID of the settled `Invoice` (now destroyed).
     invoice_id: ID,
@@ -127,11 +127,11 @@ public struct VariantRemoved has copy, drop {
 }
 
 /// Emitted when a merchant replaces its `Config` (which now subsumes payout
-/// address and accepted payment type). Pulse only — query `Merchant.config`
+/// address and accepted payment type). Pulse only - query `Merchant.config`
 /// for the current values.
 public struct ConfigUpdated has copy, drop {}
 
-/// Emitted when a merchant updates its display name or logo. Pulse only —
+/// Emitted when a merchant updates its display name or logo. Pulse only -
 /// query `Merchant.name` / `Merchant.logo_url` for the current values.
 public struct DisplayUpdated has copy, drop {}
 

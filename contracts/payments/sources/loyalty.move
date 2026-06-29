@@ -31,7 +31,7 @@ public struct LOYALTY has drop {}
 public struct Loyalty has store {
     /// Mint/burn authority for `LOYALTY`. Mutably accessed only through the
     /// package-private `mint_to` / `decrease_supply` methods on `Loyalty`
-    /// itself — the field, the cap, and `&mut TreasuryCap` are never reachable
+    /// itself - the field, the cap, and `&mut TreasuryCap` are never reachable
     /// outside this module.
     treasury_cap: TreasuryCap<LOYALTY>,
     /// PAS authority over `Policy<Balance<LOYALTY>>`. Held but never exposed
@@ -115,12 +115,12 @@ public fun create(namespace: &mut Namespace, mut treasury_cap: TreasuryCap<LOYAL
 
 // === View Functions ===
 
-/// ID of the embedded `TreasuryCap<LOYALTY>` — exposed for off-chain
+/// ID of the embedded `TreasuryCap<LOYALTY>` - exposed for off-chain
 /// indexing only. The cap itself is never borrowed publicly: leaking
 /// `&TreasuryCap` would let outsiders read mint metadata they don't need.
 public fun treasury_cap_id(self: &Loyalty): ID { object::id(&self.treasury_cap) }
 
-/// ID of the embedded `PolicyCap<Balance<LOYALTY>>` — exposed for off-chain
+/// ID of the embedded `PolicyCap<Balance<LOYALTY>>` - exposed for off-chain
 /// indexing only. The cap itself is NEVER borrowed publicly because PAS
 /// uses `&PolicyCap` as authorization: leaking it lets any caller mutate
 /// the shared `Policy<Balance<LOYALTY>>` (re-key approvals, break
@@ -144,7 +144,7 @@ public fun supply(self: &Loyalty): u64 {
 /// this module.
 ///
 /// `deposit_balance` is unrestricted in PAS (no `Auth` needed), so the
-/// customer doesn't have to sign for the loyalty-side leg — only for their
+/// customer doesn't have to sign for the loyalty-side leg - only for their
 /// stablecoin spend.
 ///
 /// #### Parameters

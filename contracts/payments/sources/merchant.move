@@ -177,7 +177,7 @@ public struct Merchant has key {
     /// read via `loyalty()`. The treasury cap is reached internally by `pay`
     /// (mint) and `redeem` (burn).
     loyalty: Loyalty,
-    /// Full merchant configuration — payout address, accepted payment type,
+    /// Full merchant configuration - payout address, accepted payment type,
     /// payment decimals, loyalty mint rate, and TTLs. Replaceable atomically via
     /// `update_config`. Changes do not affect already-issued invoices, which
     /// snapshot `amount`/`loyalty`/`payout_address`/`payment_type` at creation.
@@ -234,7 +234,7 @@ fun init(otw: MERCHANT, ctx: &mut TxContext) {
 ///
 /// #### Parameters
 /// - `loyalty`: The `Loyalty` bundle from `loyalty::create`.
-/// - `config`: The merchant's `Config` — payout address, accepted payment type,
+/// - `config`: The merchant's `Config` - payout address, accepted payment type,
 ///   decimals, loyalty rate, TTLs. Built via `config::new<C>(&currency, ...)`,
 ///   which pins the accepted currency.
 /// - `name`: Display name. Must be non-empty.
@@ -271,7 +271,7 @@ public fun create(
 }
 
 /// Share the `Merchant`. Required because `Merchant` is `key`-only (no `store`),
-/// so `transfer::share_object` can only be called from this module — an external
+/// so `transfer::share_object` can only be called from this module - an external
 /// caller can't share it directly. Call after `create` and any same-PTB setup.
 public fun share(self: Merchant) {
     transfer::share_object(self);
@@ -532,7 +532,7 @@ public fun cancel_invoice(self: &mut Merchant, invoice_id: ID, clock: &Clock) {
 /// `redeem_hash` is a 32-byte blake2b256 commitment to a customer-chosen
 /// secret preimage. The customer keeps the preimage off-chain (e.g. browser
 /// localStorage) and reveals it at the till via the voucher QR. `redeem`
-/// requires the matching preimage, so `CashierRole` alone — even when armed
+/// requires the matching preimage, so `CashierRole` alone - even when armed
 /// with the publicly-emitted `voucher_id`, cannot sweep vouchers without
 /// the customer also revealing the preimage. See `merchant::redeem`.
 public fun create_voucher(
@@ -628,7 +628,7 @@ public fun name(self: &Merchant): &String { &self.name }
 /// Optional logo URL (mutable via `update_display`).
 public fun logo_url(self: &Merchant): &Option<String> { &self.logo_url }
 
-/// Payout address — where customer stablecoin lands on `pay`. Delegates to
+/// Payout address - where customer stablecoin lands on `pay`. Delegates to
 /// `Config.payout_address`.
 public fun payout_address(self: &Merchant): address { self.config.payout_address() }
 
@@ -638,11 +638,11 @@ public fun accepted_payment_type(self: &Merchant): TypeName {
     self.config.accepted_payment_type()
 }
 
-/// ID of the embedded `TreasuryCap<LOYALTY>`. Off-chain indexers only —
+/// ID of the embedded `TreasuryCap<LOYALTY>`. Off-chain indexers only -
 /// the cap itself stays inside `self.loyalty` and is never publicly borrowable.
 public fun loyalty_treasury_cap_id(self: &Merchant): ID { self.loyalty.treasury_cap_id() }
 
-/// ID of the embedded `PolicyCap<Balance<LOYALTY>>`. Off-chain indexers only —
+/// ID of the embedded `PolicyCap<Balance<LOYALTY>>`. Off-chain indexers only -
 /// the cap is auth for PAS policy mutations, so it must not leak by reference.
 public fun loyalty_policy_cap_id(self: &Merchant): ID { self.loyalty.policy_cap_id() }
 
@@ -652,7 +652,7 @@ public fun loyalty_policy_id(self: &Merchant): ID { self.loyalty.policy_id() }
 /// Current total supply of `LOYALTY` (mints minus burns). View-only.
 public fun loyalty_supply(self: &Merchant): u64 { self.loyalty.supply() }
 
-/// Current full merchant `Config` — payout, accepted type, decimals, rate, TTLs.
+/// Current full merchant `Config` - payout, accepted type, decimals, rate, TTLs.
 public fun config(self: &Merchant): &Config { &self.config }
 
 /// Look up a stored `Listing` by ID.
@@ -795,7 +795,7 @@ public fun update_display(
     events::emit_display_updated();
 }
 
-/// Replace the merchant's full `Config` — payout address, accepted payment type,
+/// Replace the merchant's full `Config` - payout address, accepted payment type,
 /// decimals, loyalty rate, TTLs.
 ///
 /// Build the new value via `config::new<C>(&currency, ...)` and pass it in. The
@@ -1040,15 +1040,15 @@ public fun create_invoice(
 /// Burns the locked `Balance<LOYALTY>` via the merchant's `TreasuryCap<LOYALTY>`,
 /// removes the voucher, stores a `Receipt` keyed by `voucher_id`, and emits
 /// `VoucherRedeemed`. Gated by both:
-///   - `CashierRole` — the till operator authorizes settlement, AND
-///   - the customer's preimage matching `voucher.redeem_hash` — proves the
+///   - `CashierRole` - the till operator authorizes settlement, AND
+///   - the customer's preimage matching `voucher.redeem_hash` - proves the
 ///     redeemer holds the secret the customer chose at issuance.
 ///
 /// `CashierRole` alone is no longer sufficient: even a cashier who observes
 /// `voucher_id` from the public `VoucherCreated` event cannot redeem without
 /// the customer also revealing the preimage (typically via the QR shown at
 /// the till). The preimage is opaque random bytes the customer's dApp
-/// generates client-side and stores locally — it never appears on chain
+/// generates client-side and stores locally - it never appears on chain
 /// until reveal time.
 ///
 /// #### Parameters

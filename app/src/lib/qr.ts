@@ -1,6 +1,5 @@
 import { base32nopad } from "@scure/base";
-
-import { fromHex, toHex } from "@/lib/preimage";
+import { fromHex, toHex } from "@mysten/sui/utils";
 
 /**
  * QR payload codecs for invoice and voucher flows.

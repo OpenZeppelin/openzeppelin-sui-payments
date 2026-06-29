@@ -12,10 +12,16 @@ import { blake2b } from "@noble/hashes/blake2.js";
  * the cashier learns it only via the QR shown at the till, so a cashier
  * observing the voucher id from public events alone cannot sweep vouchers.
  *
- * Preimages are persisted in `localStorage` keyed by voucher id. Clearing
- * site data, switching browsers, or switching devices loses the preimage
- * (and therefore the voucher's redemption path) — `cancel_voucher` after
- * expiry is the only recovery in that case.
+ * Preimages are persisted in `localStorage` keyed by the on-chain `redeem_hash`
+ * commitment. Keying by hash (not voucher id) means the entry is written BEFORE
+ * `create_voucher` is submitted — a tx-side failure to learn the voucher id
+ * (event missing from response, network hiccup, page unload mid-tx) does not
+ * leave an unredeemable on-chain voucher: any later read looks up the preimage
+ * by the voucher's stored `redeem_hash`.
+ *
+ * Clearing site data, switching browsers, or switching devices loses the
+ * preimage (and therefore the voucher's redemption path) — `cancel_voucher`
+ * after expiry is the only recovery in that case.
  */
 
 const PREIMAGE_LENGTH = 32;
@@ -56,14 +62,14 @@ export function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 // localStorage persistence
 // ---------------------------------------------------------------------------
 
-export function savePreimage(voucherId: string, preimage: Uint8Array): void {
+export function savePreimage(redeemHash: Uint8Array, preimage: Uint8Array): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(LOCALSTORAGE_PREFIX + voucherId, toHex(preimage));
+  window.localStorage.setItem(LOCALSTORAGE_PREFIX + toHex(redeemHash), toHex(preimage));
 }
 
-export function loadPreimage(voucherId: string): Uint8Array | null {
+export function loadPreimage(redeemHash: Uint8Array): Uint8Array | null {
   if (typeof window === "undefined") return null;
-  const hex = window.localStorage.getItem(LOCALSTORAGE_PREFIX + voucherId);
+  const hex = window.localStorage.getItem(LOCALSTORAGE_PREFIX + toHex(redeemHash));
   if (!hex) return null;
   try {
     return fromHex(hex);
@@ -72,9 +78,9 @@ export function loadPreimage(voucherId: string): Uint8Array | null {
   }
 }
 
-export function clearPreimage(voucherId: string): void {
+export function clearPreimage(redeemHash: Uint8Array): void {
   if (typeof window === "undefined") return;
-  window.localStorage.removeItem(LOCALSTORAGE_PREFIX + voucherId);
+  window.localStorage.removeItem(LOCALSTORAGE_PREFIX + toHex(redeemHash));
 }
 
 // QR payload encoding for invoices and vouchers lives in `lib/qr.ts`.

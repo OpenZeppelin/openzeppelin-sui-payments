@@ -129,6 +129,18 @@ function decimalToCoefficient(value: string): bigint | null {
   return BigInt(whole) * LOYALTY_FLOAT_SCALING + BigInt(fracPadded);
 }
 
+/**
+ * Strict non-negative integer parser for u64 fields. Rejects decimals (`1.5`),
+ * exponents (`1e3`), signs (`-5`), and whitespace-only — `<input type="number">`
+ * doesn't enforce integers and lets all of these through, where `BigInt(...)`
+ * would throw synchronously inside the mutation handler.
+ */
+function parseU64(value: string): bigint | null {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  return BigInt(trimmed);
+}
+
 function ConfigCard({ merchant }: { merchant: Merchant }) {
   const [payout, setPayout] = useState(merchant.config.payoutAddress);
   const [coefficient, setCoefficient] = useState(
@@ -162,16 +174,27 @@ function ConfigCard({ merchant }: { merchant: Merchant }) {
 
   const coeffRaw = decimalToCoefficient(coefficient);
   const validPayout = /^0x[0-9a-fA-F]+$/.test(payout) && payout.length === 66;
-  const canSave = coeffRaw !== null && validPayout && Boolean(maxMint && invoiceTtlMin && voucherTtlMin);
+  const maxMintRaw = parseU64(maxMint);
+  const invoiceTtlRaw = parseU64(invoiceTtlMin);
+  const voucherTtlRaw = parseU64(voucherTtlMin);
+  // TTLs must be > 0 (contract aborts on zero).
+  const canSave =
+    coeffRaw !== null &&
+    validPayout &&
+    maxMintRaw !== null &&
+    invoiceTtlRaw !== null &&
+    invoiceTtlRaw > 0n &&
+    voucherTtlRaw !== null &&
+    voucherTtlRaw > 0n;
 
   function handleSave() {
-    if (coeffRaw === null) return;
+    if (!canSave) return;
     save.mutate({
       payoutAddress: payout,
-      loyaltyCoefficient: coeffRaw,
-      maxLoyaltyPerPayment: BigInt(maxMint || "0"),
-      invoiceTtlMs: BigInt(invoiceTtlMin || "0") * MS_PER_MINUTE,
-      voucherTtlMs: BigInt(voucherTtlMin || "0") * MS_PER_MINUTE,
+      loyaltyCoefficient: coeffRaw!,
+      maxLoyaltyPerPayment: maxMintRaw!,
+      invoiceTtlMs: invoiceTtlRaw! * MS_PER_MINUTE,
+      voucherTtlMs: voucherTtlRaw! * MS_PER_MINUTE,
     });
   }
 

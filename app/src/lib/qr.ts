@@ -1,13 +1,15 @@
+import { base32nopad } from "@scure/base";
+
 import { fromHex, toHex } from "@/lib/preimage";
 
 /**
  * QR payload codecs for invoice and voucher flows.
  *
- * Both payloads are raw bytes encoded as RFC 4648 base32 without padding.
- * base32's alphabet (`A-Z`, `2-7`) falls entirely inside QR's alphanumeric
- * character set, so the QR library encodes the payload at 5.5 bits/char
- * instead of the 8 bits/char that byte mode would use — about 30 % fewer
- * scan bits than base64 for the same number of bytes.
+ * Both payloads are raw bytes encoded as RFC 4648 base32 without padding via
+ * `@scure/base`'s `base32nopad`. base32's alphabet (`A-Z`, `2-7`) falls
+ * entirely inside QR's alphanumeric character set, so the QR library encodes
+ * the payload at 5.5 bits/char instead of the 8 bits/char that byte mode would
+ * use — about 30 % fewer scan bits than base64 for the same number of bytes.
  *
  *   - Invoice: 32-byte Sui ObjectId          → 52 chars
  *   - Voucher: 32-byte id ‖ 32-byte preimage → 103 chars
@@ -15,47 +17,16 @@ import { fromHex, toHex } from "@/lib/preimage";
  * Length disambiguates the two payloads if a caller ever needs to.
  */
 
-const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const INVOICE_BYTES = 32;
 const VOUCHER_BYTES = 64;
 
-function encodeBase32(bytes: Uint8Array): string {
-  let bits = 0;
-  let value = 0;
-  let out = "";
-  for (let i = 0; i < bytes.length; i++) {
-    value = (value << 8) | bytes[i];
-    bits += 8;
-    while (bits >= 5) {
-      bits -= 5;
-      out += ALPHABET[(value >> bits) & 0x1f];
-    }
-  }
-  if (bits > 0) out += ALPHABET[(value << (5 - bits)) & 0x1f];
-  return out;
-}
-
-function decodeBase32(s: string): Uint8Array {
-  const clean = s.trim().toUpperCase();
-  const out = new Uint8Array(Math.floor((clean.length * 5) / 8));
-  let bits = 0;
-  let value = 0;
-  let idx = 0;
-  for (let i = 0; i < clean.length; i++) {
-    const v = ALPHABET.indexOf(clean[i]);
-    if (v < 0) throw new Error(`invalid base32 char at ${i}: ${clean[i]}`);
-    value = (value << 5) | v;
-    bits += 5;
-    if (bits >= 8) {
-      bits -= 8;
-      out[idx++] = (value >> bits) & 0xff;
-    }
-  }
-  return out;
-}
-
 function stripHexPrefix(hex: string): string {
   return hex.startsWith("0x") ? hex.slice(2) : hex;
+}
+
+/** Tolerate scanner output that uses lowercase — base32 is case-insensitive. */
+function decodeBase32(qr: string): Uint8Array {
+  return base32nopad.decode(qr.trim().toUpperCase());
 }
 
 export function encodeInvoiceQr(invoiceId: string): string {
@@ -63,7 +34,7 @@ export function encodeInvoiceQr(invoiceId: string): string {
   if (bytes.length !== INVOICE_BYTES) {
     throw new Error(`invoiceId must be ${INVOICE_BYTES} bytes, got ${bytes.length}`);
   }
-  return encodeBase32(bytes);
+  return base32nopad.encode(bytes);
 }
 
 export function decodeInvoiceQr(qr: string): string | null {
@@ -87,7 +58,7 @@ export function encodeVoucherQr(voucherId: string, preimage: Uint8Array): string
   const buf = new Uint8Array(VOUCHER_BYTES);
   buf.set(idBytes, 0);
   buf.set(preimage, 32);
-  return encodeBase32(buf);
+  return base32nopad.encode(buf);
 }
 
 export function decodeVoucherQr(

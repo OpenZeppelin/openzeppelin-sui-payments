@@ -24,6 +24,11 @@ public struct VoucherCreated has copy, drop {
 
 /// Emitted when a customer settles an `Invoice`. Indexer resolves
 /// `invoice_id`/`order_ref` -> settled.
+///
+/// Carries `payout_address` + `payment_type` (mirroring `InvoiceCanceled`) so
+/// the historical payout/currency survives `prune_invoice_receipts`. The
+/// Receipt's `items` line-item breakdown is NOT mirrored here and is lost on
+/// prune - off-chain indexers needing it must capture it beforehand.
 public struct InvoicePaid has copy, drop {
     /// ID of the settled `Invoice` (now destroyed).
     invoice_id: ID,
@@ -31,6 +36,11 @@ public struct InvoicePaid has copy, drop {
     order_ref: vector<u8>,
     /// Address that paid (recorded as `customer` on the stored `Receipt`).
     customer: address,
+    /// Payout address recorded on the invoice at issuance (snapshotted from
+    /// `Config.payout_address`).
+    payout_address: address,
+    /// `TypeName` of the stablecoin the invoice was settled in.
+    payment_type: TypeName,
     /// Stablecoin amount settled.
     amount: u64,
     /// LOYALTY units minted to the customer.
@@ -116,21 +126,14 @@ public struct VariantRemoved has copy, drop {
     variant_id: ID,
 }
 
-/// Emitted when a merchant replaces its loyalty mint `Config`. Pulse only -
-/// query `Merchant.config` for the current values.
+/// Emitted when a merchant replaces its `Config` (which now subsumes payout
+/// address and accepted payment type). Pulse only - query `Merchant.config`
+/// for the current values.
 public struct ConfigUpdated has copy, drop {}
-
-/// Emitted when a merchant rotates its payout address. Pulse only - query
-/// `Merchant.payout_address` for the current value.
-public struct PayoutAddressChanged has copy, drop {}
-
-/// Emitted when a merchant rotates its accepted payment currency. Pulse only -
-/// query `Merchant.accepted_payment_type` for the current value.
-public struct PaymentTypeChanged has copy, drop {}
 
 /// Emitted when a merchant updates its display name or logo. Pulse only -
 /// query `Merchant.name` / `Merchant.logo_url` for the current values.
-public struct DisplayChanged has copy, drop {}
+public struct DisplayUpdated has copy, drop {}
 
 // === Package Functions ===
 
@@ -149,6 +152,8 @@ public(package) fun emit_invoice_paid(
     invoice_id: ID,
     order_ref: vector<u8>,
     customer: address,
+    payout_address: address,
+    payment_type: TypeName,
     amount: u64,
     loyalty: u64,
     timestamp_ms: u64,
@@ -158,6 +163,8 @@ public(package) fun emit_invoice_paid(
         invoice_id,
         order_ref,
         customer,
+        payout_address,
+        payment_type,
         amount,
         loyalty,
         timestamp_ms,
@@ -226,19 +233,9 @@ public(package) fun emit_config_updated() {
     event::emit(ConfigUpdated {});
 }
 
-/// Emit `PayoutAddressChanged`.
-public(package) fun emit_payout_address_changed() {
-    event::emit(PayoutAddressChanged {});
-}
-
-/// Emit `PaymentTypeChanged`.
-public(package) fun emit_payment_type_changed() {
-    event::emit(PaymentTypeChanged {});
-}
-
-/// Emit `DisplayChanged`.
-public(package) fun emit_display_changed() {
-    event::emit(DisplayChanged {});
+/// Emit `DisplayUpdated`.
+public(package) fun emit_display_updated() {
+    event::emit(DisplayUpdated {});
 }
 
 // === Test-Only Helpers ===
@@ -248,12 +245,24 @@ public fun invoice_paid(
     invoice_id: ID,
     order_ref: vector<u8>,
     customer: address,
+    payout_address: address,
+    payment_type: TypeName,
     amount: u64,
     loyalty: u64,
     timestamp_ms: u64,
     paid_with_coin: bool,
 ): InvoicePaid {
-    InvoicePaid { invoice_id, order_ref, customer, amount, loyalty, timestamp_ms, paid_with_coin }
+    InvoicePaid {
+        invoice_id,
+        order_ref,
+        customer,
+        payout_address,
+        payment_type,
+        amount,
+        loyalty,
+        timestamp_ms,
+        paid_with_coin,
+    }
 }
 
 #[test_only]
@@ -323,16 +332,6 @@ public fun config_updated(): ConfigUpdated {
 }
 
 #[test_only]
-public fun payout_address_changed(): PayoutAddressChanged {
-    PayoutAddressChanged {}
-}
-
-#[test_only]
-public fun payment_type_changed(): PaymentTypeChanged {
-    PaymentTypeChanged {}
-}
-
-#[test_only]
-public fun display_changed(): DisplayChanged {
-    DisplayChanged {}
+public fun display_updated(): DisplayUpdated {
+    DisplayUpdated {}
 }

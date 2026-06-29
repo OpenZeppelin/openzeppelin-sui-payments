@@ -16,12 +16,33 @@ use std::type_name::TypeName;
 /// Merchant-issued invoice. Stored in `Merchant.invoices` keyed by a freshly
 /// minted ID; that ID is surfaced via QR for the customer to scan and settle.
 ///
+/// **Snapshot semantics - invoice as a merchant commitment.** Every settlement-
+/// relevant field below (`payout_address`, `payment_type`, item prices,
+/// `amount`, `loyalty`) is captured from the live `Merchant.config` at issuance
+/// and is **immutable** for the invoice's lifetime. This makes the issued
+/// invoice a binding commitment from the merchant to the customer: the moment
+/// the QR is shown, the customer can rely on:
+///
+///   - exactly `amount` stablecoin units of exactly `payment_type` will be due,
+///   - those funds will go to **this** `payout_address` (the real on-chain
+///     destination - not a configurable mid-flight redirect),
+///   - exactly `loyalty` LOYALTY will be minted back to them,
+///   - line-item prices won't drift between scan and settle.
+///
+/// A subsequent `merchant::update_config` updates the live config for *future*
+/// invoices but does not retro-mutate already-issued ones. Open invoices either
+/// settle against their snapshot, expire and get permissionlessly cleaned via
+/// `cancel_invoice`.
+///
 /// `store`-only (no `key`): identity is the `Table` key, not an object UID.
 public struct Invoice has store {
-    /// Snapshot of `merchant.payout_address` at issuance.
+    /// Snapshot of `Config.payout_address` at issuance. The on-chain account
+    /// that customer stablecoin actually routes to on `pay` - not a label or
+    /// alias. Pinned for the invoice's lifetime; later config rotations don't
+    /// retro-route already-issued invoices.
     payout_address: address,
-    /// Snapshot of `merchant.accepted_payment_type` at issuance. `merchant::pay<S>`
-    /// aborts if `S` does not match this, preventing settlement in self-minted
+    /// Snapshot of `Config.accepted_payment_type` at issuance. `merchant::pay<C>`
+    /// aborts if `C` does not match this, preventing settlement in self-minted
     /// currencies.
     payment_type: TypeName,
     /// Line items with snapshot prices (stablecoin units).

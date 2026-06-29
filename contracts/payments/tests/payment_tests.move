@@ -129,6 +129,8 @@ fun payment_happy_path() {
                 invoice_id,
                 b"order-001",
                 CUSTOMER,
+                PAYOUT,
+                type_name::with_defining_ids<TEST_USD>(),
                 500,
                 50,
                 1_000_000,
@@ -708,10 +710,20 @@ fun pay_clamps_loyalty_to_max() {
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
-        // Tighten the mint cap to 30. Default mint rate is 1/10, so 500 stable
-        // would otherwise mint 50 LOYALTY. The cap clamps it to 30.
-        let tight_cfg = config::new(1, 10, 30, 600_000, 600_000);
-        merchant.set_config(&merchant_auth, tight_cfg);
+        // Tighten the mint cap to 30. Default rate is 0.1 LOY per unit, so 500
+        // stable would otherwise mint 50 LOYALTY. The cap clamps it to 30.
+        let (cap_currency, cap_treasury) = test_setup::new_test_currency(1);
+        let tight_cfg = config::new<TEST_USD>(
+            &cap_currency,
+            PAYOUT,
+            config::loyalty_float_scaling() / 10,
+            30,
+            600_000,
+            600_000,
+        );
+        merchant.update_config(&merchant_auth, tight_cfg);
+        destroy(cap_currency);
+        destroy(cap_treasury);
 
         let _ = merchant.add_listing(&catalog_auth, listing);
 
@@ -1115,9 +1127,19 @@ fun pay_zero_loyalty_no_mint() {
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
 
-        // mint_numerator = 0 → compute_loyalty(_) = 0 for every payment.
-        let zero_cfg = config::new(0, 10, 1_000_000, 600_000, 600_000);
-        merchant.set_config(&merchant_auth, zero_cfg);
+        // loyalty_coefficient = 0 → compute_loyalty(_) = 0 for every payment.
+        let (zero_currency, zero_treasury) = test_setup::new_test_currency(1);
+        let zero_cfg = config::new<TEST_USD>(
+            &zero_currency,
+            PAYOUT,
+            0,
+            1_000_000,
+            600_000,
+            600_000,
+        );
+        merchant.update_config(&merchant_auth, zero_cfg);
+        destroy(zero_currency);
+        destroy(zero_treasury);
 
         let _ = merchant.add_listing(&catalog_auth, listing);
 
@@ -1133,7 +1155,7 @@ fun pay_zero_loyalty_no_mint() {
         );
 
         // Capture LOYALTY supply before pay so we can assert no mint occurred.
-        let supply_before = coin::total_supply(merchant.loyalty().treasury_cap());
+        let supply_before = merchant.loyalty_supply();
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -1163,7 +1185,7 @@ fun pay_zero_loyalty_no_mint() {
         let r = merchant.invoice_receipt(invoice_id);
         assert!(receipt::amount(r) == 500, 0);
         assert!(receipt::loyalty(r) == 0, 0);
-        let supply_after = coin::total_supply(merchant.loyalty().treasury_cap());
+        let supply_after = merchant.loyalty_supply();
         assert!(supply_before == supply_after, 0);
 
         test_setup::return_test_usd_policy(test_usd_policy);
@@ -1238,6 +1260,8 @@ fun pay_with_coin_happy_path() {
                 invoice_id,
                 b"order-001",
                 CUSTOMER,
+                PAYOUT,
+                type_name::with_defining_ids<TEST_USD>(),
                 500,
                 50,
                 1_000_000,
@@ -1257,6 +1281,193 @@ fun pay_with_coin_happy_path() {
         let received = scenario.take_from_address<coin::Coin<TEST_USD>>(PAYOUT);
         assert_eq!(received.value(), 500);
 
+        destroy(received);
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+// Pins branch: pay_with_coin<C> / given zero coefficient / it mints 0 LOY.
+// Open-loop counterpart of `pay_zero_loyalty_no_mint` — locks symmetry between
+// the two settlement codepaths so a future change to one is forced to consider
+// the other.
+#[test]
+fun pay_with_coin_zero_loyalty_no_mint() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, mut test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.share();
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        // loyalty_coefficient = 0 → compute_loyalty(_) = 0 regardless of amount.
+        let (zero_currency, zero_treasury) = test_setup::new_test_currency(1);
+        let zero_cfg = config::new<TEST_USD>(
+            &zero_currency,
+            PAYOUT,
+            0,
+            1_000_000,
+            600_000,
+            600_000,
+        );
+        merchant.update_config(&merchant_auth, zero_cfg);
+        destroy(zero_currency);
+        destroy(zero_treasury);
+
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+        let invoice_id = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        let supply_before = merchant.loyalty_supply();
+
+        scenario.next_tx(CUSTOMER);
+        let customer_account_shared = scenario.take_shared_by_id<Account>(customer_account_id);
+        let payment_coin = coin::mint(&mut test_usd_cap, 500, scenario.ctx());
+
+        merchant.pay_with_coin<TEST_USD>(
+            invoice_id,
+            payment_coin,
+            &customer_account_shared,
+            &test_clock,
+        );
+
+        let r = merchant.invoice_receipt(invoice_id);
+        assert_eq!(receipt::amount(r), 500);
+        assert_eq!(receipt::loyalty(r), 0);
+        assert_eq!(merchant.loyalty_supply(), supply_before);
+
+        // The payout still received the stablecoin (loyalty side is independent).
+        scenario.next_tx(PAYOUT);
+        let received = scenario.take_from_address<coin::Coin<TEST_USD>>(PAYOUT);
+        assert_eq!(received.value(), 500);
+
+        destroy(received);
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+// Pins branch: pay_with_coin<C> / given amount * coefficient > max / it clamps.
+// Open-loop counterpart of `pay_clamps_loyalty_to_max`.
+#[test]
+fun pay_with_coin_clamps_loyalty_to_max() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, mut test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.share();
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        // Tighten the mint cap to 30. Default rate is 0.1 LOY per unit, so 500
+        // stable would otherwise mint 50 LOYALTY. The cap clamps it to 30.
+        let (cap_currency, cap_treasury) = test_setup::new_test_currency(1);
+        let tight_cfg = config::new<TEST_USD>(
+            &cap_currency,
+            PAYOUT,
+            config::loyalty_float_scaling() / 10,
+            30,
+            600_000,
+            600_000,
+        );
+        merchant.update_config(&merchant_auth, tight_cfg);
+        destroy(cap_currency);
+        destroy(cap_treasury);
+
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+        let invoice_id = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+        // Snapshotted loyalty already reflects the clamp.
+        assert_eq!(merchant.invoice(invoice_id).loyalty(), 30);
+
+        scenario.next_tx(CUSTOMER);
+        let customer_account_shared = scenario.take_shared_by_id<Account>(customer_account_id);
+        let payment_coin = coin::mint(&mut test_usd_cap, 500, scenario.ctx());
+
+        merchant.pay_with_coin<TEST_USD>(
+            invoice_id,
+            payment_coin,
+            &customer_account_shared,
+            &test_clock,
+        );
+
+        // Receipt confirms only the cap was minted.
+        let r = merchant.invoice_receipt(invoice_id);
+        assert_eq!(receipt::loyalty(r), 30);
+
+        scenario.next_tx(PAYOUT);
+        let received = scenario.take_from_address<coin::Coin<TEST_USD>>(PAYOUT);
         destroy(received);
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -1581,6 +1792,285 @@ fun new_zero_quantity_aborts() {
             &cashier_auth,
             vector[variant_id],
             vector[0],
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EOrderRefTooLong)]
+fun create_invoice_order_ref_too_long_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // Cap is 256 bytes; build a 257-byte `order_ref` to trip the bound.
+        let mut order_ref = vector[];
+        let mut i: u64 = 0;
+        while (i < 257) {
+            order_ref.push_back(b"x"[0]);
+            i = i + 1;
+        };
+
+        let _ = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            order_ref,
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EItemsTooMany)]
+fun create_invoice_too_many_items_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // Cap is 256 items; build 257-entry parallel vectors to trip the bound.
+        let mut ids = vector[];
+        let mut qtys = vector[];
+        let mut i: u64 = 0;
+        while (i < 257) {
+            ids.push_back(variant_id);
+            qtys.push_back(1);
+            i = i + 1;
+        };
+
+        let _ = merchant.create_invoice(
+            &cashier_auth,
+            ids,
+            qtys,
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Unreachable cleanup.
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+// Pins branch: create_invoice / given items.length() == MAX_INVOICE_ITEMS / it returns ok.
+// Paired with `create_invoice_too_many_items_aborts` — confirms the cap is `<=` not `<`.
+#[test]
+fun create_invoice_at_items_cap_succeeds() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // Exactly 256 items — boundary value (should pass).
+        let mut ids = vector[];
+        let mut qtys = vector[];
+        let mut i: u64 = 0;
+        while (i < 256) {
+            ids.push_back(variant_id);
+            qtys.push_back(1);
+            i = i + 1;
+        };
+
+        let invoice_id = merchant.create_invoice(
+            &cashier_auth,
+            ids,
+            qtys,
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+        assert_eq!(merchant.invoice(invoice_id).items().length(), 256);
+
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+// Pins branch: create_invoice / given order_ref.length() == MAX_ORDER_REF_LEN / it returns ok.
+// Paired with `create_invoice_order_ref_too_long_aborts` — confirms `<=` direction.
+#[test]
+fun create_invoice_at_order_ref_cap_succeeds() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+
+        // Exactly 256-byte order_ref — boundary value.
+        let mut order_ref = vector[];
+        let mut i: u64 = 0;
+        while (i < 256) {
+            order_ref.push_back(b"x"[0]);
+            i = i + 1;
+        };
+
+        let invoice_id = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            order_ref,
+            &test_clock,
+            scenario.ctx(),
+        );
+        assert_eq!(merchant.invoice(invoice_id).order_ref().length(), 256);
+
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+// Pins branch: merchant::invoice_receipt / given receipt missing / it aborts EReceiptNotFound.
+// Pairs with `prune_invoice_receipts_unknown_id_aborts` — locks the view-fn contract
+// independently of the prune path.
+#[test, expected_failure(abort_code = merchant::EReceiptNotFound)]
+fun invoice_receipt_unknown_id_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        scenario.next_tx(ADMIN);
+        let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+
+        let phantom = object::id_from_address(@0xDEADBEEF);
+        let _r = merchant.invoice_receipt(phantom);
+
+        // Unreachable.
+        test_scenario::return_shared(merchant);
+        destroy(test_usd_cap);
+    });
+}
+
+// Pins branch: receipt::compute_total / given items overflow u64 / it aborts EAmountOverflow.
+// Triggered via `create_invoice` with a variant priced at u64::MAX and quantity = 2,
+// whose product overflows the `checked_mul` inside compute_total.
+#[test, expected_failure(abort_code = receipt::EAmountOverflow)]
+fun compute_total_overflow_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            18_446_744_073_709_551_615, // u64::MAX
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let test_clock = clock::create_for_testing(scenario.ctx());
+        // 2 × u64::MAX overflows u64 in the checked_mul inside compute_total.
+        let _ = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[2],
             b"order-001",
             &test_clock,
             scenario.ctx(),

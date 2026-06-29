@@ -2,7 +2,7 @@
 /// production `Merchant`'s `accepted_payment_type` to `STABLECOIN_MOCK`. The supply is freely
 /// mintable (`faucet` / `faucet_coin`) and transfers are freely approvable (the permissive
 /// `TransferApproval`), so settling a real invoice in this currency would be worthless.
-/// Production deployments instantiate `payment::pay<S>` with a real PAS-issued stablecoin.
+/// Production deployments instantiate `payment::pay<C>` with a real PAS-issued stablecoin.
 ///
 /// Mock PAS-managed stablecoin for dev/testnet. The customer holds `Balance<STABLECOIN_MOCK>`
 /// in their PAS `Account` and transfers it via PAS `send_funds`. This mock just lets the

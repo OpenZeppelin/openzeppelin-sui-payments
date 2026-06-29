@@ -32,6 +32,12 @@ public struct Voucher has store {
     /// Expiry timestamp (ms). Past this point `redeem` aborts and `cancel`
     /// becomes permissionless.
     expires_at_ms: u64,
+    /// 32-byte blake2b256 commitment to a customer-chosen secret preimage.
+    /// `merchant::redeem` requires the matching preimage - proves the
+    /// redeemer holds the secret the customer revealed at the till and
+    /// prevents `CashierRole` alone from sweeping vouchers observed in
+    /// public `VoucherCreated` events.
+    redeem_hash: vector<u8>,
 }
 
 // === Package Functions ===
@@ -43,16 +49,20 @@ public(package) fun new(
     items: vector<Item>,
     funds: Balance<LOYALTY>,
     expires_at_ms: u64,
+    redeem_hash: vector<u8>,
 ): Voucher {
-    Voucher { customer, items, funds, expires_at_ms }
+    Voucher { customer, items, funds, expires_at_ms, redeem_hash }
 }
 
 /// Consume the voucher and return its fields (including the locked balance).
 /// `Voucher` has no `drop`, so `merchant` destructures it through this on
-/// `redeem` / `cancel`.
-public(package) fun unpack(self: Voucher): (address, vector<Item>, Balance<LOYALTY>, u64) {
-    let Voucher { customer, items, funds, expires_at_ms } = self;
-    (customer, items, funds, expires_at_ms)
+/// `redeem` / `cancel`. Tuple order: `customer, items, funds, expires_at_ms,
+/// redeem_hash`.
+public(package) fun unpack(
+    self: Voucher,
+): (address, vector<Item>, Balance<LOYALTY>, u64, vector<u8>) {
+    let Voucher { customer, items, funds, expires_at_ms, redeem_hash } = self;
+    (customer, items, funds, expires_at_ms, redeem_hash)
 }
 
 // === View Functions ===
@@ -68,3 +78,6 @@ public fun amount(self: &Voucher): u64 { self.funds.value() }
 
 /// Expiry timestamp (ms).
 public fun expires_at_ms(self: &Voucher): u64 { self.expires_at_ms }
+
+/// blake2b256 commitment the customer chose at issuance.
+public fun redeem_hash(self: &Voucher): &vector<u8> { &self.redeem_hash }

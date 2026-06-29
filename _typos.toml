@@ -2,3 +2,11 @@
 # Vendored packages is a submodule and not part of this repo's source — CI
 # doesn't checkout submodules, so skip it locally too for parity.
 extend-exclude = ["vendor/"]
+
+# Domain vocabulary that the default `typos` dictionary mistakes for misspellings.
+# `tto` / `TTO`: Sui's canonical abbreviation for "transfer-to-object". Used in
+# the bootstrap script to talk about the unfinalized `Currency<T>` parked under
+# the system `CoinRegistry` (@0xc) via `transfer::transfer`.
+[default.extend-words]
+tto = "tto"
+TTO = "TTO"

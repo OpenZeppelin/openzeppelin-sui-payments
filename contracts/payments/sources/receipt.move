@@ -197,10 +197,9 @@ public(package) fun new_redemption(
     }
 }
 
-/// Destroy a receipt, reclaiming its storage. The `Payment` / `Redemption`
-/// payload is `drop`, so the value is consumed here by destructure. Used by the
-/// merchant's receipt-prune path; the canonical record lives on as the
-/// originating `InvoicePaid` / `VoucherRedeemed` event.
+/// Destroy a receipt, reclaiming its storage. Used by the merchant's prune
+/// path; the `InvoicePaid` / `VoucherRedeemed` event keeps totals + metadata,
+/// but the `items` line-item breakdown is lost.
 public(package) fun destroy<T: store + drop>(receipt: Receipt<T>) {
     let Receipt { customer: _, items: _, amount: _, timestamp_ms: _, data: _ } = receipt;
 }

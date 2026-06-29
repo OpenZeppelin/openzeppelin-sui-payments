@@ -14,8 +14,8 @@ module openzeppelin_payments::loyalty;
 use pas::account::Account;
 use pas::namespace::Namespace;
 use pas::policy::{Self, PolicyCap};
-use sui::balance::Balance;
-use sui::coin::TreasuryCap;
+use sui::balance::{Self, Balance};
+use sui::coin::{Self, TreasuryCap};
 use sui::coin_registry;
 
 // === Structs ===
@@ -29,9 +29,10 @@ public struct LOYALTY has drop {}
 /// another struct (the Merchant) before the transaction ends. No `key`, so it
 /// cannot exist as a top-level on-chain object.
 public struct Loyalty has store {
-    /// Mint/burn authority for `LOYALTY`. Mutably accessed only via
-    /// `treasury_cap_mut` (package-private) to mint on `merchant::pay` and burn
-    /// on `merchant::redeem`.
+    /// Mint/burn authority for `LOYALTY`. Mutably accessed only through the
+    /// package-private `mint_to` / `decrease_supply` methods on `Loyalty`
+    /// itself - the field, the cap, and `&mut TreasuryCap` are never reachable
+    /// outside this module.
     treasury_cap: TreasuryCap<LOYALTY>,
     /// PAS authority over `Policy<Balance<LOYALTY>>`. Held but never exposed
     /// mutably - the policy is locked once registered in `create`.
@@ -114,39 +115,55 @@ public fun create(namespace: &mut Namespace, mut treasury_cap: TreasuryCap<LOYAL
 
 // === View Functions ===
 
-/// Reference to the underlying `TreasuryCap<LOYALTY>`.
-public fun treasury_cap(self: &Loyalty): &TreasuryCap<LOYALTY> { &self.treasury_cap }
+/// ID of the embedded `TreasuryCap<LOYALTY>` - exposed for off-chain
+/// indexing only. The cap itself is never borrowed publicly: leaking
+/// `&TreasuryCap` would let outsiders read mint metadata they don't need.
+public fun treasury_cap_id(self: &Loyalty): ID { object::id(&self.treasury_cap) }
 
-/// Reference to the underlying `PolicyCap<Balance<LOYALTY>>`.
-public fun policy_cap(self: &Loyalty): &PolicyCap<Balance<LOYALTY>> { &self.policy_cap }
+/// ID of the embedded `PolicyCap<Balance<LOYALTY>>` - exposed for off-chain
+/// indexing only. The cap itself is NEVER borrowed publicly because PAS
+/// uses `&PolicyCap` as authorization: leaking it lets any caller mutate
+/// the shared `Policy<Balance<LOYALTY>>` (re-key approvals, break
+/// soulbound semantics, brick redemption).
+public fun policy_cap_id(self: &Loyalty): ID { object::id(&self.policy_cap) }
 
 /// ID of the shared `Policy<Balance<LOYALTY>>` created in `create`.
 public fun policy_id(self: &Loyalty): ID { self.policy_id }
 
-// === Package Functions ===
-
-/// Mutable accessor for the treasury cap. Used by `merchant::pay` (mint) and
-/// `merchant::redeem` (burn), which reach it through the merchant's `loyalty`
-/// field.
-public(package) fun treasury_cap_mut(self: &mut Loyalty): &mut TreasuryCap<LOYALTY> {
-    &mut self.treasury_cap
+/// Total `LOYALTY` supply currently minted (mints minus burns). Reads
+/// through the cap by `&` so it can't be used to authorize mint/burn.
+public fun supply(self: &Loyalty): u64 {
+    coin::total_supply(&self.treasury_cap)
 }
 
-/// Mint LOYALTY into the customer's PAS Account. Called by `merchant::pay`.
+// === Package Functions ===
+
+/// Mint LOYALTY into a customer's PAS Account. Called by `merchant::pay`
+/// and `merchant::pay_with_coin`. Borrows the TreasuryCap mutably through
+/// `&mut Loyalty` rather than handing it out, so the cap never escapes
+/// this module.
 ///
-/// `deposit_balance` is unrestricted in PAS (no `Auth` needed), so the customer
-/// doesn't have to sign for the loyalty-side leg - only for their stablecoin spend.
+/// `deposit_balance` is unrestricted in PAS (no `Auth` needed), so the
+/// customer doesn't have to sign for the loyalty-side leg - only for their
+/// stablecoin spend.
 ///
 /// #### Parameters
-/// - `cap`: The merchant's `TreasuryCap<LOYALTY>` (mint authority).
+/// - `self`: The merchant's `Loyalty` bundle, mutated to mint from.
 /// - `customer_account`: The payer's PAS account to deposit the minted balance into.
 /// - `amount`: LOYALTY units to mint.
-public(package) fun mint_to(
-    cap: &mut TreasuryCap<LOYALTY>,
-    customer_account: &Account,
-    amount: u64,
-) {
-    customer_account.deposit_balance(cap.mint_balance(amount));
+public(package) fun mint_to(self: &mut Loyalty, customer_account: &Account, amount: u64) {
+    customer_account.deposit_balance(self.treasury_cap.mint_balance(amount));
+}
+
+/// Burn a `Balance<LOYALTY>` against the embedded TreasuryCap, decreasing
+/// total supply. Called by `merchant::redeem` to permanently destroy the
+/// LOY locked inside a voucher.
+///
+/// #### Parameters
+/// - `self`: The merchant's `Loyalty` bundle, mutated to burn through.
+/// - `funds`: The balance to burn; consumed by value.
+public(package) fun decrease_supply(self: &mut Loyalty, funds: Balance<LOYALTY>) {
+    balance::decrease_supply(coin::supply_mut(&mut self.treasury_cap), funds);
 }
 
 /// Witness factory. Only `redemption::create` calls this.

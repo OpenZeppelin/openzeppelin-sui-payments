@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useCurrentAccount } from "@mysten/dapp-kit";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Minus, Plus, Gift, RotateCcw, ScanLine } from "lucide-react";
 import { toast } from "sonner";
@@ -12,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { qk, useBalances, useListings, useMyOpenVouchers } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
+import { useSessionAddress } from "@/hooks/use-session-address";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
 import { buildAccountNewAuth, buildUnlockBalance } from "@/lib/move/pas";
@@ -36,11 +36,11 @@ interface CartLine {
 }
 
 export default function RewardsPage() {
-  const account = useCurrentAccount();
-  const customerPas = usePasAccount(account?.address);
+  const address = useSessionAddress();
+  const customerPas = usePasAccount(address);
   const balances = useBalances(customerPas.data ?? null, [deployment.loyaltyType]);
   const { data: listings = [], isLoading } = useListings();
-  const openVouchers = useMyOpenVouchers(account?.address);
+  const openVouchers = useMyOpenVouchers(address);
   const [cart, setCart] = useState<Map<string, CartLine>>(new Map());
   // `created` carries the preimage in-memory so the just-created dialog never
   // depends on a localStorage round-trip — even if persistence later fails,

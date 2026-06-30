@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useCurrentAccount } from "@mysten/dapp-kit";
 import { toast } from "sonner";
 
 import { QrScanner } from "@/components/shared/qr-scanner";
@@ -11,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { qk, useInvoice } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
+import { useSessionAddress } from "@/hooks/use-session-address";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
 import {
@@ -24,11 +24,11 @@ import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
 
 export default function CustomerPayPage() {
   const router = useRouter();
-  const account = useCurrentAccount();
+  const address = useSessionAddress();
   const [invoiceId, setInvoiceId] = useState<string | null>(null);
 
   const invoice = useInvoice(invoiceId);
-  const customerPas = usePasAccount(account?.address);
+  const customerPas = usePasAccount(address);
   const merchantPas = usePasAccount(invoice.data?.payoutAddress ?? null);
 
   const pay = useSponsoredMutation<{
@@ -88,9 +88,9 @@ export default function CustomerPayPage() {
   // message rather than letting the chain produce a cryptic error.
   const isSelfPayment =
     Boolean(
-      account?.address &&
+      address &&
         invoice.data &&
-        account.address.toLowerCase() === invoice.data.payoutAddress.toLowerCase(),
+        address.toLowerCase() === invoice.data.payoutAddress.toLowerCase(),
     );
 
   return (

@@ -7,33 +7,38 @@ import {
   useSuiClient,
 } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
-import { toBase64 } from "@mysten/sui/utils";
+import { fromBase64, toBase64 } from "@mysten/sui/utils";
+import { getZkLoginSignature } from "@mysten/sui/zklogin";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import { getZkLoginSessionSnapshot } from "@/hooks/use-zklogin-session";
 import { NETWORK } from "@/lib/sui-client";
+import { ephemeralFromSecret } from "@/lib/zklogin/session";
 
 interface SponsorOptions {
   /** Optional query keys to invalidate after a successful tx. */
   invalidate?: ReadonlyArray<ReadonlyArray<unknown>>;
-  /** Optional gas budget (MIST). Honored only on the non-sponsored path; the
-   *  sponsor route sets its own gas budget on the wrapped tx. */
+  /** Optional gas budget (MIST). Honored only on the wallet-signs-and-executes
+   *  path; the sponsor route sets its own gas budget on the wrapped tx. */
   gasBudget?: bigint;
   /** Optional success toast string; pass `null` to suppress. */
   successMessage?: string | null;
 }
 
 /**
- * useMutation wrapper that:
- *   1. Lets callers build a `Transaction` synchronously (via the `build` arg).
- *   2. Routes the tx through one of two paths depending on NETWORK:
- *      - **localnet**: build a `TransactionKind`, POST to `/api/sponsor` for
- *        a sponsor-signed gas leg, ask the wallet to co-sign the same bytes
- *        via `useSignTransaction`, submit `[userSig, sponsorSig]` directly.
- *      - **testnet/mainnet**: `useSignAndExecuteTransaction` — when the wallet
- *        is an Enoki zkLogin wallet, Enoki sponsors automatically; otherwise
- *        the user's wallet pays gas.
- *   3. Toasts success/failure (sonner) + invalidates query keys.
+ * useMutation wrapper that picks one of three tx submission paths, depending
+ * on which identity is connected and which network we target:
+ *
+ *  A. **zkLogin session active** — build a `TransactionKind`, POST to
+ *     `/api/sponsor` (localnet gas station), sign the returned bytes with the
+ *     session's ephemeral key + Groth16 proof, submit `[zkSig, sponsorSig]`.
+ *     No wallet UI at any point.
+ *  B. **localnet, no zkLogin (Slush)** — same sponsor route, but the wallet's
+ *     `useSignTransaction` co-signs instead of a zkLogin signature.
+ *  C. **testnet/mainnet, wallet only** — plain `useSignAndExecuteTransaction`.
+ *     When the connected wallet is Enoki-registered, Enoki auto-sponsors;
+ *     otherwise the user's wallet pays gas.
  */
 export function useSponsoredMutation<TArgs>(
   build: (tx: Transaction, args: TArgs) => void,
@@ -47,16 +52,20 @@ export function useSponsoredMutation<TArgs>(
 
   return useMutation({
     mutationFn: async (args: TArgs) => {
-      if (!account) throw new Error("Connect a wallet first");
+      const zk = getZkLoginSessionSnapshot();
+      const senderAddress = zk?.address ?? account?.address;
+      if (!senderAddress) {
+        throw new Error("Connect a wallet or log in with Google first");
+      }
 
       const tx = new Transaction();
       build(tx, args);
 
+      const useSponsor = zk !== null || NETWORK === "localnet";
       let digest: string;
-      if (NETWORK === "localnet") {
-        // Build the TransactionKind (no sender/gas/expiration) and hand it off
-        // to the local gas station for sponsorship.
-        tx.setSenderIfNotSet(account.address);
+
+      if (useSponsor) {
+        tx.setSenderIfNotSet(senderAddress);
         const kindBytes = await tx.build({ client, onlyTransactionKind: true });
 
         const resp = await fetch("/api/sponsor", {
@@ -64,7 +73,7 @@ export function useSponsoredMutation<TArgs>(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             txKindBytes: toBase64(kindBytes),
-            sender: account.address,
+            sender: senderAddress,
           }),
         });
         if (!resp.ok) {
@@ -76,10 +85,24 @@ export function useSponsoredMutation<TArgs>(
           sponsorSignature: string;
         };
 
-        // Wallet co-signs the exact bytes the sponsor signed. dapp-kit's
-        // `useSignTransaction` accepts a base64 string for already-built tx
-        // bytes; `executeTransactionBlock` takes the same.
-        const { signature: userSignature } = await signOnly({ transaction: bytes });
+        let userSignature: string;
+        if (zk) {
+          // Sign the sponsor-returned bytes with the ephemeral key, then wrap
+          // in a zkLoginSignature carrying the stored proof.
+          const ephemeral = ephemeralFromSecret(zk.ephemeralPrivateKey);
+          const { signature: ephemeralSig } = await ephemeral.signTransaction(
+            fromBase64(bytes),
+          );
+          userSignature = getZkLoginSignature({
+            inputs: { ...zk.proof, addressSeed: zk.addressSeed },
+            maxEpoch: zk.maxEpoch,
+            userSignature: ephemeralSig,
+          });
+        } else {
+          // Slush (or any wallet-standard wallet) co-signs the same bytes.
+          const { signature } = await signOnly({ transaction: bytes });
+          userSignature = signature;
+        }
 
         const submitted = await client.executeTransactionBlock({
           transactionBlock: bytes,
@@ -87,21 +110,19 @@ export function useSponsoredMutation<TArgs>(
         });
         digest = submitted.digest;
       } else {
-        // Shared-chain path: Enoki wallet sponsors automatically; non-Enoki
-        // wallets pay their own gas. Either way the dapp-kit hook covers it.
+        // Shared-chain wallet path: Enoki-registered wallet sponsors; other
+        // wallets pay gas from their own SUI. Either way dapp-kit handles it.
         if (opts.gasBudget) tx.setGasBudget(opts.gasBudget);
         const result = await signAndExecute({ transaction: tx });
         digest = result.digest;
       }
 
-      // Make sure the wallet returns to a consistent view of chain state.
+      // Consistent chain-state view before we invalidate.
       await client.waitForTransaction({ digest });
-      // Resolve effects + status (both code paths above return only the digest).
       const full = await client.getTransactionBlock({
         digest,
         // `showEvents` is required by callers that pluck a created object's id
-        // from the emitted `InvoiceCreated`/`VoucherCreated` event (rather than
-        // re-querying the table).
+        // from an `InvoiceCreated`/`VoucherCreated` event.
         options: { showEffects: true, showEvents: true },
       });
       if (full.effects?.status?.status !== "success") {

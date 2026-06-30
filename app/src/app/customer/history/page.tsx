@@ -1,19 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { useCurrentAccount } from "@mysten/dapp-kit";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useReceipts } from "@/hooks/queries";
+import { useSessionAddress } from "@/hooks/use-session-address";
 import { formatAmount, shortAddr } from "@/lib/utils";
 
 type Tab = "payments" | "redemptions";
 
 export default function HistoryPage() {
-  const account = useCurrentAccount();
-  const receipts = useReceipts(account?.address);
+  const address = useSessionAddress();
+  const receipts = useReceipts(address);
   const [tab, setTab] = useState<Tab>("payments");
 
   return (
@@ -41,9 +41,9 @@ export default function HistoryPage() {
         </Button>
       </div>
 
-      {!account ? (
+      {!address ? (
         <p className="text-sm text-[color:var(--color-muted-foreground)]">
-          Connect a wallet to view your history.
+          Log in to view your history.
         </p>
       ) : receipts.isLoading ? (
         <p className="text-sm text-[color:var(--color-muted-foreground)]">Loading…</p>

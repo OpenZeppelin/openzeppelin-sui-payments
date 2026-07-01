@@ -265,8 +265,12 @@ async function discoverPasContextFromMVR(
   client: SuiClient,
   network: string,
 ): Promise<{ packageId: string; namespaceId: string }> {
-  const cachedPkg = process.env.NEXT_PUBLIC_PAS_PACKAGE_ID;
-  const cachedNs = process.env.NEXT_PUBLIC_NAMESPACE_ID;
+  // tsx doesn't auto-load `.env.local` — fall back to reading the file so a
+  // dev who pinned these values there doesn't need to shell-export them too.
+  const cachedPkg =
+    process.env.NEXT_PUBLIC_PAS_PACKAGE_ID ?? readEnvFile("NEXT_PUBLIC_PAS_PACKAGE_ID");
+  const cachedNs =
+    process.env.NEXT_PUBLIC_NAMESPACE_ID ?? readEnvFile("NEXT_PUBLIC_NAMESPACE_ID");
   if (cachedPkg && cachedNs) {
     console.log(`  using cached pas context (pkg ${cachedPkg.slice(0, 10)}…)`);
     return { packageId: cachedPkg, namespaceId: cachedNs };
@@ -277,8 +281,8 @@ async function discoverPasContextFromMVR(
     encoding: "utf8",
     env: { ...process.env, MVR_FALLBACK_NETWORK: network },
   });
-  const mvr = JSON.parse(out) as { package_address: string };
-  const packageId = mvr.package_address;
+  const mvr = JSON.parse(out) as { Resolve: { package_address: string } };
+  const packageId = mvr.Resolve.package_address;
 
   const pkgObj = await client.getObject({
     id: packageId,
@@ -303,7 +307,8 @@ function resolveMVR(name: string, network: string): string {
     encoding: "utf8",
     env: { ...process.env, MVR_FALLBACK_NETWORK: network },
   });
-  return (JSON.parse(out) as { package_address: string }).package_address;
+  return (JSON.parse(out) as { Resolve: { package_address: string } }).Resolve
+    .package_address;
 }
 
 function readPubfilePackageId(pubfileAbsPath: string, sourceSuffix: string): string {
@@ -770,7 +775,8 @@ async function main() {
     // We can't easily discover it from the publish tx (Templates is created by
     // a separate `templates::setup` call, not by pas::init), so for now we
     // expect it to be supplied via env. TODO: derive via derived_object math.
-    templatesId = process.env.NEXT_PUBLIC_TEMPLATES_ID;
+    templatesId =
+      process.env.NEXT_PUBLIC_TEMPLATES_ID ?? readEnvFile("NEXT_PUBLIC_TEMPLATES_ID");
     if (!templatesId) {
       throw new Error(
         "NEXT_PUBLIC_TEMPLATES_ID is required on testnet/mainnet — set it to the " +
@@ -796,6 +802,35 @@ async function main() {
 
     stable = publishPackage("contracts/stablecoin-mock");
     if (!stable.packageId) throw new Error("stablecoin-mock publish returned no packageId");
+
+    // Merchant payout PAS account. On localnet this is created inside
+    // `setupPasOnFreshChain`; on testnet/mainnet we do it here so the
+    // customer-side `pay` flow can take the payout `&Account` without an
+    // extra manual init hop. Tolerant of "already exists" — the derived
+    // address is stable per (namespace, payout_address), so re-bootstraps
+    // with the same deployer land on the same account.
+    console.log(`\n→ creating payout PAS account for ${deployer}`);
+    try {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${pasPackageId}::account::create_and_share`,
+        arguments: [tx.object(namespaceId), tx.pure.address(deployer)],
+      });
+      tx.setGasBudget(50_000_000n);
+      const result = await client.signAndExecuteTransaction({
+        transaction: tx,
+        signer: deployerKeypair(deployer),
+        options: { showEffects: true },
+      });
+      if (result.effects?.status?.status === "success") {
+        await client.waitForTransaction({ digest: result.digest });
+        console.log(`  payout account created (${result.digest})`);
+      } else {
+        console.log(`  payout account already exists (skipping): ${result.effects?.status?.error}`);
+      }
+    } catch (err) {
+      console.log(`  payout account creation skipped: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   console.log(`  pas package    ${pasPackageId}`);

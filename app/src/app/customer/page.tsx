@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Coins, Gift, History, QrCode, Wallet } from "lucide-react";
 import { toast } from "sonner";
@@ -9,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useBalances } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
-import { useSessionAddress } from "@/hooks/use-session-address";
 import { deployment } from "@/lib/deployment";
 import { formatAmount, shortAddr } from "@/lib/utils";
 
@@ -41,7 +41,7 @@ const cards = [
 ];
 
 export default function CustomerPage() {
-  const address = useSessionAddress();
+  const address = useCurrentAccount()?.address ?? null;
   const pas = usePasAccount(address);
   const balances = useBalances(pas.data ?? null, [
     deployment.stablecoinType,

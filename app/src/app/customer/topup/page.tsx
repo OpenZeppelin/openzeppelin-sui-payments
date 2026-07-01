@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -11,13 +12,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { qk } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
-import { useSessionAddress } from "@/hooks/use-session-address";
 import { STABLECOIN_DECIMALS, formatAmount, shortAddr, toBaseUnits } from "@/lib/utils";
 
 const QUICK_AMOUNTS = ["10", "50", "100"];
 
 export default function TopupPage() {
-  const address = useSessionAddress();
+  const address = useCurrentAccount()?.address ?? null;
   const pas = usePasAccount(address);
   const queryClient = useQueryClient();
   const router = useRouter();

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 import { toast } from "sonner";
 
 import { QrScanner } from "@/components/shared/qr-scanner";
@@ -10,7 +11,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { qk, useInvoice } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
-import { useSessionAddress } from "@/hooks/use-session-address";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
 import {
@@ -24,7 +24,7 @@ import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
 
 export default function CustomerPayPage() {
   const router = useRouter();
-  const address = useSessionAddress();
+  const address = useCurrentAccount()?.address ?? null;
   const [invoiceId, setInvoiceId] = useState<string | null>(null);
 
   const invoice = useInvoice(invoiceId);

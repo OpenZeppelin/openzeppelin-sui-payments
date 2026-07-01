@@ -1,18 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useReceipts } from "@/hooks/queries";
-import { useSessionAddress } from "@/hooks/use-session-address";
 import { formatAmount, shortAddr } from "@/lib/utils";
 
 type Tab = "payments" | "redemptions";
 
 export default function HistoryPage() {
-  const address = useSessionAddress();
+  const address = useCurrentAccount()?.address ?? null;
   const receipts = useReceipts(address);
   const [tab, setTab] = useState<Tab>("payments");
 

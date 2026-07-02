@@ -41,8 +41,8 @@ const cards = [
 ];
 
 export default function CustomerPage() {
-  const account = useCurrentAccount();
-  const pas = usePasAccount(account?.address);
+  const address = useCurrentAccount()?.address ?? null;
+  const pas = usePasAccount(address);
   const balances = useBalances(pas.data ?? null, [
     deployment.stablecoinType,
     deployment.loyaltyType,
@@ -68,7 +68,7 @@ export default function CustomerPage() {
     onSuccess: async () => {
       toast.success("Account initialized");
       await queryClient.invalidateQueries({
-        queryKey: ["pas-account", account?.address ?? ""],
+        queryKey: ["pas-account", address ?? ""],
       });
     },
     onError: (err) => {
@@ -79,7 +79,7 @@ export default function CustomerPage() {
   const stable = balances.data?.[deployment.stablecoinType] ?? 0n;
   const loyalty = balances.data?.[deployment.loyaltyType] ?? 0n;
 
-  const connected = Boolean(account);
+  const connected = Boolean(address);
   const accountExists = pas.data !== null && pas.data !== undefined;
   const ready = connected && accountExists;
 
@@ -96,7 +96,7 @@ export default function CustomerPage() {
         <CardHeader>
           <CardDescription>Your balance</CardDescription>
           <CardTitle className="font-mono text-sm">
-            {account ? shortAddr(account.address, 8) : "Not connected"}
+            {address ? shortAddr(address, 8) : "Not connected"}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -117,7 +117,7 @@ export default function CustomerPage() {
               </p>
               <Button
                 onClick={() =>
-                  initAccount.mutate(account!.address, {
+                  initAccount.mutate(address!, {
                     onSuccess: () => pas.refetch(),
                   })
                 }

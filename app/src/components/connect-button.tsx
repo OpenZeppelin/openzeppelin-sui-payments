@@ -5,12 +5,11 @@ import { ConnectButton as DappKitConnectButton, useCurrentAccount } from "@myste
 import { shortAddr } from "@/lib/utils";
 
 /**
- * Wraps dapp-kit's `ConnectButton`. With Enoki wallets registered (see
- * `providers.tsx`), "Login with Google" appears as a wallet entry in the
- * standard modal — same UI affordance as connecting any other Sui wallet.
- *
- * When already connected, shows a short-form address. dapp-kit handles the
- * disconnect modal itself on click.
+ * Header login control. Delegates to dapp-kit's ConnectButton, which shows
+ * every registered wallet — installed extension wallets (Slush, Suiet) plus
+ * the Enoki-registered "Sign in with Google" entry (see `registerEnokiWallets`
+ * in `providers.tsx`). When already connected, shows a short-form address;
+ * dapp-kit handles the disconnect modal on click.
  */
 export function ConnectButton() {
   const account = useCurrentAccount();

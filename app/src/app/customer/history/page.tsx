@@ -12,8 +12,8 @@ import { formatAmount, shortAddr } from "@/lib/utils";
 type Tab = "payments" | "redemptions";
 
 export default function HistoryPage() {
-  const account = useCurrentAccount();
-  const receipts = useReceipts(account?.address);
+  const address = useCurrentAccount()?.address ?? null;
+  const receipts = useReceipts(address);
   const [tab, setTab] = useState<Tab>("payments");
 
   return (
@@ -41,9 +41,9 @@ export default function HistoryPage() {
         </Button>
       </div>
 
-      {!account ? (
+      {!address ? (
         <p className="text-sm text-[color:var(--color-muted-foreground)]">
-          Connect a wallet to view your history.
+          Log in to view your history.
         </p>
       ) : receipts.isLoading ? (
         <p className="text-sm text-[color:var(--color-muted-foreground)]">Loading…</p>

@@ -36,11 +36,11 @@ interface CartLine {
 }
 
 export default function RewardsPage() {
-  const account = useCurrentAccount();
-  const customerPas = usePasAccount(account?.address);
+  const address = useCurrentAccount()?.address ?? null;
+  const customerPas = usePasAccount(address);
   const balances = useBalances(customerPas.data ?? null, [deployment.loyaltyType]);
   const { data: listings = [], isLoading } = useListings();
-  const openVouchers = useMyOpenVouchers(account?.address);
+  const openVouchers = useMyOpenVouchers(address);
   const [cart, setCart] = useState<Map<string, CartLine>>(new Map());
   // `created` carries the preimage in-memory so the just-created dialog never
   // depends on a localStorage round-trip — even if persistence later fails,

@@ -41,6 +41,12 @@ function EnokiWalletRegistration() {
           clientId:
             process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ??
             "PLACEHOLDER_GOOGLE_CLIENT_ID",
+          // Pin the OAuth redirect to a single stable URL so Google's OAuth
+          // client only needs one entry in Authorized redirect URIs. Without
+          // this, Enoki defaults to the current page URL — meaning every
+          // page a user might click Login from would need its own URI in
+          // Google Cloud Console.
+          redirectUrl: `${window.location.origin}/auth/callback`,
         },
       },
     });

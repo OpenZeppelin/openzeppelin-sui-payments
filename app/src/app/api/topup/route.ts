@@ -30,22 +30,23 @@ type TopupResponseBody = {
  * PAS Account. Backed by `stablecoin_mock::faucet`, which requires the holder
  * of `TreasuryCap<STABLECOIN_MOCK>` — owned by the deployer after bootstrap.
  *
- * Localnet-only. There is no rate limit and no auth beyond the deployer key
- * sitting in `.env.local`, so on any shared chain this would be an
- * unauthenticated mint endpoint — the route hard-aborts unless `NETWORK ===
- * "localnet"`. Bootstrap is also gated to only persist `DEPLOYER_PRIVATE_KEY`
- * on localnet; this route check is defense-in-depth against a copied env.
+ * Dev / testnet only. Since this endpoint has no rate limit and no auth
+ * beyond the deployer key sitting in `.env.local`, it's an unauthenticated
+ * mint endpoint. That's fine for localnet + a mock-stablecoin testnet demo
+ * (fake asset, deliberate faucet UX), but a real mainnet deployment must NOT
+ * ship this route — the template pairs with a real stablecoin there and the
+ * deployer wouldn't hold that TreasuryCap anyway, but the guard is
+ * defense-in-depth.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  // Kill switch: refuse to serve outside localnet regardless of env state.
-  if (NETWORK !== "localnet") {
+  // Kill switch: refuse to serve on mainnet.
+  if (NETWORK === "mainnet") {
     return NextResponse.json(
       {
         error:
-          "/api/topup is a dev-only faucet and is disabled outside localnet. " +
-          "On testnet/mainnet, mint via the underlying stablecoin's real faucet " +
-          "(or, for stablecoin-mock specifically, sign a `stablecoin_mock::faucet` " +
-          "PTB with the deployer key directly).",
+          "/api/topup is a mock-stablecoin faucet and is disabled on mainnet. " +
+          "Mainnet deployments pair with a real stablecoin; users acquire it via " +
+          "that stablecoin's own on/off-ramps.",
       },
       { status: 410 },
     );

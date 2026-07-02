@@ -17,8 +17,8 @@ import { STABLECOIN_DECIMALS, formatAmount, shortAddr, toBaseUnits } from "@/lib
 const QUICK_AMOUNTS = ["10", "50", "100"];
 
 export default function TopupPage() {
-  const account = useCurrentAccount();
-  const pas = usePasAccount(account?.address);
+  const address = useCurrentAccount()?.address ?? null;
+  const pas = usePasAccount(address);
   const queryClient = useQueryClient();
   const router = useRouter();
 

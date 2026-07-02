@@ -24,11 +24,11 @@ import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
 
 export default function CustomerPayPage() {
   const router = useRouter();
-  const account = useCurrentAccount();
+  const address = useCurrentAccount()?.address ?? null;
   const [invoiceId, setInvoiceId] = useState<string | null>(null);
 
   const invoice = useInvoice(invoiceId);
-  const customerPas = usePasAccount(account?.address);
+  const customerPas = usePasAccount(address);
   const merchantPas = usePasAccount(invoice.data?.payoutAddress ?? null);
 
   const pay = useSponsoredMutation<{
@@ -88,9 +88,9 @@ export default function CustomerPayPage() {
   // message rather than letting the chain produce a cryptic error.
   const isSelfPayment =
     Boolean(
-      account?.address &&
+      address &&
         invoice.data &&
-        account.address.toLowerCase() === invoice.data.payoutAddress.toLowerCase(),
+        address.toLowerCase() === invoice.data.payoutAddress.toLowerCase(),
     );
 
   return (

@@ -207,8 +207,8 @@ function findCreated(r: PublishResult, p: (o: PublishObject) => boolean): string
 
 /**
  * Read a single `KEY=value` line from `.env.local` without loading any dotenv
- * machinery. Used by `resolveCustomerKeypair` so a Slush-imported key pinned in
- * the env file survives a re-bootstrap.
+ * machinery. Used by `resolveSponsorKeypair` so the local gas-station key
+ * survives a re-bootstrap (the funded sponsor address stays stable across runs).
  */
 function readEnvFile(key: string): string | undefined {
   let raw = "";
@@ -265,8 +265,12 @@ async function discoverPasContextFromMVR(
   client: SuiClient,
   network: string,
 ): Promise<{ packageId: string; namespaceId: string }> {
-  const cachedPkg = process.env.NEXT_PUBLIC_PAS_PACKAGE_ID;
-  const cachedNs = process.env.NEXT_PUBLIC_NAMESPACE_ID;
+  // tsx doesn't auto-load `.env.local` — fall back to reading the file so a
+  // dev who pinned these values there doesn't need to shell-export them too.
+  const cachedPkg =
+    process.env.NEXT_PUBLIC_PAS_PACKAGE_ID ?? readEnvFile("NEXT_PUBLIC_PAS_PACKAGE_ID");
+  const cachedNs =
+    process.env.NEXT_PUBLIC_NAMESPACE_ID ?? readEnvFile("NEXT_PUBLIC_NAMESPACE_ID");
   if (cachedPkg && cachedNs) {
     console.log(`  using cached pas context (pkg ${cachedPkg.slice(0, 10)}…)`);
     return { packageId: cachedPkg, namespaceId: cachedNs };
@@ -277,8 +281,8 @@ async function discoverPasContextFromMVR(
     encoding: "utf8",
     env: { ...process.env, MVR_FALLBACK_NETWORK: network },
   });
-  const mvr = JSON.parse(out) as { package_address: string };
-  const packageId = mvr.package_address;
+  const mvr = JSON.parse(out) as { Resolve: { package_address: string } };
+  const packageId = mvr.Resolve.package_address;
 
   const pkgObj = await client.getObject({
     id: packageId,
@@ -303,7 +307,8 @@ function resolveMVR(name: string, network: string): string {
     encoding: "utf8",
     env: { ...process.env, MVR_FALLBACK_NETWORK: network },
   });
-  return (JSON.parse(out) as { package_address: string }).package_address;
+  return (JSON.parse(out) as { Resolve: { package_address: string } }).Resolve
+    .package_address;
 }
 
 function readPubfilePackageId(pubfileAbsPath: string, sourceSuffix: string): string {
@@ -381,22 +386,20 @@ function deployerPrivateKey(address: string): string {
 }
 
 /**
- * Resolve a stable customer keypair for local-dev signing. Reuses
- * `NON_SPONSORED_CUSTOMER_PRIVATE_KEY` from `.env.local` when present (so re-bootstrapping
- * the same chain doesn't churn the address); otherwise mints a fresh ed25519
- * key. Caller is responsible for funding it via the faucet on local chains.
+ * Resolve a stable sponsor keypair for the localnet gas-station route
+ * (`/api/sponsor`). Reuses `SPONSOR_PRIVATE_KEY` from `.env.local` when present
+ * so the funded sponsor address survives a re-bootstrap; otherwise mints a
+ * fresh ed25519 key. Caller is responsible for funding it via the faucet.
  *
- * Used by `/api/init-account` to sign the `account::create_and_share` tx on
- * behalf of any customer wallet that connects — replaces the old sponsor-keypair
- * path now that customer/merchant Slush wallets pay their own gas.
+ * Localnet only — on testnet/mainnet sponsorship is handled by Enoki via the
+ * connected wallet, and no server-side sponsor key is provisioned.
  */
-function resolveCustomerKeypair(): { keypair: Ed25519Keypair; privateKey: string } {
+function resolveSponsorKeypair(): { keypair: Ed25519Keypair; privateKey: string } {
   // tsx doesn't auto-load `.env.local`, so process.env is empty here even if the
   // file has a value. Read the file directly as a fallback before generating
-  // anything new — this is what lets users pin a Slush-imported key and have
-  // bootstrap fund that exact address.
+  // anything new.
   const existing =
-    process.env.NON_SPONSORED_CUSTOMER_PRIVATE_KEY ?? readEnvFile("NON_SPONSORED_CUSTOMER_PRIVATE_KEY");
+    process.env.SPONSOR_PRIVATE_KEY ?? readEnvFile("SPONSOR_PRIVATE_KEY");
   if (existing && existing.length > 0) {
     const { schema, secretKey } = decodeSuiPrivateKey(existing);
     if (schema === "ED25519") {
@@ -404,7 +407,7 @@ function resolveCustomerKeypair(): { keypair: Ed25519Keypair; privateKey: string
       return { keypair, privateKey: existing };
     }
     console.warn(
-      `  NON_SPONSORED_CUSTOMER_PRIVATE_KEY schema is "${schema}"; regenerating an ed25519 key.`,
+      `  SPONSOR_PRIVATE_KEY schema is "${schema}"; regenerating an ed25519 key.`,
     );
   }
   const keypair = new Ed25519Keypair();
@@ -772,7 +775,8 @@ async function main() {
     // We can't easily discover it from the publish tx (Templates is created by
     // a separate `templates::setup` call, not by pas::init), so for now we
     // expect it to be supplied via env. TODO: derive via derived_object math.
-    templatesId = process.env.NEXT_PUBLIC_TEMPLATES_ID;
+    templatesId =
+      process.env.NEXT_PUBLIC_TEMPLATES_ID ?? readEnvFile("NEXT_PUBLIC_TEMPLATES_ID");
     if (!templatesId) {
       throw new Error(
         "NEXT_PUBLIC_TEMPLATES_ID is required on testnet/mainnet — set it to the " +
@@ -798,6 +802,35 @@ async function main() {
 
     stable = publishPackage("contracts/stablecoin-mock");
     if (!stable.packageId) throw new Error("stablecoin-mock publish returned no packageId");
+
+    // Merchant payout PAS account. On localnet this is created inside
+    // `setupPasOnFreshChain`; on testnet/mainnet we do it here so the
+    // customer-side `pay` flow can take the payout `&Account` without an
+    // extra manual init hop. Tolerant of "already exists" — the derived
+    // address is stable per (namespace, payout_address), so re-bootstraps
+    // with the same deployer land on the same account.
+    console.log(`\n→ creating payout PAS account for ${deployer}`);
+    try {
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${pasPackageId}::account::create_and_share`,
+        arguments: [tx.object(namespaceId), tx.pure.address(deployer)],
+      });
+      tx.setGasBudget(50_000_000n);
+      const result = await client.signAndExecuteTransaction({
+        transaction: tx,
+        signer: deployerKeypair(deployer),
+        options: { showEffects: true },
+      });
+      if (result.effects?.status?.status === "success") {
+        await client.waitForTransaction({ digest: result.digest });
+        console.log(`  payout account created (${result.digest})`);
+      } else {
+        console.log(`  payout account already exists (skipping): ${result.effects?.status?.error}`);
+      }
+    } catch (err) {
+      console.log(`  payout account creation skipped: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   console.log(`  pas package    ${pasPackageId}`);
@@ -873,15 +906,19 @@ async function main() {
     deployer,
   });
 
-  // Customer-side gas signer for server-routed flows (currently `/api/init-account`).
-  // Persisted in `.env.local` so subsequent runs reuse the same address; topped up
-  // from the localnet faucet on every bootstrap so a freshly-regenesised chain
-  // doesn't leave the customer key broke.
-  const customer = resolveCustomerKeypair();
-  const customerAddress = customer.keypair.toSuiAddress();
+  // Local gas-station signer for `/api/sponsor`. Only provisioned on ephemeral
+  // chains — on testnet/mainnet, Enoki handles sponsorship via the connected
+  // wallet, so no server-side sponsor key is needed. Persisted in `.env.local`
+  // so subsequent runs reuse the same address; topped up from the localnet
+  // faucet on every bootstrap so a freshly-regenesised chain doesn't leave the
+  // sponsor broke.
+  let sponsorPrivateKey: string | null = null;
   if (ephemeral) {
-    console.log(`\n→ funding customer address ${customerAddress}`);
-    await fundFromLocalFaucet(customerAddress);
+    const sponsor = resolveSponsorKeypair();
+    const sponsorAddress = sponsor.keypair.toSuiAddress();
+    console.log(`\n→ funding sponsor address ${sponsorAddress}`);
+    await fundFromLocalFaucet(sponsorAddress);
+    sponsorPrivateKey = sponsor.privateKey;
   }
 
   // Public deployment IDs — always written; no risk if exposed (they're
@@ -910,14 +947,16 @@ async function main() {
     patchEnv({
       // Used by `/api/topup` to sign the stablecoin faucet mint.
       DEPLOYER_PRIVATE_KEY: deployerPrivateKey(deployer),
-      // Used by `/api/init-account` + `/api/cancel-*` for permissionless server-routed flows.
-      NON_SPONSORED_CUSTOMER_PRIVATE_KEY: customer.privateKey,
+      // Used by `/api/sponsor` to sign the gas leg of localnet sponsored txs.
+      // testnet/mainnet sponsor via Enoki, not this key.
+      SPONSOR_PRIVATE_KEY: sponsorPrivateKey!,
     });
   } else {
     console.log(
-      `\n⚠ ${envAlias}: skipping DEPLOYER_PRIVATE_KEY / NON_SPONSORED_CUSTOMER_PRIVATE_KEY ` +
-        `auto-export. /api/topup is gated to localnet at the route layer regardless; ` +
-        `populate these manually only if you understand the implications.`,
+      `\n⚠ ${envAlias}: skipping DEPLOYER_PRIVATE_KEY / SPONSOR_PRIVATE_KEY ` +
+        `auto-export. /api/topup and /api/sponsor are gated to localnet at the ` +
+        `route layer regardless; populate these manually only if you understand ` +
+        `the implications.`,
     );
   }
 

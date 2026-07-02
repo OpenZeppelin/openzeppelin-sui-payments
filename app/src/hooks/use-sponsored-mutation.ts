@@ -1,30 +1,43 @@
 "use client";
 
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useCurrentAccount,
+  useCurrentWallet,
+  useSignAndExecuteTransaction,
+  useSignTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
+import { isEnokiWallet } from "@mysten/enoki";
 import { Transaction } from "@mysten/sui/transactions";
+import { toBase64 } from "@mysten/sui/utils";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+
+import { NETWORK } from "@/lib/sui-client";
 
 interface SponsorOptions {
   /** Optional query keys to invalidate after a successful tx. */
   invalidate?: ReadonlyArray<ReadonlyArray<unknown>>;
-  /** Optional gas budget (MIST). When omitted, the wallet picks one. */
+  /** Optional gas budget (MIST). Honored only on the wallet-signs-and-executes
+   *  path; sponsor paths set their own gas budget on the wrapped tx. */
   gasBudget?: bigint;
   /** Optional success toast string; pass `null` to suppress. */
   successMessage?: string | null;
 }
 
 /**
- * useMutation wrapper that:
- *   1. Lets callers build a `Transaction` synchronously (via the `build` arg).
- *   2. Asks the connected wallet (Slush etc.) to sign + execute — the user
- *      pays gas from their own SUI balance.
- *   3. Toasts success/failure (sonner) + invalidates query keys.
+ * useMutation wrapper that picks one of three tx submission paths, depending
+ * on identity + network:
  *
- * Name kept for ABI parity with callers; despite the "Sponsored" name there
- * is currently no sponsor in the loop. A zkLogin path (no SUI on-hand) will
- * reintroduce a sponsor-only branch later — gate that on session type, not by
- * sponsoring every Slush-wallet tx.
+ *  A. **localnet** — build a `TransactionKind`, POST to `/api/sponsor` (local
+ *     gas station), ask the wallet to co-sign the same bytes, submit
+ *     `[userSig, sponsorSig]` directly. Fully-sponsored UX with any wallet.
+ *  B. **testnet/mainnet + Enoki-registered wallet** — `/api/enoki-sponsor`
+ *     wraps the kind as a sponsored tx (subject to the Enoki app's
+ *     allowedMoveCallTargets rules), the Enoki wallet signs with the zkLogin
+ *     keypair, `/api/enoki-execute` finalizes.
+ *  C. **testnet/mainnet + any other wallet** — plain
+ *     `useSignAndExecuteTransaction`, user pays gas.
  */
 export function useSponsoredMutation<TArgs>(
   build: (tx: Transaction, args: TArgs) => void,
@@ -33,27 +46,105 @@ export function useSponsoredMutation<TArgs>(
   const account = useCurrentAccount();
   const client = useSuiClient();
   const queryClient = useQueryClient();
+  const { currentWallet } = useCurrentWallet();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const { mutateAsync: signOnly } = useSignTransaction();
 
   return useMutation({
     mutationFn: async (args: TArgs) => {
       if (!account) throw new Error("Connect a wallet first");
+      const senderAddress = account.address;
+      const enokiConnected = currentWallet ? isEnokiWallet(currentWallet) : false;
 
       const tx = new Transaction();
       build(tx, args);
-      if (opts.gasBudget) tx.setGasBudget(opts.gasBudget);
 
-      const result = await signAndExecute({ transaction: tx });
-      // Make sure the wallet returns to a consistent view of chain state.
-      await client.waitForTransaction({ digest: result.digest });
-      // Resolve effects + status (`useSignAndExecuteTransaction` returns the
-      // raw response which doesn't include effects by default).
+      const useLocalSponsor = NETWORK === "localnet";
+      const useEnokiSponsor = !useLocalSponsor && enokiConnected;
+      let digest: string;
+
+      if (useLocalSponsor) {
+        tx.setSenderIfNotSet(senderAddress);
+        const kindBytes = await tx.build({ client, onlyTransactionKind: true });
+
+        const resp = await fetch("/api/sponsor", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            txKindBytes: toBase64(kindBytes),
+            sender: senderAddress,
+          }),
+        });
+        if (!resp.ok) {
+          const err = (await resp.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(err?.error ?? `sponsor failed (${resp.status})`);
+        }
+        const { bytes, sponsorSignature } = (await resp.json()) as {
+          bytes: string;
+          sponsorSignature: string;
+        };
+
+        // dapp-kit's `useSignTransaction` accepts a base64 string for
+        // already-built tx bytes; `executeTransactionBlock` takes the same.
+        const { signature: userSignature } = await signOnly({ transaction: bytes });
+
+        const submitted = await client.executeTransactionBlock({
+          transactionBlock: bytes,
+          signature: [userSignature, sponsorSignature],
+        });
+        digest = submitted.digest;
+      } else if (useEnokiSponsor) {
+        // Server-side Enoki sponsorship. Two round-trips: create + execute.
+        tx.setSenderIfNotSet(senderAddress);
+        const kindBytes = await tx.build({ client, onlyTransactionKind: true });
+
+        const createResp = await fetch("/api/enoki-sponsor", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            txKindBytes: toBase64(kindBytes),
+            sender: senderAddress,
+          }),
+        });
+        if (!createResp.ok) {
+          const err = (await createResp.json().catch(() => null)) as {
+            error?: string;
+          } | null;
+          throw new Error(err?.error ?? `enoki-sponsor failed (${createResp.status})`);
+        }
+        const { bytes, digest: sponsorDigest } = (await createResp.json()) as {
+          bytes: string;
+          digest: string;
+        };
+
+        // Enoki wallet signs the sponsor-wrapped bytes with its zkLogin
+        // keypair. dapp-kit's `useSignTransaction` routes to the connected
+        // wallet's own `signTransaction`.
+        const { signature } = await signOnly({ transaction: bytes });
+
+        const execResp = await fetch("/api/enoki-execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ digest: sponsorDigest, signature }),
+        });
+        if (!execResp.ok) {
+          const err = (await execResp.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(err?.error ?? `enoki-execute failed (${execResp.status})`);
+        }
+        const executed = (await execResp.json()) as { digest: string };
+        digest = executed.digest;
+      } else {
+        // Non-Enoki wallet on a shared chain: wallet pays gas.
+        if (opts.gasBudget) tx.setGasBudget(opts.gasBudget);
+        const result = await signAndExecute({ transaction: tx });
+        digest = result.digest;
+      }
+
+      await client.waitForTransaction({ digest });
       const full = await client.getTransactionBlock({
-        digest: result.digest,
+        digest,
         // `showEvents` is required by callers that pluck a created object's id
-        // from the emitted `InvoiceCreated`/`VoucherCreated` event (rather than
-        // re-querying the table). `useSignAndExecuteTransaction` returns only
-        // `{digest, rawTransaction}` so we fetch the full record here.
+        // from an `InvoiceCreated`/`VoucherCreated` event.
         options: { showEffects: true, showEvents: true },
       });
       if (full.effects?.status?.status !== "success") {

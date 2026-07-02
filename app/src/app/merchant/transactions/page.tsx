@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -10,10 +10,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { qk, useEvents, useInvoice, useStoredReceipts, useVoucher } from "@/hooks/queries";
+import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
-import { buildPruneInvoiceReceipts } from "@/lib/move/payment";
-import { buildPruneVoucherReceipts } from "@/lib/move/redemption";
+import { buildCancelInvoice, buildPruneInvoiceReceipts } from "@/lib/move/payment";
+import { buildCancelVoucher, buildPruneVoucherReceipts } from "@/lib/move/redemption";
 import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
 
 const PRUNE_BATCH_SIZE = 50;
@@ -208,32 +209,19 @@ function OpenInvoiceRow({
       ? { label: "Expired", variant: "destructive" }
       : { label: "Invoice open", variant: "outline" };
 
-  const remove = useMutation({
-    mutationFn: async (id: string) => {
-      const resp = await fetch("/api/cancel-invoice", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invoiceId: id }),
-      });
-      if (!resp.ok) {
-        const err = (await resp.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(err?.error ?? `remove failed (${resp.status})`);
-      }
-      return (await resp.json()) as { digest: string };
+  // Merchant signs the cancel themselves — permissionless after expiry, so
+  // any signer works. Sponsored (localnet gas station on localnet; Enoki with
+  // an Enoki wallet on testnet; wallet-paid otherwise).
+  const remove = useSponsoredMutation<{ invoiceId: string }>(
+    (tx, args) => buildCancelInvoice(tx, args.invoiceId),
+    {
+      invalidate: [
+        qk.events(`${deployment.packageId}::events::InvoiceCanceled`),
+        qk.invoice(invoiceId),
+      ],
+      successMessage: "Expired invoice removed",
     },
-    onSuccess: async () => {
-      toast.success("Expired invoice removed");
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: qk.events(`${deployment.packageId}::events::InvoiceCanceled`),
-        }),
-        queryClient.invalidateQueries({ queryKey: qk.invoice(invoiceId) }),
-      ]);
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Remove failed");
-    },
-  });
+  );
 
   const when = timestampMs ? new Date(Number(timestampMs)).toLocaleString() : "—";
 
@@ -269,7 +257,7 @@ function OpenInvoiceRow({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => remove.mutate(invoiceId)}
+            onClick={() => remove.mutate({ invoiceId })}
             disabled={remove.isPending}
           >
             <Trash2 className="h-4 w-4" />
@@ -312,32 +300,27 @@ function OpenVoucherRow({
       ? { label: "Expired", variant: "destructive" }
       : { label: "Voucher open", variant: "outline" };
 
-  const remove = useMutation({
-    mutationFn: async (id: string) => {
-      const resp = await fetch("/api/cancel-voucher", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voucherId: id }),
-      });
-      if (!resp.ok) {
-        const err = (await resp.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(err?.error ?? `remove failed (${resp.status})`);
-      }
-      return (await resp.json()) as { digest: string };
+  // Merchant signs cancel_voucher themselves (permissionless after expiry).
+  // Needs the voucher owner's PAS account id to refund unlocked LOY — derived
+  // from `voucher.customer` via the standard `usePasAccount` lookup.
+  const customerPas = usePasAccount(voucher.data?.customer ?? null);
+  const remove = useSponsoredMutation<{
+    voucherId: string;
+    customerLoyaltyAccountId: string;
+  }>(
+    (tx, args) =>
+      buildCancelVoucher(tx, {
+        voucherId: args.voucherId,
+        customerLoyaltyAccountId: args.customerLoyaltyAccountId,
+      }),
+    {
+      invalidate: [
+        qk.events(`${deployment.packageId}::events::VoucherCanceled`),
+        qk.voucher(voucherId),
+      ],
+      successMessage: "Expired voucher canceled — LOY refunded to customer",
     },
-    onSuccess: async () => {
-      toast.success("Expired voucher canceled — LOY refunded to customer");
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: qk.events(`${deployment.packageId}::events::VoucherCanceled`),
-        }),
-        queryClient.invalidateQueries({ queryKey: qk.voucher(voucherId) }),
-      ]);
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Remove failed");
-    },
-  });
+  );
 
   const when = timestampMs ? new Date(Number(timestampMs)).toLocaleString() : "—";
 
@@ -371,8 +354,13 @@ function OpenVoucherRow({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => remove.mutate(voucherId)}
-            disabled={remove.isPending}
+            onClick={() =>
+              remove.mutate({
+                voucherId,
+                customerLoyaltyAccountId: customerPas.data!,
+              })
+            }
+            disabled={remove.isPending || !customerPas.data}
           >
             <Trash2 className="h-4 w-4" />
             {remove.isPending ? "Removing…" : "Remove expired"}

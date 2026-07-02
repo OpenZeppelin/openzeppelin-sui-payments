@@ -2,15 +2,15 @@
 
 import Link from "next/link";
 import { useCurrentAccount } from "@mysten/dapp-kit";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Coins, Gift, History, QrCode, Wallet } from "lucide-react";
-import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useBalances } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
+import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
+import { buildCreateAndShareAccount } from "@/lib/move/pas";
 import { formatAmount, shortAddr } from "@/lib/utils";
 
 const cards = [
@@ -48,33 +48,17 @@ export default function CustomerPage() {
     deployment.loyaltyType,
   ]);
 
-  const queryClient = useQueryClient();
-  // `create_and_share` doesn't take an `&Auth` — anyone with gas can create the
-  // account for any address. We let the sponsor sign + pay server-side so the
-  // customer never has to open their wallet for this one-time setup.
-  const initAccount = useMutation({
-    mutationFn: async (ownerAddress: string) => {
-      const resp = await fetch("/api/init-account", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ownerAddress }),
-      });
-      if (!resp.ok) {
-        const err = (await resp.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(err?.error ?? `init-account failed (${resp.status})`);
-      }
-      return (await resp.json()) as { digest: string };
+  // `create_and_share` doesn't take an `&Auth` — anyone with gas can create
+  // the account for any address. The customer signs their own init tx and
+  // gas is sponsored (localnet gas station on localnet, Enoki on testnet with
+  // the Enoki wallet, wallet-paid otherwise) — so no deployer involvement.
+  const initAccount = useSponsoredMutation<{ ownerAddress: string }>(
+    (tx, args) => buildCreateAndShareAccount(tx, args.ownerAddress),
+    {
+      invalidate: [["pas-account", address ?? ""]],
+      successMessage: "Account initialized",
     },
-    onSuccess: async () => {
-      toast.success("Account initialized");
-      await queryClient.invalidateQueries({
-        queryKey: ["pas-account", address ?? ""],
-      });
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Account init failed");
-    },
-  });
+  );
 
   const stable = balances.data?.[deployment.stablecoinType] ?? 0n;
   const loyalty = balances.data?.[deployment.loyaltyType] ?? 0n;
@@ -117,9 +101,10 @@ export default function CustomerPage() {
               </p>
               <Button
                 onClick={() =>
-                  initAccount.mutate(address!, {
-                    onSuccess: () => pas.refetch(),
-                  })
+                  initAccount.mutate(
+                    { ownerAddress: address! },
+                    { onSuccess: () => pas.refetch() },
+                  )
                 }
                 disabled={initAccount.isPending}
               >

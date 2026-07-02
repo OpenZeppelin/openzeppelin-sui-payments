@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Minus, Plus, Gift, RotateCcw, ScanLine } from "lucide-react";
 import { toast } from "sonner";
 
@@ -15,7 +14,7 @@ import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
 import { buildAccountNewAuth, buildUnlockBalance } from "@/lib/move/pas";
-import { buildCreateVoucher } from "@/lib/move/redemption";
+import { buildCancelVoucher, buildCreateVoucher } from "@/lib/move/redemption";
 import {
   blake2b256,
   clearPreimage,
@@ -329,40 +328,31 @@ function OpenVoucherRow({
   voucher: Voucher;
   onShow: (voucher: Voucher) => void;
 }) {
-  const queryClient = useQueryClient();
   const now = BigInt(Date.now());
   const expired = voucher.expiresAtMs <= now;
   const when = new Date(Number(voucher.expiresAtMs)).toLocaleString();
 
-  const reclaim = useMutation({
-    mutationFn: async (id: string) => {
-      const resp = await fetch("/api/cancel-voucher", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voucherId: id }),
-      });
-      if (!resp.ok) {
-        const err = (await resp.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(err?.error ?? `reclaim failed (${resp.status})`);
-      }
-      return (await resp.json()) as { digest: string };
+  // Customer signs cancel_voucher themselves (sponsored). The tx needs their
+  // PAS account id to route the unlocked LOY back — look it up by the
+  // voucher's `customer` field.
+  const customerPas = usePasAccount(voucher.customer);
+  const reclaim = useSponsoredMutation<{ voucherId: string; customerLoyaltyAccountId: string }>(
+    (tx, args) =>
+      buildCancelVoucher(tx, {
+        voucherId: args.voucherId,
+        customerLoyaltyAccountId: args.customerLoyaltyAccountId,
+      }),
+    {
+      // Partial-key invalidation on `["balances"]` catches
+      // `["balances", <accountId>, ...]` regardless of the coinTypes tail.
+      invalidate: [
+        ["my-open-vouchers", voucher.customer],
+        ["balances"],
+        qk.events(`${deployment.packageId}::events::VoucherCanceled`),
+      ],
+      successMessage: `Reclaimed ${voucher.amount.toString()} LOY`,
     },
-    onSuccess: async () => {
-      toast.success(`Reclaimed ${voucher.amount.toString()} LOY`);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["my-open-vouchers", voucher.customer] }),
-        // Partial-key invalidation — catches any `["balances", <accountId>, ...]`
-        // regardless of the coinTypes tail.
-        queryClient.invalidateQueries({ queryKey: ["balances"] }),
-        queryClient.invalidateQueries({
-          queryKey: qk.events(`${deployment.packageId}::events::VoucherCanceled`),
-        }),
-      ]);
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Reclaim failed");
-    },
-  });
+  );
 
   return (
     <div className="flex items-center justify-between gap-4 py-3">
@@ -408,8 +398,13 @@ function OpenVoucherRow({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => reclaim.mutate(voucher.id)}
-            disabled={reclaim.isPending}
+            onClick={() =>
+              reclaim.mutate({
+                voucherId: voucher.id,
+                customerLoyaltyAccountId: customerPas.data!,
+              })
+            }
+            disabled={reclaim.isPending || !customerPas.data}
           >
             <RotateCcw className="h-4 w-4" />
             {reclaim.isPending ? "Reclaiming…" : "Reclaim LOY"}

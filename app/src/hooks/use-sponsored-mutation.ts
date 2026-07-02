@@ -3,6 +3,7 @@
 import {
   useCurrentAccount,
   useCurrentWallet,
+  useDisconnectWallet,
   useSignAndExecuteTransaction,
   useSignTransaction,
   useSuiClient,
@@ -14,6 +15,25 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { NETWORK } from "@/lib/sui-client";
+
+/**
+ * Substring patterns Enoki's wallet throws when its internal zkLogin state
+ * has gone away (expired proof, cleared sessionStorage after tab close,
+ * ephemeral-key mismatch). All of them mean "session is toast — user must
+ * sign in again." We convert these into a friendly disconnect + toast rather
+ * than surface the raw internal-state error to the user.
+ */
+const ENOKI_SESSION_GONE_PATTERNS = [
+  "Missing required parameters for proof generation",
+  "Stored proof is expired",
+  "Native signer not found in store",
+  "does not match the currently connected Enoki address",
+];
+
+function isEnokiSessionGone(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return ENOKI_SESSION_GONE_PATTERNS.some((p) => err.message.includes(p));
+}
 
 interface SponsorOptions {
   /** Optional query keys to invalidate after a successful tx. */
@@ -47,6 +67,7 @@ export function useSponsoredMutation<TArgs>(
   const client = useSuiClient();
   const queryClient = useQueryClient();
   const { currentWallet } = useCurrentWallet();
+  const { mutate: disconnectWallet } = useDisconnectWallet();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const { mutateAsync: signOnly } = useSignTransaction();
 
@@ -162,6 +183,13 @@ export function useSponsoredMutation<TArgs>(
       }
     },
     onError: (err) => {
+      if (isEnokiSessionGone(err)) {
+        // Wipe the wallet-standard connection so the next Log-in click starts
+        // a fresh OAuth flow rather than trying to reuse the dead session.
+        disconnectWallet();
+        toast.error("Your Google sign-in expired — please log in again.");
+        return;
+      }
       toast.error(
         err instanceof Error ? err.message : "Transaction failed (unknown error)",
       );

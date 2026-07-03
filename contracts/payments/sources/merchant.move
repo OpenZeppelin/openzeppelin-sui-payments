@@ -920,6 +920,8 @@ public fun set_listing_status(
 ///
 /// #### Aborts
 /// - `EListingNotFound` if no listing with `listing_id` is stored.
+/// - `listing::ETooManyVariants` if the listing already holds the maximum
+///   number of variants.
 /// - Aborts (via `vec_map::insert`) if the variant's `id` already exists.
 public fun add_listing_variant(
     self: &mut Merchant,

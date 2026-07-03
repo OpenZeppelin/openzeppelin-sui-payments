@@ -792,7 +792,7 @@ public fun update_display(
     self.name = name;
     self.logo_url = logo;
 
-    events::emit_display_updated();
+    events::emit_display_updated(self.name, self.logo_url);
 }
 
 /// Replace the merchant's full `Config` - payout address, accepted payment type,
@@ -815,7 +815,7 @@ public fun update_config(self: &mut Merchant, _auth: &Auth<MerchantRole>, config
 
     self.config = config;
 
-    events::emit_config_updated();
+    events::emit_config_updated(self.config);
 }
 
 /// Take ownership of a caller-built `Listing` and store it under its own ID.

@@ -5,6 +5,8 @@
 /// and resolve the embedded IDs back to the relevant objects.
 module openzeppelin_payments::events;
 
+use openzeppelin_payments::config::Config;
+use std::string::String;
 use std::type_name::TypeName;
 use sui::event;
 
@@ -127,13 +129,20 @@ public struct VariantRemoved has copy, drop {
 }
 
 /// Emitted when a merchant replaces its `Config` (which now subsumes payout
-/// address and accepted payment type). Pulse only - query `Merchant.config`
-/// for the current values.
-public struct ConfigUpdated has copy, drop {}
+/// address and accepted payment type). Carries the full new config values.
+public struct ConfigUpdated has copy, drop {
+    /// The full replacement config.
+    config: Config,
+}
 
-/// Emitted when a merchant updates its display name or logo. Pulse only -
-/// query `Merchant.name` / `Merchant.logo_url` for the current values.
-public struct DisplayUpdated has copy, drop {}
+/// Emitted when a merchant updates its display name or logo. Carries the new
+/// display values.
+public struct DisplayUpdated has copy, drop {
+    /// New display name.
+    name: String,
+    /// New optional logo URL.
+    logo_url: Option<String>,
+}
 
 // === Package Functions ===
 
@@ -229,13 +238,13 @@ public(package) fun emit_variant_removed(listing_id: ID, variant_id: ID) {
 }
 
 /// Emit `ConfigUpdated`.
-public(package) fun emit_config_updated() {
-    event::emit(ConfigUpdated {});
+public(package) fun emit_config_updated(config: Config) {
+    event::emit(ConfigUpdated { config });
 }
 
 /// Emit `DisplayUpdated`.
-public(package) fun emit_display_updated() {
-    event::emit(DisplayUpdated {});
+public(package) fun emit_display_updated(name: String, logo_url: Option<String>) {
+    event::emit(DisplayUpdated { name, logo_url });
 }
 
 // === Test-Only Helpers ===
@@ -327,11 +336,11 @@ public fun variant_removed(listing_id: ID, variant_id: ID): VariantRemoved {
 }
 
 #[test_only]
-public fun config_updated(): ConfigUpdated {
-    ConfigUpdated {}
+public fun config_updated(config: Config): ConfigUpdated {
+    ConfigUpdated { config }
 }
 
 #[test_only]
-public fun display_updated(): DisplayUpdated {
-    DisplayUpdated {}
+public fun display_updated(name: String, logo_url: Option<String>): DisplayUpdated {
+    DisplayUpdated { name, logo_url }
 }

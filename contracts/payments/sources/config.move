@@ -65,7 +65,7 @@ const LOYALTY_FLOAT_SCALING: u64 = 1_000_000_000;
 /// Merchant configuration. The accepted stablecoin currency `C` is captured by
 /// `accepted_payment_type` (snapshotted from `type_name::with_defining_ids<C>()`
 /// at `config::new<C>` time).
-public struct Config has drop, store {
+public struct Config has copy, drop, store {
     /// Address that receives customer stablecoin payments. Snapshotted into each
     /// `Invoice` at `create_invoice` time, so changing this mid-flight does not
     /// affect open invoices.

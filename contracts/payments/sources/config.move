@@ -185,18 +185,14 @@ public fun new<C>(
 /// #### Returns
 /// - The LOYALTY units to mint, clamped to `max_loyalty_per_payment`.
 public fun compute_loyalty(self: &Config, payment_amount: u64): u64 {
-    let scale = 10u128.pow(self.payment_decimals);
+    let denom = (LOYALTY_FLOAT_SCALING as u128) * 10u128.pow(self.payment_decimals);
+    let max = self.max_loyalty_per_payment;
 
-    // Should not overflow LOYALTY_FLOAT_SCALING < u64::max & scale < u64::max
-    let denom = (LOYALTY_FLOAT_SCALING as u128) * scale;
+    // `std::u128::mul_div` upcasts to u256 internally, so the intermediate
+    // product can't overflow, and it rounds down. Clamp to `max` afterwards.
+    let value = (payment_amount as u128).mul_div(self.loyalty_coefficient as u128, denom);
 
-    // Should not overflow amount < u64::max & coefficient < u64::max
-    let amount = payment_amount as u128;
-    let coefficient = self.loyalty_coefficient as u128;
-    let value = (amount * coefficient) / denom;
-
-    let max = self.max_loyalty_per_payment as u128;
-    if (value > max) { max as u64 } else { value as u64 }
+    if (value > (max as u128)) { max } else { value as u64 }
 }
 
 // === View Functions ===

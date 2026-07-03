@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { InvoiceQrButton } from "@/components/merchant/invoice-qr-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   qk,
   useEvents,
@@ -133,6 +133,24 @@ export default function TransactionsPage() {
     redeemed.isLoading ||
     vouCx.isLoading;
 
+  // Business summary — computed off the InvoicePaid / VoucherRedeemed streams.
+  // Revenue is a bigint sum in stablecoin base units; avg-order divides in the
+  // same base so precision is preserved through `formatAmount`.
+  const { revenue, payments, avgOrder, redemptions } = useMemo(() => {
+    let revenueSum = 0n;
+    for (const e of paid.data ?? []) {
+      revenueSum += BigInt((e.parsed.amount as string | number | undefined) ?? 0);
+    }
+    const paymentCount = paid.data?.length ?? 0;
+    const avg = paymentCount > 0 ? revenueSum / BigInt(paymentCount) : 0n;
+    return {
+      revenue: revenueSum,
+      payments: paymentCount,
+      avgOrder: avg,
+      redemptions: redeemed.data?.length ?? 0,
+    };
+  }, [paid.data, redeemed.data]);
+
   return (
     <section>
       <header className="mb-6 flex items-start justify-between gap-4">
@@ -154,7 +172,15 @@ export default function TransactionsPage() {
       ) : (
         <Card>
           <CardHeader>
-            <CardTitle>{feed.length} events</CardTitle>
+            <div className="grid grid-cols-2 gap-6 md:grid-cols-4">
+              <Stat label="Revenue" value={`${formatAmount(revenue, STABLECOIN_DECIMALS)} USD`} />
+              <Stat
+                label="Avg. order"
+                value={payments > 0 ? `${formatAmount(avgOrder, STABLECOIN_DECIMALS)} USD` : "—"}
+              />
+              <Stat label="Payments" value={payments.toString()} />
+              <Stat label="Redemptions" value={redemptions.toString()} />
+            </div>
           </CardHeader>
           <CardContent>
             <div className="divide-y divide-[color:var(--color-border)]">
@@ -401,6 +427,18 @@ function OpenVoucherRow({
         ) : null}
         <div className="text-xs text-[color:var(--color-muted-foreground)]">{when}</div>
       </div>
+    </div>
+  );
+}
+
+/** Compact KPI tile — uppercase muted label + large value below. */
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wide text-[color:var(--color-muted-foreground)]">
+        {label}
+      </div>
+      <div className="mt-1 text-2xl font-semibold">{value}</div>
     </div>
   );
 }

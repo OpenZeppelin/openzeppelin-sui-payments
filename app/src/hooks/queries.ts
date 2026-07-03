@@ -1,7 +1,7 @@
 "use client";
 
 import { useSuiClient } from "@mysten/dapp-kit";
-import type { SuiClient, SuiEvent, SuiEventFilter } from "@mysten/sui/client";
+import type { SuiClient, SuiEvent } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 import { useQuery } from "@tanstack/react-query";
 
@@ -119,23 +119,30 @@ async function readTableValueByIdKey<T>(
   return parse(key, { fields: content.fields.value.fields });
 }
 
-/** Walk `queryEvents` to exhaustion via `hasNextPage` / `nextCursor`. */
-async function queryAllEvents(
+/**
+ * Fetch up to `maxPages` pages of a single `MoveEventType`, descending. We
+ * scope the walk because customer-history callers filter client-side and a
+ * runaway walk would blow the tab budget. For real deployments an indexer
+ * replaces this call entirely.
+ */
+async function queryEvents(
   client: SuiClient,
-  query: SuiEventFilter,
+  moveEventType: string,
+  maxPages: number,
 ): Promise<SuiEvent[]> {
   const out: SuiEvent[] = [];
   let cursor: Parameters<SuiClient["queryEvents"]>[0]["cursor"] = null;
-  do {
+  for (let i = 0; i < maxPages; i++) {
     const page = await client.queryEvents({
-      query,
+      query: { MoveEventType: moveEventType },
       cursor,
       limit: 200,
       order: "descending",
     });
     out.push(...page.data);
-    cursor = page.hasNextPage ? page.nextCursor : null;
-  } while (cursor);
+    if (!page.hasNextPage || !page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
   return out;
 }
 
@@ -306,36 +313,38 @@ export function useVoucherReceipt(
 // and resolve each into a full receipt via the merchant tables.
 // ---------------------------------------------------------------------------
 
-export function useReceipts(address: string | null | undefined) {
+export function useReceipts(
+  address: string | null | undefined,
+  options: { pollMs?: number } = {},
+) {
   const client = useSuiClient();
   const merchantQuery = useMerchant();
   return useQuery({
     queryKey: qk.receipts(address ?? ""),
     enabled: Boolean(address) && Boolean(merchantQuery.data),
+    // Redemptions happen on the cashier side (a different tab / device from
+    // the customer), so the customer's history has no cross-client
+    // invalidation path. Poll while the page is open to pick them up.
+    refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
     queryFn: async () => {
       const merchant = merchantQuery.data!;
-      // Server-side filter by customer (MoveEventField + MoveEventType compound)
-      // returns only this customer's events, so we never lose old receipts to a
-      // 200-event global window. Page-walked to exhaustion via hasNextPage.
-      // `All` is typed as `[]` in @mysten/sui — cast via unknown to bypass the
-      // empty-tuple SDK type bug; runtime accepts the array.
+      // Filter by customer client-side. The compound `{ All: [MoveEventType,
+      // MoveEventField] }` filter returns "Invalid params" on public testnet
+      // fullnodes (the RPC parser rejects the compound form entirely), so
+      // server-side filtering by `/customer` is not viable. Fetch by event
+      // type, then filter the parsedJson. Page walk is capped at MAX_PAGES —
+      // at scale a template deployment should be paired with a real indexer.
+      const MAX_PAGES = 5;
       const [paid, redeemed] = await Promise.all([
-        queryAllEvents(client, {
-          All: [
-            { MoveEventType: `${deployment.packageId}::events::InvoicePaid` },
-            { MoveEventField: { path: "/customer", value: address } },
-          ],
-        } as unknown as SuiEventFilter),
-        queryAllEvents(client, {
-          All: [
-            { MoveEventType: `${deployment.packageId}::events::VoucherRedeemed` },
-            { MoveEventField: { path: "/customer", value: address } },
-          ],
-        } as unknown as SuiEventFilter),
+        queryEvents(client, `${deployment.packageId}::events::InvoicePaid`, MAX_PAGES),
+        queryEvents(client, `${deployment.packageId}::events::VoucherRedeemed`, MAX_PAGES),
       ]);
 
+      const mine = (e: SuiEvent) =>
+        (e.parsedJson as { customer?: string } | undefined)?.customer === address;
+
       const paymentReceipts = await Promise.all(
-        paid.map((e) =>
+        paid.filter(mine).map((e) =>
           readTableValueByIdKey(
             client,
             merchant.invoiceReceiptsTableId,
@@ -345,7 +354,7 @@ export function useReceipts(address: string | null | undefined) {
         ),
       );
       const redemptionReceipts = await Promise.all(
-        redeemed.map((e) =>
+        redeemed.filter(mine).map((e) =>
           readTableValueByIdKey(
             client,
             merchant.voucherReceiptsTableId,

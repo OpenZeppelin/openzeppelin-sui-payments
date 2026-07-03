@@ -73,6 +73,9 @@ export function VoucherStatusDialog({
     // Cancellation refunds LOY into the customer's PAS account — invalidate
     // any cached balance for it.
     void queryClient.invalidateQueries({ queryKey: ["balances"] });
+    // History = receipts. Redemption just landed; make sure the customer's
+    // history reflects it on next visit even if they're not currently on it.
+    void queryClient.invalidateQueries({ queryKey: ["receipts"] });
   }, [receipt.data, voucher.isSuccess, voucher.data, voucherId, queryClient]);
 
   const redeemed = receipt.data;

@@ -4,14 +4,15 @@ import Link from "next/link";
 import { useCurrentAccount } from "@mysten/dapp-kit";
 import { Coins, Gift, History, QrCode, Wallet } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useBalances } from "@/hooks/queries";
+import { useBalances, useListings, useReceipts } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
 import { buildCreateAndShareAccount } from "@/lib/move/pas";
-import { formatAmount, shortAddr } from "@/lib/utils";
+import { STABLECOIN_DECIMALS, formatAmount, formatItems, shortAddr } from "@/lib/utils";
 
 const cards = [
   {
@@ -166,6 +167,88 @@ export default function CustomerPage() {
         })}
       </div>
 
+      {ready ? <RecentTransactions address={address!} /> : null}
     </section>
+  );
+}
+
+/**
+ * Compact recent-activity block under the action cards on the customer home.
+ * Merges the last few payments + redemptions attributed to the current
+ * address, sorted newest-first, capped at MAX_ROWS. Full detail lives on
+ * `/customer/history` (link at the bottom of the card).
+ */
+function RecentTransactions({ address }: { address: string }) {
+  const MAX_ROWS = 5;
+  const receipts = useReceipts(address, { pollMs: 5_000 });
+  const { data: listings = [] } = useListings();
+
+  type Row =
+    | { kind: "payment"; id: string; when: bigint; label: string; sub: string }
+    | { kind: "redemption"; id: string; when: bigint; label: string; sub: string };
+
+  const rows: Row[] = [];
+  for (const r of receipts.data?.payment ?? []) {
+    const orderRef = new TextDecoder().decode(new Uint8Array(r.orderRef));
+    const itemLabel = formatItems(r.items, listings);
+    rows.push({
+      kind: "payment",
+      id: r.invoiceId,
+      when: r.timestampMs,
+      label: `${formatAmount(r.amount, STABLECOIN_DECIMALS)} USD · ${r.loyalty.toString()} LOY earned`,
+      sub: `${itemLabel}${orderRef ? ` · ${orderRef}` : ""}`,
+    });
+  }
+  for (const r of receipts.data?.redemption ?? []) {
+    rows.push({
+      kind: "redemption",
+      id: r.voucherId,
+      when: r.timestampMs,
+      label: `${r.amount.toString()} LOY burned`,
+      sub: formatItems(r.items, listings),
+    });
+  }
+  rows.sort((a, b) => Number(b.when - a.when));
+  const top = rows.slice(0, MAX_ROWS);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Recent transactions</CardTitle>
+        <CardDescription>
+          Last {MAX_ROWS} payments and redemptions attributed to your address.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {receipts.isLoading && !receipts.data ? (
+          <p className="text-sm text-[color:var(--color-muted-foreground)]">Loading…</p>
+        ) : top.length === 0 ? (
+          <p className="text-sm text-[color:var(--color-muted-foreground)]">
+            No activity yet. Pay an invoice or redeem a voucher to see it here.
+          </p>
+        ) : (
+          <div className="divide-y divide-[color:var(--color-border)]">
+            {top.map((r) => (
+              <div key={`${r.kind}:${r.id}`} className="flex items-center justify-between gap-4 py-3">
+                <div className="flex items-center gap-3">
+                  <Badge variant={r.kind === "payment" ? "accent" : "default"}>
+                    {r.kind === "payment" ? "Paid" : "Redeemed"}
+                  </Badge>
+                  <div>
+                    <div className="text-sm font-medium">{r.label}</div>
+                    <div className="text-xs text-[color:var(--color-muted-foreground)]">
+                      {r.sub} · <span className="font-mono">{shortAddr(r.id, 6)}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-xs text-[color:var(--color-muted-foreground)]">
+                  {new Date(Number(r.when)).toLocaleString()}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

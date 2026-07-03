@@ -9,13 +9,22 @@ import { InvoiceQrButton } from "@/components/merchant/invoice-qr-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { qk, useEvents, useInvoice, useStoredReceipts, useVoucher } from "@/hooks/queries";
+import {
+  qk,
+  useEvents,
+  useInvoice,
+  useInvoiceReceipt,
+  useListings,
+  useStoredReceipts,
+  useVoucher,
+  useVoucherReceipt,
+} from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
 import { buildCancelInvoice, buildPruneInvoiceReceipts } from "@/lib/move/payment";
 import { buildCancelVoucher, buildPruneVoucherReceipts } from "@/lib/move/redemption";
-import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
+import { STABLECOIN_DECIMALS, formatAmount, formatItems, shortAddr } from "@/lib/utils";
 
 const PRUNE_BATCH_SIZE = 50;
 /** Refresh cadence for events + receipt counts while this page is open. */
@@ -149,25 +158,49 @@ export default function TransactionsPage() {
           </CardHeader>
           <CardContent>
             <div className="divide-y divide-[color:var(--color-border)]">
-              {feed.map((row) =>
-                row.name === "InvoiceCreated" ? (
-                  <OpenInvoiceRow
-                    key={row.digest}
-                    invoiceId={row.data.invoice_id as string}
-                    timestampMs={row.timestampMs}
-                    terminated={terminatedInvoiceIds.has(row.data.invoice_id as string)}
-                  />
-                ) : row.name === "VoucherCreated" ? (
-                  <OpenVoucherRow
-                    key={row.digest}
-                    voucherId={row.data.voucher_id as string}
-                    timestampMs={row.timestampMs}
-                    terminated={terminatedVoucherIds.has(row.data.voucher_id as string)}
-                  />
-                ) : (
-                  <FeedRowView key={row.digest} row={row} />
-                ),
-              )}
+              {feed.map((row) => {
+                if (row.name === "InvoiceCreated") {
+                  return (
+                    <OpenInvoiceRow
+                      key={row.digest}
+                      invoiceId={row.data.invoice_id as string}
+                      timestampMs={row.timestampMs}
+                      terminated={terminatedInvoiceIds.has(row.data.invoice_id as string)}
+                    />
+                  );
+                }
+                if (row.name === "VoucherCreated") {
+                  return (
+                    <OpenVoucherRow
+                      key={row.digest}
+                      voucherId={row.data.voucher_id as string}
+                      timestampMs={row.timestampMs}
+                      terminated={terminatedVoucherIds.has(row.data.voucher_id as string)}
+                    />
+                  );
+                }
+                if (row.name === "InvoicePaid") {
+                  return (
+                    <PaidRow
+                      key={row.digest}
+                      invoiceId={row.data.invoice_id as string}
+                      row={row}
+                    />
+                  );
+                }
+                if (row.name === "VoucherRedeemed") {
+                  return (
+                    <RedeemedRow
+                      key={row.digest}
+                      voucherId={row.data.voucher_id as string}
+                      row={row}
+                    />
+                  );
+                }
+                // Canceled events: on-chain invoice/voucher removed, no receipt
+                // created — items are unrecoverable, render summary only.
+                return <FeedRowView key={row.digest} row={row} />;
+              })}
             </div>
           </CardContent>
         </Card>
@@ -194,6 +227,7 @@ function OpenInvoiceRow({
   const queryClient = useQueryClient();
   // Skip the network read when we already know the invoice is gone.
   const invoice = useInvoice(terminated ? null : invoiceId);
+  const { data: listings = [] } = useListings();
   // Re-render on the clock tick so the "Expired" badge flips on time even
   // when no chain event has fired (TTL elapsed but nobody canceled yet).
   useClockTick(CLOCK_TICK_MS);
@@ -237,8 +271,7 @@ function OpenInvoiceRow({
                 {invoice.data.loyalty.toString()} LOY
               </div>
               <div className="text-xs text-[color:var(--color-muted-foreground)]">
-                {invoice.data.items.length} item
-                {invoice.data.items.length === 1 ? "" : "s"} ·{" "}
+                {formatItems(invoice.data.items, listings)} ·{" "}
                 {new TextDecoder().decode(new Uint8Array(invoice.data.orderRef))}
               </div>
             </>
@@ -287,6 +320,7 @@ function OpenVoucherRow({
 }) {
   const queryClient = useQueryClient();
   const voucher = useVoucher(terminated ? null : voucherId);
+  const { data: listings = [] } = useListings();
   useClockTick(CLOCK_TICK_MS);
 
   const now = BigInt(Date.now());
@@ -335,8 +369,7 @@ function OpenVoucherRow({
                 {voucher.data.amount.toString()} LOY locked
               </div>
               <div className="text-xs text-[color:var(--color-muted-foreground)]">
-                {voucher.data.items.length} item
-                {voucher.data.items.length === 1 ? "" : "s"} ·{" "}
+                {formatItems(voucher.data.items, listings)} ·{" "}
                 <span className="font-mono">{shortAddr(voucher.data.customer, 6)}</span>
               </div>
             </>
@@ -372,8 +405,31 @@ function OpenVoucherRow({
   );
 }
 
+/**
+ * `InvoicePaid` row enriched with items from the stored payment receipt.
+ * Receipts live on `merchant.invoice_receipts` keyed by the settled invoice id.
+ * Items are lost when the receipt is pruned — falls back to the summary
+ * layout while the receipt query is loading or after prune.
+ */
+function PaidRow({ invoiceId, row }: { invoiceId: string; row: FeedRow }) {
+  const receipt = useInvoiceReceipt(invoiceId);
+  const { data: listings = [] } = useListings();
+  return (
+    <FeedRowView row={row} itemsLabel={receipt.data ? formatItems(receipt.data.items, listings) : null} />
+  );
+}
+
+/** Mirror of `PaidRow` for `VoucherRedeemed`. */
+function RedeemedRow({ voucherId, row }: { voucherId: string; row: FeedRow }) {
+  const receipt = useVoucherReceipt(voucherId);
+  const { data: listings = [] } = useListings();
+  return (
+    <FeedRowView row={row} itemsLabel={receipt.data ? formatItems(receipt.data.items, listings) : null} />
+  );
+}
+
 /** Renders any feed row that doesn't need enrichment (events with full payload). */
-function FeedRowView({ row }: { row: FeedRow }) {
+function FeedRowView({ row, itemsLabel }: { row: FeedRow; itemsLabel?: string | null }) {
   const v = variants[row.name];
   const when = row.timestampMs ? new Date(Number(row.timestampMs)).toLocaleString() : "—";
   const amount = row.data.amount as string | undefined;
@@ -401,6 +457,7 @@ function FeedRowView({ row }: { row: FeedRow }) {
             {loyalty ? ` · ${loyalty} LOY` : ""}
           </div>
           <div className="text-xs text-[color:var(--color-muted-foreground)]">
+            {itemsLabel ? `${itemsLabel} · ` : ""}
             {customer ? shortAddr(customer) : "—"}
             {orderRef ? ` · ${orderRef}` : ""}
           </div>

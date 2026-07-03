@@ -189,10 +189,11 @@ public fun compute_loyalty(self: &Config, payment_amount: u64): u64 {
     let max = self.max_loyalty_per_payment;
 
     // `std::u128::mul_div` upcasts to u256 internally, so the intermediate
-    // product can't overflow, and it rounds down. Clamp to `max` afterwards.
+    // product can't overflow, and it rounds down.
     let value = (payment_amount as u128).mul_div(self.loyalty_coefficient as u128, denom);
 
-    if (value > (max as u128)) { max } else { value as u64 }
+    // Safe: after `.min()` the value is <= max <= u64::MAX.
+    value.min(max as u128) as u64
 }
 
 // === View Functions ===

@@ -4,6 +4,7 @@
 module openzeppelin_payments::merchant_tests;
 
 use openzeppelin_access::access_control::AccessControl;
+use openzeppelin_fp_math::ud30x9;
 use openzeppelin_payments::config;
 use openzeppelin_payments::events;
 use openzeppelin_payments::listing;
@@ -34,7 +35,10 @@ fun merchant_create_and_share() {
 
         assert_eq!(*merchant.name(), b"Test Shop".to_string());
         assert_eq!(merchant.payout_address(), PAYOUT);
-        assert_eq!(merchant.config().loyalty_coefficient(), config::loyalty_float_scaling() / 10);
+        assert_eq!(
+            merchant.config().loyalty_coefficient(),
+            ud30x9::wrap((config::loyalty_float_scaling() / 10) as u128),
+        );
         assert_eq!(merchant.config().max_loyalty_per_payment(), 1_000_000);
         assert_eq!(merchant.config().invoice_ttl_ms(), 600_000);
         assert_eq!(merchant.config().voucher_ttl_ms(), 600_000);
@@ -350,7 +354,7 @@ fun update_config_updates_values() {
         merchant.update_config(&merchant_auth, new_cfg);
 
         assert_eq!(merchant.payout_address(), @0xC0FFEE);
-        assert_eq!(merchant.config().loyalty_coefficient(), new_coefficient);
+        assert_eq!(merchant.config().loyalty_coefficient(), ud30x9::wrap(new_coefficient as u128));
         assert_eq!(merchant.config().max_loyalty_per_payment(), 500_000);
         assert_eq!(merchant.config().invoice_ttl_ms(), 300_000);
         assert_eq!(merchant.config().voucher_ttl_ms(), 300_000);

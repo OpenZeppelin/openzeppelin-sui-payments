@@ -26,8 +26,10 @@ export interface Config {
   /** Decimals of the accepted stablecoin, snapshotted from `Currency<C>` at config-time. */
   paymentDecimals: number;
   /**
-   * Raw u64 coefficient scaled by `LOYALTY_FLOAT_SCALING = 1e9`. Divide by it to
-   * get the human decimal ("1.0" = 1 LOY per human unit). `0` disables minting.
+   * The on-chain `loyalty_coefficient` is a `UD30x9` fixed-point value; this is
+   * its raw 1e9-scaled integer (unwrapped). Divide by `LOYALTY_FLOAT_SCALING`
+   * (which equals the UD30x9 scale) to get the human decimal ("1.0" = 1 LOY per
+   * human unit). `0` disables minting.
    */
   loyaltyCoefficient: bigint;
   /** Hard cap on minted LOYALTY per payment. */
@@ -64,7 +66,7 @@ export function parseConfig(raw: any): Config {
     payoutAddress: f.payout_address,
     acceptedPaymentType: typeNameToString(f.accepted_payment_type),
     paymentDecimals: Number(f.payment_decimals),
-    loyaltyCoefficient: BigInt(f.loyalty_coefficient),
+    loyaltyCoefficient: ud30x9ToValue(f.loyalty_coefficient),
     maxLoyaltyPerPayment: BigInt(f.max_loyalty_per_payment),
     invoiceTtlMs: BigInt(f.invoice_ttl_ms),
     voucherTtlMs: BigInt(f.voucher_ttl_ms),
@@ -328,6 +330,20 @@ function bytesFromVectorU8(raw: any): Uint8Array {
     return out;
   }
   return new Uint8Array(0);
+}
+
+/**
+ * Reads the raw u128 inside a `UD30x9` fixed-point value (`struct UD30x9(u128)`).
+ * As a positional (tuple) struct its single field is `pos0`; Sui's normalized
+ * JSON may nest it under `{ fields: { pos0} }` or flatten to `{ pos0 }`, and
+ * some paths emit the value directly. Handle all shapes, mirroring
+ * `optionToValue` / `balanceToValue`.
+ */
+function ud30x9ToValue(raw: any): bigint {
+  if (raw === null || raw === undefined) return 0n;
+  if (typeof raw !== "object") return BigInt(raw);
+  const inner = raw.fields ?? raw;
+  return BigInt(inner.pos0 ?? inner[0] ?? 0);
 }
 
 /** `TypeName` serializes as `{ name: "0x..::module::Type" }`. */

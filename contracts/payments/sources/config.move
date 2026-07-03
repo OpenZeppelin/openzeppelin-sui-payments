@@ -10,8 +10,9 @@
 ///   accepted currency is identified by `(TypeName, decimals)` together.
 /// - **Loyalty mint rate**: a single fixed-point `loyalty_coefficient` where
 ///   `LOYALTY_FLOAT_SCALING (= 1e9)` represents `1.0 LOY per human unit`. The UI
-///   exposes this as a decimal (`1.0`, `0.5`, `2.0`); the contract stores the raw
-///   scaled integer. Decimals-aware:
+///   exposes this as a decimal (`1.0`, `0.5`, `2.0`); the contract stores it as a
+///   `UD30x9` fixed-point value (whose 9-decimal scale is `LOYALTY_FLOAT_SCALING`).
+///   Decimals-aware:
 ///       `loyalty = (payment_units * loyalty_coefficient) / (LOYALTY_FLOAT_SCALING * 10^payment_decimals)`
 ///   capped at `max_loyalty_per_payment`. So "1 LOY per $1" -> `loyalty_coefficient = 1e9`
 ///   regardless of the coin's decimals.
@@ -25,6 +26,8 @@
 /// with `config::new<C'>` for the new `C'`.
 module openzeppelin_payments::config;
 
+use openzeppelin_fp_math::ud30x9::{Self, UD30x9};
+use openzeppelin_fp_math::ud30x9_convert;
 use std::type_name::{Self, TypeName};
 use sui::coin_registry::Currency;
 
@@ -77,10 +80,12 @@ public struct Config has drop, store {
     /// Decimals of `C`, read from `&Currency<C>` at `config::new`. Used to
     /// normalize `payment_amount` into "human units" inside `compute_loyalty`.
     payment_decimals: u8,
-    /// Fixed-point loyalty mint coefficient. Raw u64 scaled by
-    /// `LOYALTY_FLOAT_SCALING` (1e9): a value of `LOYALTY_FLOAT_SCALING` means
-    /// "1 LOY per human payment unit". `0` disables loyalty mint.
-    loyalty_coefficient: u64,
+    /// Fixed-point loyalty mint coefficient, stored as a `UD30x9` (9-decimal
+    /// fixed point from `openzeppelin_fp_math`). `1.0` means "1 LOY per human
+    /// payment unit", `0.5` = half, `0` disables loyalty mint. Its 9-decimal
+    /// scale equals `LOYALTY_FLOAT_SCALING`, so a raw value of
+    /// `LOYALTY_FLOAT_SCALING` is `1.0`.
+    loyalty_coefficient: UD30x9,
     /// Hard cap on minted LOYALTY per payment. `compute_loyalty` clamps to this.
     max_loyalty_per_payment: u64,
     /// Lifetime (ms) applied to merchant-issued invoices. Must be non-zero.
@@ -149,7 +154,9 @@ public fun new<C>(
         payout_address,
         accepted_payment_type: type_name::with_defining_ids<C>(),
         payment_decimals,
-        loyalty_coefficient,
+        // Input is the 1e9-scaled integer (UI convention); store as UD30x9,
+        // whose 9-decimal scale is exactly `LOYALTY_FLOAT_SCALING`.
+        loyalty_coefficient: ud30x9::wrap(loyalty_coefficient as u128),
         max_loyalty_per_payment,
         invoice_ttl_ms,
         voucher_ttl_ms,
@@ -185,18 +192,21 @@ public fun new<C>(
 /// #### Returns
 /// - The LOYALTY units to mint, clamped to `max_loyalty_per_payment`.
 public fun compute_loyalty(self: &Config, payment_amount: u64): u64 {
-    let scale = 10u128.pow(self.payment_decimals);
+    // Normalize the raw payment into human units (dollars), then apply the
+    // fixed-point coefficient. All steps truncate (round down), so small
+    // purchases at low coefficients earn 0 - matching the documented behavior.
+    let unit = ud30x9_convert::from_u64(10u64.pow(self.payment_decimals));
+    let human_units = ud30x9_convert::from_u64(payment_amount).div_trunc(unit);
+    let scaled = human_units.mul_trunc(self.loyalty_coefficient);
 
-    // Should not overflow LOYALTY_FLOAT_SCALING < u64::max & scale < u64::max
-    let denom = (LOYALTY_FLOAT_SCALING as u128) * scale;
-
-    // Should not overflow amount < u64::max & coefficient < u64::max
-    let amount = payment_amount as u128;
-    let coefficient = self.loyalty_coefficient as u128;
-    let value = (amount * coefficient) / denom;
-
-    let max = self.max_loyalty_per_payment as u128;
-    if (value > max) { max as u64 } else { value as u64 }
+    // Clamp in the fixed-point (UD30x9) domain, before converting to u64. The
+    // intermediate can exceed u64 over the full UD30x9 range, so comparing it
+    // against the cap here (rather than after a u64 conversion) keeps the result
+    // "clamped rather than aborting" per the doc above - `to_u64_trunc` on the
+    // clamped value can never overflow, since it is <= `max_loyalty_per_payment`.
+    let cap = ud30x9_convert::from_u64(self.max_loyalty_per_payment);
+    let minted = if (scaled.gt(cap)) { cap } else { scaled };
+    minted.to_u64_trunc()
 }
 
 // === View Functions ===
@@ -210,11 +220,12 @@ public fun accepted_payment_type(self: &Config): TypeName { self.accepted_paymen
 /// Decimals of `C`, snapshotted from `&Currency<C>` at config construction.
 public fun payment_decimals(self: &Config): u8 { self.payment_decimals }
 
-/// Fixed-point loyalty coefficient, scaled by `LOYALTY_FLOAT_SCALING`.
-public fun loyalty_coefficient(self: &Config): u64 { self.loyalty_coefficient }
+/// Fixed-point loyalty coefficient (`UD30x9`). Unwrap for the raw 1e9-scaled
+/// integer (equal to the old representation); its scale is `LOYALTY_FLOAT_SCALING`.
+public fun loyalty_coefficient(self: &Config): UD30x9 { self.loyalty_coefficient }
 
-/// The scaling factor that turns the raw u64 `loyalty_coefficient` into a
-/// human decimal. UI should divide by this to display.
+/// The `UD30x9` fixed-point scale (`1e9`). Unwrap `loyalty_coefficient` and
+/// divide by this to display the human decimal.
 public fun loyalty_float_scaling(): u64 { LOYALTY_FLOAT_SCALING }
 
 /// Hard cap on minted LOYALTY per payment.

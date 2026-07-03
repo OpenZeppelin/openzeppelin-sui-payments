@@ -134,3 +134,26 @@ fun compute_loyalty_rounds_down_to_zero() {
     destroy(treasury);
     destroy(cfg);
 }
+
+// Pins branch: compute_loyalty clamps to `max` (never aborts) when the raw
+// fixed-point result overflows u64 - the doc guarantees "clamped rather than
+// aborting". Without the `try_to_u64_trunc` guard this input would abort.
+#[test]
+fun compute_loyalty_clamps_on_overflow_without_aborting() {
+    // 0-decimal TEST_USD, coefficient 2.0, cap 5.
+    let (currency, treasury) = test_setup::new_test_currency(1);
+    let cfg = config::new<TEST_USD>(
+        &currency,
+        PAYOUT,
+        config::loyalty_float_scaling() * 2, // 2.0 LOY per unit
+        5, // max_loyalty_per_payment
+        600_000,
+        600_000,
+    );
+    // 1e19 * 2.0 = 2e19 > u64::max: the raw result cannot fit a u64, so it must
+    // fold to the cap (5) rather than abort.
+    assert_eq!(cfg.compute_loyalty(10_000_000_000_000_000_000), 5);
+    destroy(currency);
+    destroy(treasury);
+    destroy(cfg);
+}

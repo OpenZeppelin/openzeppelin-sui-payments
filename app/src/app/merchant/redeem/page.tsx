@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { qk, useVoucher } from "@/hooks/queries";
+import { qk, useListings, useVoucher } from "@/hooks/queries";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { buildRedeem } from "@/lib/move/redemption";
 import { deployment } from "@/lib/deployment";
@@ -32,6 +32,16 @@ export default function RedeemPage() {
   const [scanned, setScanned] = useState<ScannedVoucher | null>(null);
   const [done, setDone] = useState<{ amount: bigint; customer: string } | null>(null);
   const voucher = useVoucher(scanned?.voucherId ?? null);
+
+  // Variant lookup for readable item labels. Vouchers outlive the catalog, so
+  // missing entries fall back to a short variant id.
+  const { data: listings = [] } = useListings();
+  const variantLookup = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const l of listings)
+      for (const v of l.variants) m.set(v.id, `${l.name} · ${v.name}`);
+    return m;
+  }, [listings]);
 
   const redeem = useSponsoredMutation<ScannedVoucher>(
     (tx, args) => {
@@ -146,12 +156,14 @@ export default function RedeemPage() {
                 Items
               </div>
               <ul className="mt-1 list-disc pl-5 text-sm">
-                {voucher.data.items.map((it, i) => (
-                  <li key={i}>
-                    {it.quantity.toString()}× variant {shortAddr(it.variantId, 4)} ·{" "}
-                    {it.price.toString()} LOY
-                  </li>
-                ))}
+                {voucher.data.items.map((it, i) => {
+                  const label = variantLookup.get(it.variantId) ?? shortAddr(it.variantId, 6);
+                  return (
+                    <li key={i}>
+                      {it.quantity.toString()}× {label} · {it.price.toString()} LOY
+                    </li>
+                  );
+                })}
               </ul>
             </div>
             {preimageMatch === false ? (

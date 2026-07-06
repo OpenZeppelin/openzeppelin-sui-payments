@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCurrentAccount } from "@mysten/dapp-kit";
 import { toast } from "sonner";
@@ -9,7 +9,7 @@ import { QrScanner } from "@/components/shared/qr-scanner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { qk, useInvoice } from "@/hooks/queries";
+import { qk, useInvoice, useListings } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
@@ -30,6 +30,18 @@ export default function CustomerPayPage() {
   const invoice = useInvoice(invoiceId);
   const customerPas = usePasAccount(address);
   const merchantPas = usePasAccount(invoice.data?.payoutAddress ?? null);
+
+  // Build a variantId → "Listing · Variant" lookup once per catalog refresh so
+  // each invoice item can be labeled with human-readable names. Falls back to
+  // the short variant id when the variant has been removed from the catalog —
+  // invoices outlive the catalog.
+  const { data: listings = [] } = useListings();
+  const variantLookup = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const l of listings)
+      for (const v of l.variants) m.set(v.id, `${l.name} · ${v.name}`);
+    return m;
+  }, [listings]);
 
   const pay = useSponsoredMutation<{
     invoiceId: string;
@@ -177,12 +189,14 @@ export default function CustomerPayPage() {
                 Items
               </div>
               <ul className="mt-1 list-disc pl-5 text-sm">
-                {invoice.data.items.map((it, i) => (
-                  <li key={i}>
-                    {it.quantity.toString()}× variant {shortAddr(it.variantId, 4)} ·{" "}
-                    {formatAmount(it.price, 6)} USD
-                  </li>
-                ))}
+                {invoice.data.items.map((it, i) => {
+                  const label = variantLookup.get(it.variantId) ?? shortAddr(it.variantId, 6);
+                  return (
+                    <li key={i}>
+                      {it.quantity.toString()}× {label} · {formatAmount(it.price, 6)} USD
+                    </li>
+                  );
+                })}
               </ul>
             </div>
             {!customerAccountReady ? (

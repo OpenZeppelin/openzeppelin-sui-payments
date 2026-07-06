@@ -37,6 +37,9 @@ public struct Voucher has store {
     /// redeemer holds the secret the customer revealed at the till and
     /// prevents `CashierRole` alone from sweeping vouchers observed in
     /// public `VoucherCreated` events.
+    ///
+    /// MUST be single-use: `redeem` reveals the preimage on-chain, so a reused
+    /// `redeem_hash` can be redeemed by an observer of the earlier reveal.
     redeem_hash: vector<u8>,
 }
 

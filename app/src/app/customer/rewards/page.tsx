@@ -49,13 +49,19 @@ export default function RewardsPage() {
   // its on-chain `redeemHash` (not by voucher id).
   const [showingVoucher, setShowingVoucher] = useState<Voucher | null>(null);
 
-  const redeemable = useMemo(
+  // Group redeemable variants by their parent listing so the UI shows one
+  // card per drink with each size as a selectable sub-row.
+  const redeemableGroups = useMemo(
     () =>
-      listings.flatMap((l) =>
-        l.variants
-          .filter((v) => l.active && v.loyaltyPrice !== null)
-          .map((v) => ({ listing: l, variant: v, loyaltyPrice: v.loyaltyPrice! })),
-      ),
+      listings
+        .filter((l) => l.active)
+        .map((l) => ({
+          listing: l,
+          variants: l.variants
+            .filter((v) => v.loyaltyPrice !== null)
+            .map((v) => ({ variant: v, loyaltyPrice: v.loyaltyPrice! })),
+        }))
+        .filter((g) => g.variants.length > 0),
     [listings],
   );
 
@@ -207,70 +213,78 @@ export default function RewardsPage() {
 
       {isLoading ? (
         <p className="text-sm text-[color:var(--color-muted-foreground)]">Loading listings…</p>
-      ) : redeemable.length === 0 ? (
+      ) : redeemableGroups.length === 0 ? (
         <div className="rounded-lg border border-dashed border-[color:var(--color-border)] p-12 text-center text-sm text-[color:var(--color-muted-foreground)]">
           No redeemable items. The merchant hasn&apos;t set a loyalty price on
           any active variant yet.
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 pb-32 md:grid-cols-2">
-          {redeemable.map(({ listing, variant, loyaltyPrice }) => {
-            const qty = cart.get(variant.id)?.quantity ?? 0;
-            return (
-              <Card key={variant.id}>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <CardTitle>
-                      {listing.name} · {variant.name}
-                    </CardTitle>
-                    <Badge variant="accent">{loyaltyPrice.toString()} LOY</Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="flex items-center justify-end gap-2">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Decrease quantity of ${variant.name}`}
-                    onClick={() =>
-                      adjust(
-                        {
-                          variantId: variant.id,
-                          variantName: variant.name,
-                          listingName: listing.name,
-                          loyaltyPrice,
-                        },
-                        -1,
-                      )
-                    }
-                    disabled={qty === 0}
-                  >
-                    <Minus className="h-4 w-4" />
-                  </Button>
-                  <span className="min-w-[1.5rem] text-center text-sm font-medium">
-                    {qty}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Increase quantity of ${variant.name}`}
-                    onClick={() =>
-                      adjust(
-                        {
-                          variantId: variant.id,
-                          variantName: variant.name,
-                          listingName: listing.name,
-                          loyaltyPrice,
-                        },
-                        1,
-                      )
-                    }
-                  >
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                </CardContent>
-              </Card>
-            );
-          })}
+          {redeemableGroups.map(({ listing, variants }) => (
+            <Card key={listing.id}>
+              <CardHeader>
+                <CardTitle>{listing.name}</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col divide-y divide-[color:var(--color-border)]">
+                {variants.map(({ variant, loyaltyPrice }) => {
+                  const qty = cart.get(variant.id)?.quantity ?? 0;
+                  return (
+                    <div
+                      key={variant.id}
+                      className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-medium">{variant.name}</span>
+                        <Badge variant="accent">{loyaltyPrice.toString()} LOY</Badge>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Decrease quantity of ${listing.name} ${variant.name}`}
+                          onClick={() =>
+                            adjust(
+                              {
+                                variantId: variant.id,
+                                variantName: variant.name,
+                                listingName: listing.name,
+                                loyaltyPrice,
+                              },
+                              -1,
+                            )
+                          }
+                          disabled={qty === 0}
+                        >
+                          <Minus className="h-4 w-4" />
+                        </Button>
+                        <span className="min-w-[1.5rem] text-center text-sm font-medium">
+                          {qty}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Increase quantity of ${listing.name} ${variant.name}`}
+                          onClick={() =>
+                            adjust(
+                              {
+                                variantId: variant.id,
+                                variantName: variant.name,
+                                listingName: listing.name,
+                                loyaltyPrice,
+                              },
+                              1,
+                            )
+                          }
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          ))}
         </div>
       )}
 

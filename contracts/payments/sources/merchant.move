@@ -721,6 +721,13 @@ public fun active_listing_variant(self: &Merchant, listing_variant_id: &ID): &Va
 
 /// Look up an open `Invoice` by its issuance ID.
 ///
+/// #### Parameters
+/// - `self`: The merchant to read.
+/// - `id`: Issuance ID of the invoice to look up.
+///
+/// #### Returns
+/// - Reference to the matching `Invoice`.
+///
 /// #### Aborts
 /// - `EInvoiceNotFound` if no open invoice with `id` is stored.
 public fun invoice(self: &Merchant, id: ID): &Invoice {
@@ -730,6 +737,13 @@ public fun invoice(self: &Merchant, id: ID): &Invoice {
 }
 
 /// Look up an open `Voucher` by its issuance ID.
+///
+/// #### Parameters
+/// - `self`: The merchant to read.
+/// - `id`: Issuance ID of the voucher to look up.
+///
+/// #### Returns
+/// - Reference to the matching `Voucher`.
 ///
 /// #### Aborts
 /// - `EVoucherNotFound` if no open voucher with `id` is stored.
@@ -745,6 +759,13 @@ public fun voucher(self: &Merchant, id: ID): &Voucher {
 /// value field, not a key. Index the `InvoicePaid` event off-chain for
 /// per-customer history.
 ///
+/// #### Parameters
+/// - `self`: The merchant to read.
+/// - `id`: Settled invoice ID the receipt is keyed by.
+///
+/// #### Returns
+/// - Reference to the matching `Receipt<Payment>`.
+///
 /// #### Aborts
 /// - `EReceiptNotFound` if no payment receipt with `id` is stored.
 public fun invoice_receipt(self: &Merchant, id: ID): &Receipt<Payment> {
@@ -756,6 +777,13 @@ public fun invoice_receipt(self: &Merchant, id: ID): &Receipt<Payment> {
 /// Look up a stored redemption `Receipt<Redemption>` by the redeemed voucher ID.
 ///
 /// Index the `VoucherRedeemed` event off-chain for per-customer history.
+///
+/// #### Parameters
+/// - `self`: The merchant to read.
+/// - `id`: Redeemed voucher ID the receipt is keyed by.
+///
+/// #### Returns
+/// - Reference to the matching `Receipt<Redemption>`.
 ///
 /// #### Aborts
 /// - `EReceiptNotFound` if no redemption receipt with `id` is stored.
@@ -816,6 +844,57 @@ public fun update_config(self: &mut Merchant, _auth: &Auth<MerchantRole>, config
     self.config = config;
 
     events::emit_config_updated();
+}
+
+/// Reclaim storage by pruning the listed payment receipts. Frees the
+/// merchant's storage deposit (refunded to the caller).
+///
+/// The `InvoicePaid` event survives; the receipt's `items` line-item
+/// breakdown does NOT, and is unrecoverable from chain history once pruned -
+/// off-chain indexers needing it must capture it beforehand.
+///
+/// The merchant computes which receipts to drop off-chain (a `Table` can't
+/// be iterated on-chain) and passes their `ids`. Gated by `MerchantRole`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+/// - `ids`: Receipt IDs (settled invoice IDs) to prune.
+///
+/// #### Aborts
+/// - `EReceiptNotFound` if any `id` has no stored payment receipt.
+public fun prune_invoice_receipts(
+    self: &mut Merchant,
+    _auth: &Auth<MerchantRole>,
+    ids: vector<ID>,
+) {
+    ids.do!(|id| {
+        assert!(self.invoice_receipts.contains(id), EReceiptNotFound);
+        self.invoice_receipts.remove(id).destroy();
+    });
+}
+
+/// Reclaim storage by pruning the listed redemption receipts. Mirror of
+/// `prune_invoice_receipts` for the `VoucherRedeemed` side: the event
+/// survives, the receipt's `items` line-item breakdown does not. Gated by
+/// `MerchantRole`.
+///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+/// - `ids`: Receipt IDs (redeemed voucher IDs) to prune.
+///
+/// #### Aborts
+/// - `EReceiptNotFound` if any `id` has no stored redemption receipt.
+public fun prune_voucher_receipts(
+    self: &mut Merchant,
+    _auth: &Auth<MerchantRole>,
+    ids: vector<ID>,
+) {
+    ids.do!(|id| {
+        assert!(self.voucher_receipts.contains(id), EReceiptNotFound);
+        self.voucher_receipts.remove(id).destroy();
+    });
 }
 
 /// Take ownership of a caller-built `Listing` and store it under its own ID.
@@ -965,8 +1044,6 @@ public fun remove_listing_variant(
     events::emit_variant_removed(listing_id, variant_id);
 }
 
-// === Settlement Functions ===
-
 /// Merchant issues an invoice from parallel `listing_variant_ids` + `quantities`.
 ///
 /// Each pair is priced by snapshotting the variant's current stablecoin price.
@@ -1091,57 +1168,6 @@ public fun redeem(
     self.loyalty.decrease_supply(funds);
 
     events::emit_voucher_redeemed(voucher_id, customer, amount, now);
-}
-
-/// Reclaim storage by pruning the listed payment receipts. Frees the
-/// merchant's storage deposit (refunded to the caller).
-///
-/// The `InvoicePaid` event survives; the receipt's `items` line-item
-/// breakdown does NOT, and is unrecoverable from chain history once pruned -
-/// off-chain indexers needing it must capture it beforehand.
-///
-/// The merchant computes which receipts to drop off-chain (a `Table` can't
-/// be iterated on-chain) and passes their `ids`. Gated by `MerchantRole`.
-///
-/// #### Parameters
-/// - `self`: The merchant to mutate.
-/// - `_auth`: `MerchantRole` authorization.
-/// - `ids`: Receipt IDs (settled invoice IDs) to prune.
-///
-/// #### Aborts
-/// - `EReceiptNotFound` if any `id` has no stored payment receipt.
-public fun prune_invoice_receipts(
-    self: &mut Merchant,
-    _auth: &Auth<MerchantRole>,
-    ids: vector<ID>,
-) {
-    ids.do!(|id| {
-        assert!(self.invoice_receipts.contains(id), EReceiptNotFound);
-        self.invoice_receipts.remove(id).destroy();
-    });
-}
-
-/// Reclaim storage by pruning the listed redemption receipts. Mirror of
-/// `prune_invoice_receipts` for the `VoucherRedeemed` side: the event
-/// survives, the receipt's `items` line-item breakdown does not. Gated by
-/// `MerchantRole`.
-///
-/// #### Parameters
-/// - `self`: The merchant to mutate.
-/// - `_auth`: `MerchantRole` authorization.
-/// - `ids`: Receipt IDs (redeemed voucher IDs) to prune.
-///
-/// #### Aborts
-/// - `EReceiptNotFound` if any `id` has no stored redemption receipt.
-public fun prune_voucher_receipts(
-    self: &mut Merchant,
-    _auth: &Auth<MerchantRole>,
-    ids: vector<ID>,
-) {
-    ids.do!(|id| {
-        assert!(self.voucher_receipts.contains(id), EReceiptNotFound);
-        self.voucher_receipts.remove(id).destroy();
-    });
 }
 
 // === Private Functions ===

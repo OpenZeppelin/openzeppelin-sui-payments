@@ -1032,7 +1032,7 @@ fun cancel_voucher_before_expiry_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = merchant::EZeroAmount)]
+#[test, expected_failure(abort_code = merchant::EInvalidAmount)]
 fun redemption_zero_amount_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -1071,7 +1071,7 @@ fun redemption_zero_amount_aborts() {
         let loyalty_policy = test_setup::take_loyalty_policy(scenario);
 
         let customer_auth = account::new_auth(scenario.ctx());
-        // Unlock 0 LOYALTY — `EZeroAmount` should fire before EInvalidAmount.
+        // Unlock 0 LOYALTY — `EInvalidAmount` fires: 0 != the items' positive total.
         let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
             &customer_auth,
             0,
@@ -1530,9 +1530,9 @@ fun create_voucher_too_many_items_aborts() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // Cap is 256 items; build 257-entry parallel vectors to trip the bound.
-        let mut ids = vector::empty<ID>();
-        let mut qtys = vector::empty<u64>();
-        let mut i = 0;
+        let mut ids = vector[];
+        let mut qtys = vector[];
+        let mut i: u64 = 0;
         while (i < 257) {
             ids.push_back(variant_id);
             qtys.push_back(1);

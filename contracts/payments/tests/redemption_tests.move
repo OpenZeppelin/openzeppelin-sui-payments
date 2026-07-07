@@ -876,7 +876,7 @@ fun cancel_voucher_before_expiry_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = merchant::EZeroAmount)]
+#[test, expected_failure(abort_code = merchant::EInvalidAmount)]
 fun redemption_zero_amount_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -915,7 +915,7 @@ fun redemption_zero_amount_aborts() {
         let loyalty_policy = test_setup::take_loyalty_policy(scenario);
 
         let customer_auth = account::new_auth(scenario.ctx());
-        // Unlock 0 LOYALTY — `EZeroAmount` should fire before EInvalidAmount.
+        // Unlock 0 LOYALTY — `EInvalidAmount` fires: 0 != the items' positive total.
         let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
             &customer_auth,
             0,

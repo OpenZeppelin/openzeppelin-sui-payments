@@ -78,48 +78,46 @@ const EDisplayUnchanged: vector<u8> = "Display name and logo both match the curr
 #[error(code = 5)]
 const EListingInactive: vector<u8> = "Listing is inactive and cannot be sold or redeemed";
 #[error(code = 6)]
-const EZeroAmount: vector<u8> = "Amount must be greater than zero";
-#[error(code = 7)]
 const ENoItems: vector<u8> = "Must include at least one item";
-#[error(code = 8)]
+#[error(code = 7)]
 const ELengthMismatch: vector<u8> = "listing_variant_ids and quantities must have the same length";
-#[error(code = 9)]
+#[error(code = 8)]
 const EZeroQuantity: vector<u8> = "Item quantity must be greater than zero";
-#[error(code = 10)]
+#[error(code = 9)]
 const ENoLoyaltyPrice: vector<u8> = "Variant is not redeemable: loyalty_price is not set";
-#[error(code = 11)]
+#[error(code = 10)]
 const EInvoiceNotFound: vector<u8> = "Invoice not found";
-#[error(code = 12)]
+#[error(code = 11)]
 const EInvoiceExpired: vector<u8> = "Invoice has expired";
-#[error(code = 13)]
+#[error(code = 12)]
 const EWrongPaymentType: vector<u8> =
     "Send currency does not match merchant's accepted payment type";
-#[error(code = 14)]
+#[error(code = 13)]
 const EWrongRecipient: vector<u8> = "Send recipient does not match Invoice payout_address";
-#[error(code = 15)]
+#[error(code = 14)]
 const EAmountMismatch: vector<u8> = "Send amount does not match Invoice amount";
-#[error(code = 16)]
+#[error(code = 15)]
 const EWrongLoyaltyRecipient: vector<u8> = "Loyalty account owner does not match payer";
-#[error(code = 17)]
+#[error(code = 16)]
 const ENotExpired: vector<u8> = "Not yet expired";
-#[error(code = 18)]
+#[error(code = 17)]
 const EVoucherNotFound: vector<u8> = "Voucher not found";
-#[error(code = 19)]
+#[error(code = 18)]
 const EVoucherExpired: vector<u8> = "Voucher has expired";
-#[error(code = 20)]
+#[error(code = 19)]
 const EWrongCustomer: vector<u8> = "Account owner does not match Voucher customer";
-#[error(code = 21)]
+#[error(code = 20)]
 const EInvalidAmount: vector<u8> = "Voucher amount must equal the total redeemed amount";
-#[error(code = 22)]
+#[error(code = 21)]
 const EReceiptNotFound: vector<u8> = "Receipt not found";
-#[error(code = 23)]
+#[error(code = 22)]
 const EBadHashLength: vector<u8> = "Voucher redeem_hash must be 32 bytes";
-#[error(code = 24)]
+#[error(code = 23)]
 const EWrongPreimage: vector<u8> =
     "Provided preimage does not match the voucher's redeem_hash commitment";
-#[error(code = 25)]
+#[error(code = 24)]
 const EOrderRefTooLong: vector<u8> = "order_ref exceeds MAX_ORDER_REF_LEN (256 bytes)";
-#[error(code = 26)]
+#[error(code = 25)]
 const EItemsTooMany: vector<u8> = "listing_variant_ids exceeds MAX_INVOICE_ITEMS (256 items)";
 
 // === Constants ===
@@ -522,8 +520,8 @@ public fun cancel_invoice(self: &mut Merchant, invoice_id: ID, clock: &Clock) {
 /// - `ENoItems` if `listing_variant_ids` is empty.
 /// - `EItemsTooMany` if `listing_variant_ids.length() > MAX_INVOICE_ITEMS`.
 /// - `ELengthMismatch` if the two vectors differ in length.
-/// - `EZeroAmount` if the unlocked amount is zero.
-/// - `EInvalidAmount` if the unlocked amount differs from the items' total.
+/// - `EInvalidAmount` if the unlocked amount differs from the items' total
+///   (a zero unlocked amount also aborts here, since the items total is always positive).
 /// - `EZeroQuantity` / `ENoLoyaltyPrice` / `EVariantNotFound` / `EListingInactive`
 ///   for catalog/price problems.
 /// - `EBadHashLength` if `redeem_hash` is not 32 bytes (blake2b256 digest).
@@ -550,10 +548,9 @@ public fun create_voucher(
     assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
     assert!(redeem_hash.length() == 32, EBadHashLength);
 
-    // Take and validate customer account and funds.
+    // Take customer account and funds.
     let customer = unlock_req.data().owner();
     let amount = unlock_req.data().funds().value();
-    assert!(amount > 0, EZeroAmount);
 
     // Combine and validate active items and quantities.
     let items = listing_variant_ids.zip_map!(

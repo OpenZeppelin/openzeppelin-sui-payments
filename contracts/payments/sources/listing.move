@@ -176,7 +176,7 @@ public fun loyalty_price(self: &Variant): Option<u64> { self.loyalty_price }
 /// - Aborts (via `vec_map::insert`) if the variant's `id` already exists in
 ///   this listing.
 public(package) fun add_variant(self: &mut Listing, variant: Variant): ID {
-    assert!(self.variants.size() < MAX_VARIANTS_PER_LISTING, ETooManyVariants);
+    assert!(self.variants.length() < MAX_VARIANTS_PER_LISTING, ETooManyVariants);
 
     let id = variant.id;
     self.variants.insert(id, variant);

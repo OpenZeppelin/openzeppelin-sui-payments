@@ -189,10 +189,10 @@ public struct Merchant has key {
     /// `add_listing_variant`/`remove_listing_variant`.
     variant_index: Table<ID, ID>,
     /// Open invoices, keyed by their freshly-minted issuance ID (the QR value).
-    /// Inserted by `create_invoice`, removed by `pay` / `cancel_invoice`.
+    /// Inserted by `create_invoice`, removed by `pay` / `cancel_expired_invoice`.
     invoices: Table<ID, Invoice>,
     /// Open vouchers, keyed by their freshly-minted issuance ID (the QR value).
-    /// Inserted by `create_voucher`, removed by `redeem` / `cancel_voucher`.
+    /// Inserted by `create_voucher`, removed by `redeem` / `cancel_expired_voucher`.
     vouchers: Table<ID, Voucher>,
     /// Payment receipts, keyed by the settled invoice ID. The recipient is
     /// recorded in `Receipt.customer`. Grows monotonically - the merchant bears
@@ -441,7 +441,7 @@ public fun pay_with_coin<C>(
 /// #### Aborts
 /// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
 /// - `ENotExpired` if the invoice has not yet expired.
-public fun cancel_invoice(self: &mut Merchant, invoice_id: ID, clock: &Clock) {
+public fun cancel_expired_invoice(self: &mut Merchant, invoice_id: ID, clock: &Clock) {
     assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
 
     let (payout_address, payment_type, _items, amount, _loyalty, order_ref, expires_at_ms) = self
@@ -551,7 +551,7 @@ public fun create_voucher(
 /// - `EVoucherNotFound` if no open voucher with `voucher_id` is stored.
 /// - `ENotExpired` if the voucher has not yet expired.
 /// - `EWrongCustomer` if the account owner is not the voucher's customer.
-public fun cancel_voucher(
+public fun cancel_expired_voucher(
     self: &mut Merchant,
     voucher_id: ID,
     customer_loyalty_account: &Account,
@@ -853,6 +853,57 @@ public fun prune_voucher_receipts(
         assert!(self.voucher_receipts.contains(id), EReceiptNotFound);
         self.voucher_receipts.remove(id).destroy();
     });
+}
+
+/// Cancel an open invoice **before** expiry - the escape hatch for an invoice
+/// issued with wrong parameters, whereas permissionless `cancel_expired_invoice` only
+/// fires after expiry. Just removal + event (an invoice holds no balance). Gated
+/// by `MerchantRole`. Emits `InvoiceCanceled`.
+///
+/// #### Aborts
+/// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
+public fun cancel_invoice(self: &mut Merchant, _auth: &Auth<MerchantRole>, invoice_id: ID) {
+    assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
+
+    let (payout_address, payment_type, _items, amount, _loyalty, order_ref, _expires_at_ms) = self
+        .invoices
+        .remove(invoice_id)
+        .unpack();
+
+    events::emit_invoice_canceled(invoice_id, payout_address, payment_type, amount, order_ref);
+}
+
+/// Cancel an open voucher **before** expiry, releasing the locked LOYALTY early
+/// - whereas permissionless `cancel_expired_voucher` only fires after expiry, and the
+/// only other pre-expiry exit (`redeem`) burns the balance. The funds go back to
+/// the customer's own account (`customer_loyalty_account.owner()` must equal the
+/// voucher's `customer`), so the merchant decides only *when* to tear the voucher
+/// down, never *where* the balance goes. Gated by `MerchantRole`. Emits
+/// `VoucherCanceled`.
+///
+/// #### Aborts
+/// - `EVoucherNotFound` if no open voucher with `voucher_id` is stored.
+/// - `EWrongCustomer` if the account owner is not the voucher's customer.
+public fun cancel_voucher(
+    self: &mut Merchant,
+    _auth: &Auth<MerchantRole>,
+    voucher_id: ID,
+    customer_loyalty_account: &Account,
+) {
+    assert!(self.vouchers.contains(voucher_id), EVoucherNotFound);
+
+    let (customer, _items, funds, _expires_at_ms, _redeem_hash) = self
+        .vouchers
+        .remove(voucher_id)
+        .unpack();
+
+    assert!(customer_loyalty_account.owner() == customer, EWrongCustomer);
+
+    let amount = funds.value();
+    events::emit_voucher_canceled(voucher_id, customer, amount);
+
+    // Deposit funds back to the customer.
+    customer_loyalty_account.deposit_balance(funds);
 }
 
 /// Take ownership of a caller-built `Listing` and store it under its own ID.

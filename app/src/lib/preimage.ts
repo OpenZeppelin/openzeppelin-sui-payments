@@ -21,7 +21,7 @@ import { fromHex, toHex } from "@mysten/sui/utils";
  * by the voucher's stored `redeem_hash`.
  *
  * Clearing site data, switching browsers, or switching devices loses the
- * preimage (and therefore the voucher's redemption path) — `cancel_voucher`
+ * preimage (and therefore the voucher's redemption path) — `cancel_expired_voucher`
  * after expiry is the only recovery in that case.
  */
 

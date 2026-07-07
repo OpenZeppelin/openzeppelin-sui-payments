@@ -319,17 +319,15 @@ public fun pay<C>(
     customer_loyalty_account: &Account,
     clock: &Clock,
 ) {
-    assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
-
-    let (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms) = self
-        .invoices
-        .remove(invoice_id)
-        .unpack();
-
-    let now = clock.timestamp_ms();
-    assert!(now < expires_at_ms, EInvoiceExpired);
-    // Otherwise a customer could mint their own coin and settle in junk tokens.
-    assert!(type_name::with_defining_ids<C>() == payment_type, EWrongPaymentType);
+    let (
+        payout_address,
+        payment_type,
+        items,
+        amount,
+        loyalty,
+        order_ref,
+        now,
+    ) = self.remove_open_invoice<C>(invoice_id, clock);
 
     // Validate PaS send request.
     let data = send_request.data();
@@ -341,34 +339,17 @@ public fun pay<C>(
     // Resolve send request and send funds to payout_address.
     send_funds::resolve_balance(send_request, policy_s);
 
-    // Mint the loyalty tokens snapshotted at issuance.
-    if (loyalty > 0) {
-        self.loyalty.mint_to(customer_loyalty_account, loyalty);
-    };
-
-    // Store the receipt under the invoice's issuance ID: a fresh, single-use ID
-    // removed from `invoices` above, so `invoice_receipts.add` can never collide.
-    let receipt = receipt::new_payment(
+    // The send request's sender is the proven payer and the loyalty recipient.
+    self.settle_invoice_payment(
+        invoice_id,
+        customer_loyalty_account,
         sender,
         items,
         amount,
-        now,
-        invoice_id,
-        payout_address,
-        payment_type,
         loyalty,
         order_ref,
-    );
-    self.invoice_receipts.add(invoice_id, receipt);
-
-    events::emit_invoice_paid(
-        invoice_id,
-        order_ref,
-        sender,
         payout_address,
         payment_type,
-        amount,
-        loyalty,
         now,
         false,
     );
@@ -415,53 +396,33 @@ public fun pay_with_coin<C>(
     customer_loyalty_account: &Account,
     clock: &Clock,
 ) {
-    assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
+    let (
+        payout_address,
+        payment_type,
+        items,
+        amount,
+        loyalty,
+        order_ref,
+        now,
+    ) = self.remove_open_invoice<C>(invoice_id, clock);
 
-    let (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms) = self
-        .invoices
-        .remove(invoice_id)
-        .unpack();
-
-    let now = clock.timestamp_ms();
-    assert!(now < expires_at_ms, EInvoiceExpired);
-    // Otherwise a customer could mint their own coin and settle in junk tokens.
-    assert!(type_name::with_defining_ids<C>() == payment_type, EWrongPaymentType);
-
-    // Exact payment; the merchant routes the coin to the payout address.
+    // Validate amount and route the coin to the payout address.
     assert!(coin.value() == amount, EAmountMismatch);
     transfer::public_transfer(coin, payout_address);
 
     // No send-request sender here: the loyalty account's owner is the customer.
     let customer = customer_loyalty_account.owner();
 
-    // Mint the loyalty tokens snapshotted at issuance.
-    if (loyalty > 0) {
-        self.loyalty.mint_to(customer_loyalty_account, loyalty);
-    };
-
-    // Store the receipt under the invoice's issuance ID: a fresh, single-use ID
-    // removed from `invoices` above, so `invoice_receipts.add` can never collide.
-    let receipt = receipt::new_payment(
+    self.settle_invoice_payment(
+        invoice_id,
+        customer_loyalty_account,
         customer,
         items,
         amount,
-        now,
-        invoice_id,
-        payout_address,
-        payment_type,
         loyalty,
         order_ref,
-    );
-    self.invoice_receipts.add(invoice_id, receipt);
-
-    events::emit_invoice_paid(
-        invoice_id,
-        order_ref,
-        customer,
         payout_address,
         payment_type,
-        amount,
-        loyalty,
         now,
         true,
     );
@@ -1142,6 +1103,90 @@ public fun prune_voucher_receipts(
 }
 
 // === Private Functions ===
+
+/// Remove and validate a settleable invoice.
+/// Asserts the invoice exists, removes and unpacks it, then enforces
+/// expiry and the accepted payment-type binding for coin type `C`.
+///
+/// #### Returns
+/// The unpacked invoice fields, ready for the caller's fund routing +
+/// `settle_invoice_payment`, with the resolved `now` timestamp substituted for
+/// `expires_at_ms`:
+/// `(payout_address, payment_type, items, amount, loyalty, order_ref, now)`.
+///
+/// #### Aborts
+/// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
+/// - `EInvoiceExpired` if the invoice has expired.
+/// - `EWrongPaymentType` if `C` does not match the invoice's `payment_type`.
+fun remove_open_invoice<C>(
+    self: &mut Merchant,
+    invoice_id: ID,
+    clock: &Clock,
+): (address, TypeName, vector<Item>, u64, u64, vector<u8>, u64) {
+    assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
+
+    let (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms) = self
+        .invoices
+        .remove(invoice_id)
+        .unpack();
+
+    let now = clock.timestamp_ms();
+    assert!(now < expires_at_ms, EInvoiceExpired);
+    // Otherwise a customer could mint their own coin and settle in junk tokens.
+    assert!(type_name::with_defining_ids<C>() == payment_type, EWrongPaymentType);
+
+    (payout_address, payment_type, items, amount, loyalty, order_ref, now)
+}
+
+/// Mints the snapshotted loyalty to `customer_loyalty_account`,
+/// stores the `Receipt<Payment>` keyed by `invoice_id`, and emits `InvoicePaid`.
+///
+/// The caller must have already removed the invoice from `self.invoices`; since
+/// `invoice_id` is a fresh, single-use id, `invoice_receipts.add` can never collide.
+fun settle_invoice_payment(
+    self: &mut Merchant,
+    invoice_id: ID,
+    customer_loyalty_account: &Account,
+    customer: address,
+    items: vector<Item>,
+    amount: u64,
+    loyalty: u64,
+    order_ref: vector<u8>,
+    payout_address: address,
+    payment_type: TypeName,
+    now: u64,
+    paid_with_coin: bool,
+) {
+    // Mint the loyalty tokens snapshotted at issuance.
+    if (loyalty > 0) {
+        self.loyalty.mint_to(customer_loyalty_account, loyalty);
+    };
+
+    let receipt = receipt::new_payment(
+        customer,
+        items,
+        amount,
+        now,
+        invoice_id,
+        payout_address,
+        payment_type,
+        loyalty,
+        order_ref,
+    );
+    self.invoice_receipts.add(invoice_id, receipt);
+
+    events::emit_invoice_paid(
+        invoice_id,
+        order_ref,
+        customer,
+        payout_address,
+        payment_type,
+        amount,
+        loyalty,
+        now,
+        paid_with_coin,
+    );
+}
 
 /// Price one stablecoin line by snapshotting the variant's current price from
 /// the catalog (asserting the parent listing is active).

@@ -88,10 +88,10 @@ export function buildPayWithCoin(
   });
 }
 
-/** `merchant::cancel_invoice(self, invoice_id, clock)` — permissionless after expiry. */
+/** `merchant::cancel_expired_invoice(self, invoice_id, clock)` — permissionless after expiry. */
 export function buildCancelInvoice(tx: Transaction, invoiceId: string): void {
   tx.moveCall({
-    target: `${deployment.packageId}::merchant::cancel_invoice`,
+    target: `${deployment.packageId}::merchant::cancel_expired_invoice`,
     arguments: [
       tx.object(deployment.merchantId),
       tx.pure.id(invoiceId),

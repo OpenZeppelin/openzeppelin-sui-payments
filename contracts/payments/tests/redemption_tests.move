@@ -338,7 +338,7 @@ fun cancel_voucher_returns_funds() {
         // Past expiry, permissionless cancel by another address.
         test_clock.set_for_testing(2_000_000);
         scenario.next_tx(@0xDEAD);
-        merchant.cancel_voucher(voucher_id, &customer_account_shared, &test_clock);
+        merchant.cancel_expired_voucher(voucher_id, &customer_account_shared, &test_clock);
 
         // `VoucherCanceled` was emitted with the expected payload.
         assert_emitted!(events::voucher_canceled(voucher_id, CUSTOMER, 50));
@@ -347,6 +347,162 @@ fun cancel_voucher_returns_funds() {
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
         test_scenario::return_shared(customer_account_shared);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test]
+fun cancel_voucher_before_expiry_returns_funds() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
+        customer_account.share();
+
+        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::some(50),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        scenario.next_tx(CUSTOMER);
+        let mut customer_account_shared = scenario.take_shared_by_id<Account>(
+            customer_account_id,
+        );
+        let loyalty_policy = test_setup::take_loyalty_policy(scenario);
+
+        let customer_auth = account::new_auth(scenario.ctx());
+        let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
+            &customer_auth,
+            50,
+            scenario.ctx(),
+        );
+
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+        let voucher_id = merchant.create_voucher(
+            unlock_req,
+            &loyalty_policy,
+            vector[variant_id],
+            vector[1],
+            test_hash(),
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Clock is NOT advanced past the 600_000 TTL — the voucher is still live.
+        // A `MerchantRole` holder releases the locked LOYALTY early via
+        // `cancel_voucher`; the funds route back to the customer's account.
+        merchant.cancel_voucher(&merchant_auth, voucher_id, &customer_account_shared);
+
+        // `VoucherCanceled` was emitted with the returned amount.
+        assert_emitted!(events::voucher_canceled(voucher_id, CUSTOMER, 50));
+
+        test_setup::return_loyalty_policy(loyalty_policy);
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
+#[test, expected_failure(abort_code = merchant::EWrongCustomer)]
+fun cancel_voucher_wrong_customer_aborts() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        let customer_account_id = ns.account_address(CUSTOMER).to_id();
+        let customer_account = account::create(ns, CUSTOMER);
+        customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
+        customer_account.share();
+
+        // Foreign account owned by OTHER — used to attempt the cancel.
+        let other_account_id = ns.account_address(OTHER).to_id();
+        account::create_and_share(ns, OTHER);
+
+        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::some(50),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        scenario.next_tx(CUSTOMER);
+        let mut customer_account_shared = scenario.take_shared_by_id<Account>(
+            customer_account_id,
+        );
+        let other_account_shared = scenario.take_shared_by_id<Account>(other_account_id);
+        let loyalty_policy = test_setup::take_loyalty_policy(scenario);
+
+        let customer_auth = account::new_auth(scenario.ctx());
+        let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
+            &customer_auth,
+            50,
+            scenario.ctx(),
+        );
+
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+        let voucher_id = merchant.create_voucher(
+            unlock_req,
+            &loyalty_policy,
+            vector[variant_id],
+            vector[1],
+            test_hash(),
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Wrong refund account (owner OTHER ≠ voucher customer CUSTOMER). Unlike
+        // `cancel_expired_voucher`, there is no expiry gate to clear first, so the
+        // customer check is reached immediately — aborts with `EWrongCustomer`.
+        merchant.cancel_voucher(&merchant_auth, voucher_id, &other_account_shared);
+
+        // Unreachable cleanup.
+        test_setup::return_loyalty_policy(loyalty_policy);
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        test_scenario::return_shared(customer_account_shared);
+        test_scenario::return_shared(other_account_shared);
         destroy(test_usd_cap);
         destroy(test_clock);
     });
@@ -680,7 +836,7 @@ fun cancel_wrong_customer_aborts() {
         test_clock.set_for_testing(2_000_000);
         scenario.next_tx(@0xDEAD);
         // Aborts with `merchant::EWrongCustomer`.
-        merchant.cancel_voucher(voucher_id, &other_account_shared, &test_clock);
+        merchant.cancel_expired_voucher(voucher_id, &other_account_shared, &test_clock);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -862,9 +1018,9 @@ fun cancel_voucher_before_expiry_aborts() {
             scenario.ctx(),
         );
 
-        // Voucher is still live — `cancel_voucher` must abort with `ENotExpired`.
+        // Voucher is still live — `cancel_expired_voucher` must abort with `ENotExpired`.
         scenario.next_tx(@0xDEAD);
-        merchant.cancel_voucher(voucher_id, &customer_account_shared, &test_clock);
+        merchant.cancel_expired_voucher(voucher_id, &customer_account_shared, &test_clock);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -876,7 +1032,7 @@ fun cancel_voucher_before_expiry_aborts() {
     });
 }
 
-#[test, expected_failure(abort_code = merchant::EZeroAmount)]
+#[test, expected_failure(abort_code = merchant::EInvalidAmount)]
 fun redemption_zero_amount_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
@@ -915,7 +1071,7 @@ fun redemption_zero_amount_aborts() {
         let loyalty_policy = test_setup::take_loyalty_policy(scenario);
 
         let customer_auth = account::new_auth(scenario.ctx());
-        // Unlock 0 LOYALTY — `EZeroAmount` should fire before EInvalidAmount.
+        // Unlock 0 LOYALTY — `EInvalidAmount` fires: 0 != the items' positive total.
         let unlock_req = customer_account_shared.unlock_balance<LOYALTY>(
             &customer_auth,
             0,
@@ -1160,7 +1316,7 @@ fun cancel_voucher_unknown_id_aborts() {
 
         // No voucher with this ID — aborts `EVoucherNotFound`.
         let phantom = object::id_from_address(@0xDEADBEEF);
-        merchant.cancel_voucher(phantom, &customer_account_shared, &test_clock);
+        merchant.cancel_expired_voucher(phantom, &customer_account_shared, &test_clock);
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);
@@ -1374,9 +1530,9 @@ fun create_voucher_too_many_items_aborts() {
         let test_clock = clock::create_for_testing(scenario.ctx());
 
         // Cap is 256 items; build 257-entry parallel vectors to trip the bound.
-        let mut ids = vector::empty<ID>();
-        let mut qtys = vector::empty<u64>();
-        let mut i = 0;
+        let mut ids = vector[];
+        let mut qtys = vector[];
+        let mut i: u64 = 0;
         while (i < 257) {
             ids.push_back(variant_id);
             qtys.push_back(1);

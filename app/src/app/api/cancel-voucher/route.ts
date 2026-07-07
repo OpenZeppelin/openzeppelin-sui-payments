@@ -20,9 +20,9 @@ type CancelVoucherResponseBody = { digest: string };
 /**
  * POST /api/cancel-voucher
  *
- * `merchant::cancel_voucher(self, voucher_id, customer_loyalty_account, clock)`
+ * `merchant::cancel_expired_voucher(self, voucher_id, customer_loyalty_account, clock)`
  * is permissionless after the voucher's `expires_at_ms`, but unlike
- * `cancel_invoice` it needs an extra arg: the customer's PAS account to
+ * `cancel_expired_invoice` it needs an extra arg: the customer's PAS account to
  * deposit the unlocked LOY back into. We resolve that here:
  *
  *   1. Look up the voucher via the merchant's `vouchers: Table<ID, Voucher>`
@@ -109,7 +109,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // 3. Build + execute the cancel PTB.
   const tx = new Transaction();
   tx.moveCall({
-    target: `${PACKAGE_ID}::merchant::cancel_voucher`,
+    target: `${PACKAGE_ID}::merchant::cancel_expired_voucher`,
     arguments: [
       tx.object(MERCHANT_ID),
       tx.pure.id(body.voucherId),
@@ -126,7 +126,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   });
   if (result.effects?.status?.status !== "success") {
     return NextResponse.json(
-      { error: `cancel_voucher failed: ${JSON.stringify(result.effects)}` },
+      { error: `cancel_expired_voucher failed: ${JSON.stringify(result.effects)}` },
       { status: 500 },
     );
   }

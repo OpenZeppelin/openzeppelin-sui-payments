@@ -84,11 +84,13 @@ export function useListings() {
             }),
           ),
         );
-        for (const o of objects) {
-          const content = (o.data?.content ?? null) as any;
-          if (!content?.fields?.value) continue;
-          out.push(parseListing({ fields: content.fields.value.fields }));
-        }
+        // `page.data[i].name.value` is the `Table<ID, Listing>` key — the listing id.
+        page.data.forEach((field, i) => {
+          const content = (objects[i].data?.content ?? null) as any;
+          if (!content?.fields?.value) return;
+          const listingId = (field.name.value as { id?: string })?.id ?? (field.name.value as string);
+          out.push(parseListing(listingId, { fields: content.fields.value.fields }));
+        });
         cursor = page.hasNextPage ? page.nextCursor : null;
       } while (cursor);
       return out;

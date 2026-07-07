@@ -105,23 +105,29 @@ export interface Listing {
   variants: Variant[];
 }
 
-export function parseVariant(raw: any): Variant {
+// `id` is not a field on either struct — it's the map key each value lives under
+// (the `Table<ID, Listing>` key for a listing, the `VecMap<ID, Variant>` key for
+// a variant), same as Invoice/Voucher below. Callers pass the key in.
+export function parseVariant(id: string, raw: any): Variant {
   const f = raw.fields ?? raw;
   return {
-    id: f.id.id ?? f.id,
+    id,
     name: f.name,
     price: BigInt(f.price),
     loyaltyPrice: optionToValueBig(f.loyalty_price),
   };
 }
 
-export function parseListing(content: any): Listing {
+export function parseListing(id: string, content: any): Listing {
   const f = content.fields;
-  // `VecMap<ID, Variant>` serializes as `{ contents: [{ key: ID, value: Variant }, ...] }`
+  // `VecMap<ID, Variant>` serializes as `{ contents: [{ key: ID, value: Variant }, ...] }`.
+  // The `ID` key serializes as a bare hex string (fall back to `.id` defensively).
   const entries = (f.variants?.fields?.contents ?? []) as Array<any>;
-  const variants = entries.map((entry) => parseVariant(entry.fields.value));
+  const variants = entries.map((entry) =>
+    parseVariant(entry.fields.key?.id ?? entry.fields.key, entry.fields.value),
+  );
   return {
-    id: f.id.id ?? f.id,
+    id,
     name: f.name,
     active: Boolean(f.active),
     variants,

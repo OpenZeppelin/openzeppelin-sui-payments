@@ -54,14 +54,14 @@ fun add_listing_with_variants() {
             scenario.ctx(),
         );
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"Small".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let vid = listing.add_variant(variant);
+        let vid = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, vid);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -69,7 +69,7 @@ fun add_listing_with_variants() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&catalog_auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         // `ListingAdded` was emitted with the listing ID.
         assert_emitted!(events::listing_added(listing_id));
@@ -141,14 +141,14 @@ fun remove_listing_drops_variant_index() {
             scenario.ctx(),
         );
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let _vid = listing.add_variant(variant);
+        let _vid = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, _vid);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -156,7 +156,7 @@ fun remove_listing_drops_variant_index() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&catalog_auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
         merchant.remove_listing(&catalog_auth, listing_id);
 
         // `ListingRemoved` was emitted with the listing ID.
@@ -178,7 +178,7 @@ fun add_listing_variant_via_merchant() {
             scenario.ctx(),
         );
 
-        let listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let listing = listing::new(b"Coffee".to_string());
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -186,15 +186,14 @@ fun add_listing_variant_via_merchant() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&catalog_auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let variant = listing::new_variant(
             b"M".to_string(),
             700,
             std::option::some(70),
-            scenario.ctx(),
         );
-        let vid = merchant.add_listing_variant(&catalog_auth, listing_id, variant);
+        let vid = merchant.add_listing_variant(&catalog_auth, listing_id, variant, scenario.ctx());
 
         // `VariantAdded` was emitted with the parent listing + new variant IDs.
         assert_emitted!(events::variant_added(listing_id, vid));
@@ -219,7 +218,7 @@ fun remove_listing_variant_via_merchant() {
             scenario.ctx(),
         );
 
-        let listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let listing = listing::new(b"Coffee".to_string());
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -227,15 +226,14 @@ fun remove_listing_variant_via_merchant() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&catalog_auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let variant = listing::new_variant(
             b"M".to_string(),
             700,
             std::option::none(),
-            scenario.ctx(),
         );
-        let vid = merchant.add_listing_variant(&catalog_auth, listing_id, variant);
+        let vid = merchant.add_listing_variant(&catalog_auth, listing_id, variant, scenario.ctx());
 
         merchant.remove_listing_variant(&catalog_auth, vid);
 
@@ -261,7 +259,7 @@ fun set_listing_status_toggles() {
             scenario.ctx(),
         );
 
-        let listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let listing = listing::new(b"Coffee".to_string());
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -269,7 +267,7 @@ fun set_listing_status_toggles() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&catalog_auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         assert!(merchant.listing(listing_id).active());
 
@@ -299,7 +297,7 @@ fun set_listing_status_same_aborts() {
             scenario.ctx(),
         );
 
-        let listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let listing = listing::new(b"Coffee".to_string());
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -307,7 +305,7 @@ fun set_listing_status_same_aborts() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&catalog_auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         // Already active — must abort.
         merchant.set_listing_status(&catalog_auth, listing_id, true);
@@ -576,8 +574,8 @@ fun add_listing_variant_unknown_id_aborts() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
         let phantom = object::id_from_address(@0xDEADBEEF);
-        let v = listing::new_variant(b"S".to_string(), 500, std::option::none(), scenario.ctx());
-        let _vid = merchant.add_listing_variant(&catalog_auth, phantom, v);
+        let v = listing::new_variant(b"S".to_string(), 500, std::option::none());
+        let _vid = merchant.add_listing_variant(&catalog_auth, phantom, v, scenario.ctx());
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);

@@ -57,14 +57,14 @@ fun payment_happy_path() {
         account::create_and_share(ns, PAYOUT);
 
         // Catalog: one listing with one variant priced at 500.
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"Small".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -74,7 +74,7 @@ fun payment_happy_path() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _listing_id = merchant.add_listing(&catalog_auth, listing);
+        let _listing_id = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         // Merchant POS: issue invoice for 1 × Small Coffee.
         let mut test_clock = clock::create_for_testing(scenario.ctx());
@@ -176,14 +176,14 @@ fun pay_after_expiry_aborts() {
         let payout_account_id = ns.account_address(PAYOUT).to_id();
         account::create_and_share(ns, PAYOUT);
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -193,7 +193,7 @@ fun pay_after_expiry_aborts() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -254,14 +254,14 @@ fun cancel_after_expiry_destroys_invoice() {
             scenario.ctx(),
         );
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -271,7 +271,7 @@ fun cancel_after_expiry_destroys_invoice() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -317,14 +317,14 @@ fun cancel_before_expiry_aborts() {
             scenario.ctx(),
         );
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -334,7 +334,7 @@ fun cancel_before_expiry_aborts() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -369,14 +369,14 @@ fun payment_inactive_listing_aborts() {
             scenario.ctx(),
         );
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -386,7 +386,7 @@ fun payment_inactive_listing_aborts() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&catalog_auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
         // Deactivate after adding — cashier should not be able to issue an invoice.
         merchant.set_listing_status(&catalog_auth, listing_id, false);
 
@@ -431,14 +431,14 @@ fun pay_wrong_recipient_aborts() {
         let bad_account_id = ns.account_address(BAD).to_id();
         account::create_and_share(ns, BAD);
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -448,7 +448,7 @@ fun pay_wrong_recipient_aborts() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -515,14 +515,14 @@ fun pay_amount_mismatch_aborts() {
         let payout_account_id = ns.account_address(PAYOUT).to_id();
         account::create_and_share(ns, PAYOUT);
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -532,7 +532,7 @@ fun pay_amount_mismatch_aborts() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -604,14 +604,14 @@ fun pay_wrong_loyalty_recipient_aborts() {
         let other_account_id = ns.account_address(OTHER).to_id();
         account::create_and_share(ns, OTHER);
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -621,7 +621,7 @@ fun pay_wrong_loyalty_recipient_aborts() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -691,14 +691,14 @@ fun pay_clamps_loyalty_to_max() {
         let payout_account_id = ns.account_address(PAYOUT).to_id();
         account::create_and_share(ns, PAYOUT);
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -725,7 +725,7 @@ fun pay_clamps_loyalty_to_max() {
         destroy(cap_currency);
         destroy(cap_treasury);
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -795,14 +795,14 @@ fun payment_receipt_stored_in_merchant() {
         let payout_account_id = ns.account_address(PAYOUT).to_id();
         account::create_and_share(ns, PAYOUT);
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -812,7 +812,7 @@ fun payment_receipt_stored_in_merchant() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -897,14 +897,14 @@ fun pay_wrong_currency_aborts() {
         let payout_account_id = ns.account_address(PAYOUT).to_id();
         account::create_and_share(ns, PAYOUT);
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -914,7 +914,7 @@ fun pay_wrong_currency_aborts() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -1013,14 +1013,14 @@ fun new_length_mismatch_aborts() {
             scenario.ctx(),
         );
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1030,7 +1030,7 @@ fun new_length_mismatch_aborts() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let test_clock = clock::create_for_testing(scenario.ctx());
 
@@ -1108,14 +1108,14 @@ fun pay_zero_loyalty_no_mint() {
         let payout_account_id = ns.account_address(PAYOUT).to_id();
         account::create_and_share(ns, PAYOUT);
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1141,7 +1141,7 @@ fun pay_zero_loyalty_no_mint() {
         destroy(zero_currency);
         destroy(zero_treasury);
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -1214,14 +1214,14 @@ fun pay_with_coin_happy_path() {
         let customer_account = account::create(ns, CUSTOMER);
         customer_account.share();
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"Small".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1230,7 +1230,7 @@ fun pay_with_coin_happy_path() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -1308,14 +1308,14 @@ fun pay_with_coin_zero_loyalty_no_mint() {
         let customer_account = account::create(ns, CUSTOMER);
         customer_account.share();
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1341,7 +1341,7 @@ fun pay_with_coin_zero_loyalty_no_mint() {
         destroy(zero_currency);
         destroy(zero_treasury);
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -1402,14 +1402,14 @@ fun pay_with_coin_clamps_loyalty_to_max() {
         let customer_account = account::create(ns, CUSTOMER);
         customer_account.share();
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1436,7 +1436,7 @@ fun pay_with_coin_clamps_loyalty_to_max() {
         destroy(cap_currency);
         destroy(cap_treasury);
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -1491,14 +1491,14 @@ fun pay_with_coin_amount_mismatch_aborts() {
         let customer_account = account::create(ns, CUSTOMER);
         customer_account.share();
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1507,7 +1507,7 @@ fun pay_with_coin_amount_mismatch_aborts() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -1552,14 +1552,14 @@ fun pay_with_coin_wrong_currency_aborts() {
         let customer_account = account::create(ns, CUSTOMER);
         customer_account.share();
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1568,7 +1568,7 @@ fun pay_with_coin_wrong_currency_aborts() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -1618,14 +1618,14 @@ fun pay_with_coin_after_expiry_aborts() {
         let customer_account = account::create(ns, CUSTOMER);
         customer_account.share();
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1634,7 +1634,7 @@ fun pay_with_coin_after_expiry_aborts() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -1684,14 +1684,14 @@ fun prune_invoice_receipts_removes_receipt() {
         let customer_account = account::create(ns, CUSTOMER);
         customer_account.share();
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1702,7 +1702,7 @@ fun prune_invoice_receipts_removes_receipt() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -1767,14 +1767,14 @@ fun new_zero_quantity_aborts() {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1783,7 +1783,7 @@ fun new_zero_quantity_aborts() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let test_clock = clock::create_for_testing(scenario.ctx());
 
@@ -1811,14 +1811,14 @@ fun create_invoice_order_ref_too_long_aborts() {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1827,7 +1827,7 @@ fun create_invoice_order_ref_too_long_aborts() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let test_clock = clock::create_for_testing(scenario.ctx());
 
@@ -1862,14 +1862,14 @@ fun create_invoice_too_many_items_aborts() {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1878,7 +1878,7 @@ fun create_invoice_too_many_items_aborts() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let test_clock = clock::create_for_testing(scenario.ctx());
 
@@ -1917,14 +1917,14 @@ fun create_invoice_at_items_cap_succeeds() {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1933,7 +1933,7 @@ fun create_invoice_at_items_cap_succeeds() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let test_clock = clock::create_for_testing(scenario.ctx());
 
@@ -1972,14 +1972,14 @@ fun create_invoice_at_order_ref_cap_succeeds() {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1988,7 +1988,7 @@ fun create_invoice_at_order_ref_cap_succeeds() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let test_clock = clock::create_for_testing(scenario.ctx());
 
@@ -2047,14 +2047,14 @@ fun compute_total_overflow_aborts() {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(ns, PAYOUT, scenario.ctx());
 
-        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Coffee".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             18_446_744_073_709_551_615, // u64::MAX
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -2063,7 +2063,7 @@ fun compute_total_overflow_aborts() {
         ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let test_clock = clock::create_for_testing(scenario.ctx());
         // 2 × u64::MAX overflows u64 in the checked_mul inside compute_total.

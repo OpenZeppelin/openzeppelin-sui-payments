@@ -98,14 +98,14 @@ fun redemption_happy_path() {
         account::create_and_share(ns, PAYOUT);
 
         // Catalog: one listing with a variant priced 500 stablecoin units and 50 LOYALTY.
-        let mut listing = listing::new(b"Free Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Free Drink".to_string());
         let variant = listing::new_variant(
             b"Small".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -115,7 +115,7 @@ fun redemption_happy_path() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -217,14 +217,14 @@ fun redeem_after_expiry_aborts() {
         customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
         customer_account.share();
 
-        let mut listing = listing::new(b"Free Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Free Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -234,7 +234,7 @@ fun redeem_after_expiry_aborts() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -293,14 +293,14 @@ fun cancel_voucher_returns_funds() {
         customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
         customer_account.share();
 
-        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -308,7 +308,7 @@ fun cancel_voucher_returns_funds() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -369,14 +369,14 @@ fun voucher_without_loyalty_price_aborts() {
 
         // Variant has only a stablecoin price (no loyalty_price) — should be
         // unredeemable for LOYALTY.
-        let mut listing = listing::new(b"Cash-only Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Cash-only Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::none(),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -384,7 +384,7 @@ fun voucher_without_loyalty_price_aborts() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -490,14 +490,14 @@ fun redemption_length_mismatch_aborts() {
         customer_account.share();
 
         // One variant in the catalog, but we'll pass mismatched-length vectors.
-        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -505,7 +505,7 @@ fun redemption_length_mismatch_aborts() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -558,14 +558,14 @@ fun redemption_inactive_listing_aborts() {
         customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
         customer_account.share();
 
-        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -573,7 +573,7 @@ fun redemption_inactive_listing_aborts() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let listing_id = merchant.add_listing(&catalog_auth, listing);
+        let listing_id = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
         // Deactivate after adding — now the variant should not be redeemable.
         merchant.set_listing_status(&catalog_auth, listing_id, false);
 
@@ -632,14 +632,14 @@ fun cancel_wrong_customer_aborts() {
         let other_account_id = ns.account_address(OTHER).to_id();
         account::create_and_share(ns, OTHER);
 
-        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -647,7 +647,7 @@ fun cancel_wrong_customer_aborts() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -713,14 +713,14 @@ fun redemption_receipt_stored_in_merchant() {
         let payout_account_id = ns.account_address(PAYOUT).to_id();
         account::create_and_share(ns, PAYOUT);
 
-        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -730,7 +730,7 @@ fun redemption_receipt_stored_in_merchant() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -821,14 +821,14 @@ fun cancel_voucher_before_expiry_aborts() {
         customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
         customer_account.share();
 
-        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -836,7 +836,7 @@ fun cancel_voucher_before_expiry_aborts() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -891,14 +891,14 @@ fun redemption_zero_amount_aborts() {
         customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
         customer_account.share();
 
-        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -906,7 +906,7 @@ fun redemption_zero_amount_aborts() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -960,14 +960,14 @@ fun redemption_amount_mismatch_aborts() {
 
         // Variant priced at 50 LOY per unit. Customer unlocks 49 — total
         // item cost (50 * 1 = 50) won't match unlocked amount.
-        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -975,7 +975,7 @@ fun redemption_amount_mismatch_aborts() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -1026,14 +1026,14 @@ fun prune_voucher_receipts_removes_receipt() {
         let payout_account_id = ns.account_address(PAYOUT).to_id();
         account::create_and_share(ns, PAYOUT);
 
-        let mut listing = listing::new(b"Free Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Free Drink".to_string());
         let variant = listing::new_variant(
             b"Small".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1044,7 +1044,7 @@ fun prune_voucher_receipts_removes_receipt() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
         let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         let mut test_clock = clock::create_for_testing(scenario.ctx());
         test_clock.set_for_testing(1_000_000);
@@ -1225,14 +1225,14 @@ fun create_voucher_zero_quantity_aborts() {
         customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
         customer_account.share();
 
-        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1240,7 +1240,7 @@ fun create_voucher_zero_quantity_aborts() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -1341,14 +1341,14 @@ fun create_voucher_too_many_items_aborts() {
         customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
         customer_account.share();
 
-        let mut listing = listing::new(b"Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1356,7 +1356,7 @@ fun create_voucher_too_many_items_aborts() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -1418,14 +1418,14 @@ fun redeem_wrong_preimage_aborts() {
         customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
         customer_account.share();
 
-        let mut listing = listing::new(b"Free Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Free Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1435,7 +1435,7 @@ fun redeem_wrong_preimage_aborts() {
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
         let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(
@@ -1496,14 +1496,14 @@ fun create_voucher_bad_hash_length_aborts() {
         customer_account.deposit_balance(balance::create_for_testing<LOYALTY>(100));
         customer_account.share();
 
-        let mut listing = listing::new(b"Free Drink".to_string(), scenario.ctx());
+        let mut listing = listing::new(b"Free Drink".to_string());
         let variant = listing::new_variant(
             b"S".to_string(),
             500,
             std::option::some(50),
-            scenario.ctx(),
         );
-        let variant_id = listing.add_variant(variant);
+        let variant_id = object::id_from_address(scenario.ctx().fresh_object_address());
+        listing.add_variant(variant, variant_id);
 
         scenario.next_tx(ADMIN);
         let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
@@ -1511,7 +1511,7 @@ fun create_voucher_bad_hash_length_aborts() {
         ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
         let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
 
-        let _ = merchant.add_listing(&catalog_auth, listing);
+        let _ = merchant.add_listing(&catalog_auth, listing, scenario.ctx());
 
         scenario.next_tx(CUSTOMER);
         let mut customer_account_shared = scenario.take_shared_by_id<Account>(

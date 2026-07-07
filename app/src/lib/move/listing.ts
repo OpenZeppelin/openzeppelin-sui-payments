@@ -3,7 +3,7 @@ import { Transaction, type TransactionResult } from "@mysten/sui/transactions";
 import { deployment } from "@/lib/deployment";
 
 /**
- * `listing::new(name, ctx) -> Listing`. The result is a *value*, not an object —
+ * `listing::new(name) -> Listing`. The result is a *value*, not an object —
  * the caller must chain it into something that stores it (e.g. `merchant::add_listing`)
  * or the PTB will fail because `Listing` has no `key`/`drop`.
  */
@@ -15,7 +15,7 @@ export function buildNewListing(tx: Transaction, name: string): TransactionResul
 }
 
 /**
- * `listing::new_variant(name, price, loyalty_price, ctx) -> Variant`. Same
+ * `listing::new_variant(name, price, loyalty_price) -> Variant`. Same
  * value-returning shape — chain into `merchant::add_listing_variant` or into
  * a `Listing` accumulator.
  */

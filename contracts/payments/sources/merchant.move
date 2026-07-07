@@ -818,8 +818,9 @@ public fun update_config(self: &mut Merchant, _auth: &Auth<MerchantRole>, config
     events::emit_config_updated();
 }
 
-/// Take ownership of a caller-built `Listing` and store it under its own ID.
+/// Take ownership of a caller-built `Listing` and store it under a fresh ID.
 ///
+/// The listing's key is generated here (from `tx_context::fresh_object_address`).
 /// Every variant already on the listing is registered in `variant_index` so
 /// checkout can resolve it from the variant ID alone. Gated by
 /// `CatalogManagerRole`. Emits `ListingAdded`.
@@ -828,19 +829,17 @@ public fun update_config(self: &mut Merchant, _auth: &Auth<MerchantRole>, config
 /// - `self`: The merchant to mutate.
 /// - `_auth`: `CatalogManagerRole` authorization.
 /// - `listing`: The listing to store.
+/// - `ctx`: Transaction context (source of the fresh listing key).
 ///
 /// #### Returns
 /// - The stored listing's ID.
-///
-/// #### Aborts
-/// - Aborts (via `Table::add`) if the listing ID or any of its variant IDs
-///   already exist on the merchant.
 public fun add_listing(
     self: &mut Merchant,
     _auth: &Auth<CatalogManagerRole>,
     listing: Listing,
+    ctx: &mut TxContext,
 ): ID {
-    let id = listing.id();
+    let id = object::id_from_address(ctx.fresh_object_address());
 
     // Add listing's variants to variant lookup table.
     listing.variants().keys().do!(|vid| {
@@ -914,23 +913,25 @@ public fun set_listing_status(
 /// - `_auth`: `CatalogManagerRole` authorization.
 /// - `listing_id`: ID of the parent listing.
 /// - `variant`: The variant to insert.
+/// - `ctx`: Transaction context (source of the fresh variant key).
 ///
 /// #### Returns
 /// - The inserted variant's ID.
 ///
 /// #### Aborts
 /// - `EListingNotFound` if no listing with `listing_id` is stored.
-/// - Aborts (via `vec_map::insert`) if the variant's `id` already exists.
 public fun add_listing_variant(
     self: &mut Merchant,
     _auth: &Auth<CatalogManagerRole>,
     listing_id: ID,
     variant: Variant,
+    ctx: &mut TxContext,
 ): ID {
     assert!(self.listings.contains(listing_id), EListingNotFound);
 
     // Add listing's variant to listing and to listing variant's lookup table.
-    let id = self.listings.borrow_mut(listing_id).add_variant(variant);
+    let id = object::id_from_address(ctx.fresh_object_address());
+    self.listings.borrow_mut(listing_id).add_variant(variant, id);
     self.variant_index.add(id, listing_id);
 
     events::emit_variant_added(listing_id, id);

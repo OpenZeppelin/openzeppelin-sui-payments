@@ -22,7 +22,7 @@ type CancelInvoiceResponseBody = {
 /**
  * POST /api/cancel-invoice
  *
- * `merchant::cancel_invoice(self, invoice_id, clock)` is permissionless after
+ * `merchant::cancel_expired_invoice(self, invoice_id, clock)` is permissionless after
  * the invoice's `expires_at_ms`, so the server-side `deployerKeypair` signs +
  * pays gas on the merchant's behalf. Storage rebate goes to that key.
  *
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const tx = new Transaction();
   tx.moveCall({
-    target: `${PACKAGE_ID}::merchant::cancel_invoice`,
+    target: `${PACKAGE_ID}::merchant::cancel_expired_invoice`,
     arguments: [tx.object(MERCHANT_ID), tx.pure.id(body.invoiceId), tx.object(CLOCK_ID)],
   });
   tx.setGasBudget(50_000_000n);
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   });
   if (result.effects?.status?.status !== "success") {
     return NextResponse.json(
-      { error: `cancel_invoice failed: ${JSON.stringify(result.effects)}` },
+      { error: `cancel_expired_invoice failed: ${JSON.stringify(result.effects)}` },
       { status: 500 },
     );
   }

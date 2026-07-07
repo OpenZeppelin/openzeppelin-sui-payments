@@ -287,7 +287,7 @@ fun cancel_after_expiry_destroys_invoice() {
         // Move past expiry, then cancel permissionlessly.
         test_clock.set_for_testing(2_000_000);
         scenario.next_tx(@0xDEAD);
-        merchant.cancel_invoice(invoice_id, &test_clock);
+        merchant.cancel_expired_invoice(invoice_id, &test_clock);
 
         // `InvoiceCanceled` was emitted with the expected payload.
         assert_emitted!(
@@ -349,7 +349,7 @@ fun cancel_before_expiry_aborts() {
 
         // Try to cancel while the invoice is still live — must abort.
         scenario.next_tx(@0xDEAD);
-        merchant.cancel_invoice(invoice_id, &test_clock);
+        merchant.cancel_expired_invoice(invoice_id, &test_clock);
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);
@@ -360,7 +360,7 @@ fun cancel_before_expiry_aborts() {
 }
 
 #[test]
-fun force_cancel_invoice_before_expiry_destroys_invoice() {
+fun cancel_invoice_before_expiry_destroys_invoice() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
@@ -402,8 +402,8 @@ fun force_cancel_invoice_before_expiry_destroys_invoice() {
         );
 
         // Clock is NOT advanced past the 600_000 TTL — the invoice is still live.
-        // A `MerchantRole` holder voids it early via `force_cancel_invoice`.
-        merchant.force_cancel_invoice(&merchant_auth, invoice_id);
+        // A `MerchantRole` holder voids it early via `cancel_invoice`.
+        merchant.cancel_invoice(&merchant_auth, invoice_id);
 
         // `InvoiceCanceled` was emitted with the expected payload.
         assert_emitted!(
@@ -2266,7 +2266,7 @@ fun cancel_invoice_unknown_id_aborts() {
 
         // No invoice with this ID — aborts `EInvoiceNotFound`.
         let phantom = object::id_from_address(@0xDEADBEEF);
-        merchant.cancel_invoice(phantom, &test_clock);
+        merchant.cancel_expired_invoice(phantom, &test_clock);
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);

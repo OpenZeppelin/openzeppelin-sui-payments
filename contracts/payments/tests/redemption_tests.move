@@ -338,7 +338,7 @@ fun cancel_voucher_returns_funds() {
         // Past expiry, permissionless cancel by another address.
         test_clock.set_for_testing(2_000_000);
         scenario.next_tx(@0xDEAD);
-        merchant.cancel_voucher(voucher_id, &customer_account_shared, &test_clock);
+        merchant.cancel_expired_voucher(voucher_id, &customer_account_shared, &test_clock);
 
         // `VoucherCanceled` was emitted with the expected payload.
         assert_emitted!(events::voucher_canceled(voucher_id, CUSTOMER, 50));
@@ -353,7 +353,7 @@ fun cancel_voucher_returns_funds() {
 }
 
 #[test]
-fun force_cancel_voucher_before_expiry_returns_funds() {
+fun cancel_voucher_before_expiry_returns_funds() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
@@ -413,8 +413,8 @@ fun force_cancel_voucher_before_expiry_returns_funds() {
 
         // Clock is NOT advanced past the 600_000 TTL — the voucher is still live.
         // A `MerchantRole` holder releases the locked LOYALTY early via
-        // `force_cancel_voucher`; the funds route back to the customer's account.
-        merchant.force_cancel_voucher(&merchant_auth, voucher_id, &customer_account_shared);
+        // `cancel_voucher`; the funds route back to the customer's account.
+        merchant.cancel_voucher(&merchant_auth, voucher_id, &customer_account_shared);
 
         // `VoucherCanceled` was emitted with the returned amount.
         assert_emitted!(events::voucher_canceled(voucher_id, CUSTOMER, 50));
@@ -429,7 +429,7 @@ fun force_cancel_voucher_before_expiry_returns_funds() {
 }
 
 #[test, expected_failure(abort_code = merchant::EWrongCustomer)]
-fun force_cancel_voucher_wrong_customer_aborts() {
+fun cancel_voucher_wrong_customer_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
         merchant::init_for_testing(scenario.ctx());
         let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
@@ -493,9 +493,9 @@ fun force_cancel_voucher_wrong_customer_aborts() {
         );
 
         // Wrong refund account (owner OTHER ≠ voucher customer CUSTOMER). Unlike
-        // `cancel_voucher`, there is no expiry gate to clear first, so the
+        // `cancel_expired_voucher`, there is no expiry gate to clear first, so the
         // customer check is reached immediately — aborts with `EWrongCustomer`.
-        merchant.force_cancel_voucher(&merchant_auth, voucher_id, &other_account_shared);
+        merchant.cancel_voucher(&merchant_auth, voucher_id, &other_account_shared);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -836,7 +836,7 @@ fun cancel_wrong_customer_aborts() {
         test_clock.set_for_testing(2_000_000);
         scenario.next_tx(@0xDEAD);
         // Aborts with `merchant::EWrongCustomer`.
-        merchant.cancel_voucher(voucher_id, &other_account_shared, &test_clock);
+        merchant.cancel_expired_voucher(voucher_id, &other_account_shared, &test_clock);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -1018,9 +1018,9 @@ fun cancel_voucher_before_expiry_aborts() {
             scenario.ctx(),
         );
 
-        // Voucher is still live — `cancel_voucher` must abort with `ENotExpired`.
+        // Voucher is still live — `cancel_expired_voucher` must abort with `ENotExpired`.
         scenario.next_tx(@0xDEAD);
-        merchant.cancel_voucher(voucher_id, &customer_account_shared, &test_clock);
+        merchant.cancel_expired_voucher(voucher_id, &customer_account_shared, &test_clock);
 
         // Unreachable cleanup.
         test_setup::return_loyalty_policy(loyalty_policy);
@@ -1316,7 +1316,7 @@ fun cancel_voucher_unknown_id_aborts() {
 
         // No voucher with this ID — aborts `EVoucherNotFound`.
         let phantom = object::id_from_address(@0xDEADBEEF);
-        merchant.cancel_voucher(phantom, &customer_account_shared, &test_clock);
+        merchant.cancel_expired_voucher(phantom, &customer_account_shared, &test_clock);
 
         // Unreachable cleanup.
         test_scenario::return_shared(merchant);

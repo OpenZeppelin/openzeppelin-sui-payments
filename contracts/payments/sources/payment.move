@@ -23,8 +23,8 @@ use std::type_name::TypeName;
 /// *future* invoices. While open, the invoice is thus a binding commitment: the
 /// customer settles at exactly these terms. Its continued *existence* is not
 /// guaranteed, though - it settles against the snapshot until it either expires
-/// (then anyone can clean it up via `cancel_invoice`) or a `MerchantRole` holder
-/// voids it early via `merchant::force_cancel_invoice` (the escape hatch for a
+/// (then anyone can clean it up via `cancel_expired_invoice`) or a `MerchantRole` holder
+/// voids it early via `merchant::cancel_invoice` (the escape hatch for a
 /// wrongly issued invoice).
 ///
 /// `store`-only (no `key`): identity is the `Table` key, not an object UID.

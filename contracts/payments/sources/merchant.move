@@ -78,48 +78,46 @@ const EDisplayUnchanged: vector<u8> = "Display name and logo both match the curr
 #[error(code = 5)]
 const EListingInactive: vector<u8> = "Listing is inactive and cannot be sold or redeemed";
 #[error(code = 6)]
-const EZeroAmount: vector<u8> = "Amount must be greater than zero";
-#[error(code = 7)]
 const ENoItems: vector<u8> = "Must include at least one item";
-#[error(code = 8)]
+#[error(code = 7)]
 const ELengthMismatch: vector<u8> = "listing_variant_ids and quantities must have the same length";
-#[error(code = 9)]
+#[error(code = 8)]
 const EZeroQuantity: vector<u8> = "Item quantity must be greater than zero";
-#[error(code = 10)]
+#[error(code = 9)]
 const ENoLoyaltyPrice: vector<u8> = "Variant is not redeemable: loyalty_price is not set";
-#[error(code = 11)]
+#[error(code = 10)]
 const EInvoiceNotFound: vector<u8> = "Invoice not found";
-#[error(code = 12)]
+#[error(code = 11)]
 const EInvoiceExpired: vector<u8> = "Invoice has expired";
-#[error(code = 13)]
+#[error(code = 12)]
 const EWrongPaymentType: vector<u8> =
     "Send currency does not match merchant's accepted payment type";
-#[error(code = 14)]
+#[error(code = 13)]
 const EWrongRecipient: vector<u8> = "Send recipient does not match Invoice payout_address";
-#[error(code = 15)]
+#[error(code = 14)]
 const EAmountMismatch: vector<u8> = "Send amount does not match Invoice amount";
-#[error(code = 16)]
+#[error(code = 15)]
 const EWrongLoyaltyRecipient: vector<u8> = "Loyalty account owner does not match payer";
-#[error(code = 17)]
+#[error(code = 16)]
 const ENotExpired: vector<u8> = "Not yet expired";
-#[error(code = 18)]
+#[error(code = 17)]
 const EVoucherNotFound: vector<u8> = "Voucher not found";
-#[error(code = 19)]
+#[error(code = 18)]
 const EVoucherExpired: vector<u8> = "Voucher has expired";
-#[error(code = 20)]
+#[error(code = 19)]
 const EWrongCustomer: vector<u8> = "Account owner does not match Voucher customer";
-#[error(code = 21)]
+#[error(code = 20)]
 const EInvalidAmount: vector<u8> = "Voucher amount must equal the total redeemed amount";
-#[error(code = 22)]
+#[error(code = 21)]
 const EReceiptNotFound: vector<u8> = "Receipt not found";
-#[error(code = 23)]
+#[error(code = 22)]
 const EBadHashLength: vector<u8> = "Voucher redeem_hash must be 32 bytes";
-#[error(code = 24)]
+#[error(code = 23)]
 const EWrongPreimage: vector<u8> =
     "Provided preimage does not match the voucher's redeem_hash commitment";
-#[error(code = 25)]
+#[error(code = 24)]
 const EOrderRefTooLong: vector<u8> = "order_ref exceeds MAX_ORDER_REF_LEN (256 bytes)";
-#[error(code = 26)]
+#[error(code = 25)]
 const EItemsTooMany: vector<u8> = "listing_variant_ids exceeds MAX_INVOICE_ITEMS (256 items)";
 
 // === Constants ===
@@ -321,17 +319,15 @@ public fun pay<C>(
     customer_loyalty_account: &Account,
     clock: &Clock,
 ) {
-    assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
-
-    let (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms) = self
-        .invoices
-        .remove(invoice_id)
-        .unpack();
-
-    let now = clock.timestamp_ms();
-    assert!(now < expires_at_ms, EInvoiceExpired);
-    // Otherwise a customer could mint their own coin and settle in junk tokens.
-    assert!(type_name::with_defining_ids<C>() == payment_type, EWrongPaymentType);
+    let (
+        payout_address,
+        payment_type,
+        items,
+        amount,
+        loyalty,
+        order_ref,
+        now,
+    ) = self.remove_open_invoice<C>(invoice_id, clock);
 
     // Validate PaS send request.
     let data = send_request.data();
@@ -343,34 +339,17 @@ public fun pay<C>(
     // Resolve send request and send funds to payout_address.
     send_funds::resolve_balance(send_request, policy_s);
 
-    // Mint the loyalty tokens snapshotted at issuance.
-    if (loyalty > 0) {
-        self.loyalty.mint_to(customer_loyalty_account, loyalty);
-    };
-
-    // Store the receipt under the invoice's issuance ID: a fresh, single-use ID
-    // removed from `invoices` above, so `invoice_receipts.add` can never collide.
-    let receipt = receipt::new_payment(
+    // The send request's sender is the proven payer and the loyalty recipient.
+    self.settle_invoice_payment(
+        invoice_id,
+        customer_loyalty_account,
         sender,
         items,
         amount,
-        now,
-        invoice_id,
-        payout_address,
-        payment_type,
         loyalty,
         order_ref,
-    );
-    self.invoice_receipts.add(invoice_id, receipt);
-
-    events::emit_invoice_paid(
-        invoice_id,
-        order_ref,
-        sender,
         payout_address,
         payment_type,
-        amount,
-        loyalty,
         now,
         false,
     );
@@ -417,53 +396,33 @@ public fun pay_with_coin<C>(
     customer_loyalty_account: &Account,
     clock: &Clock,
 ) {
-    assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
+    let (
+        payout_address,
+        payment_type,
+        items,
+        amount,
+        loyalty,
+        order_ref,
+        now,
+    ) = self.remove_open_invoice<C>(invoice_id, clock);
 
-    let (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms) = self
-        .invoices
-        .remove(invoice_id)
-        .unpack();
-
-    let now = clock.timestamp_ms();
-    assert!(now < expires_at_ms, EInvoiceExpired);
-    // Otherwise a customer could mint their own coin and settle in junk tokens.
-    assert!(type_name::with_defining_ids<C>() == payment_type, EWrongPaymentType);
-
-    // Exact payment; the merchant routes the coin to the payout address.
+    // Validate amount and route the coin to the payout address.
     assert!(coin.value() == amount, EAmountMismatch);
     transfer::public_transfer(coin, payout_address);
 
     // No send-request sender here: the loyalty account's owner is the customer.
     let customer = customer_loyalty_account.owner();
 
-    // Mint the loyalty tokens snapshotted at issuance.
-    if (loyalty > 0) {
-        self.loyalty.mint_to(customer_loyalty_account, loyalty);
-    };
-
-    // Store the receipt under the invoice's issuance ID: a fresh, single-use ID
-    // removed from `invoices` above, so `invoice_receipts.add` can never collide.
-    let receipt = receipt::new_payment(
+    self.settle_invoice_payment(
+        invoice_id,
+        customer_loyalty_account,
         customer,
         items,
         amount,
-        now,
-        invoice_id,
-        payout_address,
-        payment_type,
         loyalty,
         order_ref,
-    );
-    self.invoice_receipts.add(invoice_id, receipt);
-
-    events::emit_invoice_paid(
-        invoice_id,
-        order_ref,
-        customer,
         payout_address,
         payment_type,
-        amount,
-        loyalty,
         now,
         true,
     );
@@ -522,8 +481,8 @@ public fun cancel_invoice(self: &mut Merchant, invoice_id: ID, clock: &Clock) {
 /// - `ENoItems` if `listing_variant_ids` is empty.
 /// - `EItemsTooMany` if `listing_variant_ids.length() > MAX_INVOICE_ITEMS`.
 /// - `ELengthMismatch` if the two vectors differ in length.
-/// - `EZeroAmount` if the unlocked amount is zero.
-/// - `EInvalidAmount` if the unlocked amount differs from the items' total.
+/// - `EInvalidAmount` if the unlocked amount differs from the items' total
+///   (a zero unlocked amount also aborts here, since the items total is always positive).
 /// - `EZeroQuantity` / `ENoLoyaltyPrice` / `EVariantNotFound` / `EListingInactive`
 ///   for catalog/price problems.
 /// - `EBadHashLength` if `redeem_hash` is not 32 bytes (blake2b256 digest).
@@ -550,10 +509,9 @@ public fun create_voucher(
     assert!(listing_variant_ids.length() == quantities.length(), ELengthMismatch);
     assert!(redeem_hash.length() == 32, EBadHashLength);
 
-    // Take and validate customer account and funds.
+    // Take customer account and funds.
     let customer = unlock_req.data().owner();
     let amount = unlock_req.data().funds().value();
-    assert!(amount > 0, EZeroAmount);
 
     // Combine and validate active items and quantities.
     let items = listing_variant_ids.zip_map!(
@@ -1145,6 +1103,90 @@ public fun prune_voucher_receipts(
 }
 
 // === Private Functions ===
+
+/// Remove and validate a settleable invoice.
+/// Asserts the invoice exists, removes and unpacks it, then enforces
+/// expiry and the accepted payment-type binding for coin type `C`.
+///
+/// #### Returns
+/// The unpacked invoice fields, ready for the caller's fund routing +
+/// `settle_invoice_payment`, with the resolved `now` timestamp substituted for
+/// `expires_at_ms`:
+/// `(payout_address, payment_type, items, amount, loyalty, order_ref, now)`.
+///
+/// #### Aborts
+/// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
+/// - `EInvoiceExpired` if the invoice has expired.
+/// - `EWrongPaymentType` if `C` does not match the invoice's `payment_type`.
+fun remove_open_invoice<C>(
+    self: &mut Merchant,
+    invoice_id: ID,
+    clock: &Clock,
+): (address, TypeName, vector<Item>, u64, u64, vector<u8>, u64) {
+    assert!(self.invoices.contains(invoice_id), EInvoiceNotFound);
+
+    let (payout_address, payment_type, items, amount, loyalty, order_ref, expires_at_ms) = self
+        .invoices
+        .remove(invoice_id)
+        .unpack();
+
+    let now = clock.timestamp_ms();
+    assert!(now < expires_at_ms, EInvoiceExpired);
+    // Otherwise a customer could mint their own coin and settle in junk tokens.
+    assert!(type_name::with_defining_ids<C>() == payment_type, EWrongPaymentType);
+
+    (payout_address, payment_type, items, amount, loyalty, order_ref, now)
+}
+
+/// Mints the snapshotted loyalty to `customer_loyalty_account`,
+/// stores the `Receipt<Payment>` keyed by `invoice_id`, and emits `InvoicePaid`.
+///
+/// The caller must have already removed the invoice from `self.invoices`; since
+/// `invoice_id` is a fresh, single-use id, `invoice_receipts.add` can never collide.
+fun settle_invoice_payment(
+    self: &mut Merchant,
+    invoice_id: ID,
+    customer_loyalty_account: &Account,
+    customer: address,
+    items: vector<Item>,
+    amount: u64,
+    loyalty: u64,
+    order_ref: vector<u8>,
+    payout_address: address,
+    payment_type: TypeName,
+    now: u64,
+    paid_with_coin: bool,
+) {
+    // Mint the loyalty tokens snapshotted at issuance.
+    if (loyalty > 0) {
+        self.loyalty.mint_to(customer_loyalty_account, loyalty);
+    };
+
+    let receipt = receipt::new_payment(
+        customer,
+        items,
+        amount,
+        now,
+        invoice_id,
+        payout_address,
+        payment_type,
+        loyalty,
+        order_ref,
+    );
+    self.invoice_receipts.add(invoice_id, receipt);
+
+    events::emit_invoice_paid(
+        invoice_id,
+        order_ref,
+        customer,
+        payout_address,
+        payment_type,
+        amount,
+        loyalty,
+        now,
+        paid_with_coin,
+    );
+}
 
 /// Price one stablecoin line by snapshotting the variant's current price from
 /// the catalog (asserting the parent listing is active).

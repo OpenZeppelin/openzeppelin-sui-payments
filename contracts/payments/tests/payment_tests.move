@@ -359,6 +359,70 @@ fun cancel_before_expiry_aborts() {
     });
 }
 
+#[test]
+fun force_cancel_invoice_before_expiry_destroys_invoice() {
+    e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {
+        merchant::init_for_testing(scenario.ctx());
+        let (merchant_id, test_usd_cap) = test_setup::setup_merchant(
+            ns,
+            PAYOUT,
+            scenario.ctx(),
+        );
+
+        let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+        let variant = listing::new_variant(
+            b"S".to_string(),
+            500,
+            std::option::none(),
+            scenario.ctx(),
+        );
+        let variant_id = listing.add_variant(variant);
+
+        scenario.next_tx(ADMIN);
+        let mut merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
+        let mut ac = scenario.take_shared<AccessControl<MERCHANT>>();
+        ac.grant_role<MERCHANT, CatalogManagerRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, CashierRole>(ADMIN, scenario.ctx());
+        ac.grant_role<MERCHANT, MerchantRole>(ADMIN, scenario.ctx());
+        let catalog_auth = ac.new_auth<MERCHANT, CatalogManagerRole>(scenario.ctx());
+        let cashier_auth = ac.new_auth<MERCHANT, CashierRole>(scenario.ctx());
+        let merchant_auth = ac.new_auth<MERCHANT, MerchantRole>(scenario.ctx());
+
+        let _ = merchant.add_listing(&catalog_auth, listing);
+
+        let mut test_clock = clock::create_for_testing(scenario.ctx());
+        test_clock.set_for_testing(1_000_000);
+        let invoice_id = merchant.create_invoice(
+            &cashier_auth,
+            vector[variant_id],
+            vector[1],
+            b"order-001",
+            &test_clock,
+            scenario.ctx(),
+        );
+
+        // Clock is NOT advanced past the 600_000 TTL — the invoice is still live.
+        // A `MerchantRole` holder voids it early via `force_cancel_invoice`.
+        merchant.force_cancel_invoice(&merchant_auth, invoice_id);
+
+        // `InvoiceCanceled` was emitted with the expected payload.
+        assert_emitted!(
+            events::invoice_canceled(
+                invoice_id,
+                PAYOUT,
+                type_name::with_defining_ids<TEST_USD>(),
+                500,
+                b"order-001",
+            ),
+        );
+
+        test_scenario::return_shared(merchant);
+        test_scenario::return_shared(ac);
+        destroy(test_usd_cap);
+        destroy(test_clock);
+    });
+}
+
 #[test, expected_failure(abort_code = merchant::EListingInactive)]
 fun payment_inactive_listing_aborts() {
     e2e::test_tx!(ADMIN, |ns, _policy_a, _policy_b, scenario| {

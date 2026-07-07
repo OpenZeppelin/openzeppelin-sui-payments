@@ -65,7 +65,9 @@ public struct VoucherRedeemed has copy, drop {
     timestamp_ms: u64,
 }
 
-/// Emitted when an expired `Invoice` is cleaned up via `merchant::cancel_invoice`.
+/// Emitted when an `Invoice` is canceled - either an expired invoice cleaned up
+/// via the permissionless `merchant::cancel_invoice`, or an open invoice
+/// invalidated early by a `MerchantRole` holder via `merchant::force_cancel_invoice`.
 public struct InvoiceCanceled has copy, drop {
     /// ID of the canceled `Invoice` (now destroyed).
     invoice_id: ID,
@@ -79,8 +81,10 @@ public struct InvoiceCanceled has copy, drop {
     order_ref: vector<u8>,
 }
 
-/// Emitted when an expired `Voucher` is cleaned up via `merchant::cancel_voucher`.
-/// The locked LOYALTY balance has been returned to `customer`.
+/// Emitted when a `Voucher` is canceled - either an expired voucher cleaned up
+/// via the permissionless `merchant::cancel_voucher`, or an open voucher
+/// invalidated early by a `MerchantRole` holder via `merchant::force_cancel_voucher`.
+/// In both cases the locked LOYALTY balance has been returned to `customer`.
 public struct VoucherCanceled has copy, drop {
     /// ID of the canceled `Voucher` (now destroyed).
     voucher_id: ID,

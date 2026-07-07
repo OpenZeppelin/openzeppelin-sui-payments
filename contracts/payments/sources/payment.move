@@ -25,7 +25,7 @@ use std::type_name::TypeName;
 /// guaranteed, though - it settles against the snapshot until it either expires
 /// (then anyone can clean it up via `cancel_invoice`) or a `MerchantRole` holder
 /// voids it early via `merchant::force_cancel_invoice` (the escape hatch for a
-/// mis-issued invoice).
+/// wrongly issued invoice).
 ///
 /// `store`-only (no `key`): identity is the `Table` key, not an object UID.
 public struct Invoice has store {

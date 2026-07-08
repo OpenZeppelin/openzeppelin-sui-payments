@@ -1,8 +1,9 @@
 /// Receipts - on-chain proof of settlement, stored in the `Merchant`.
 ///
-/// `Receipt<Payment>` is built at the end of `merchant::pay` and stored in
-/// `Merchant.invoice_receipts`; `Receipt<Redemption>` is built at the end of
-/// `merchant::redeem` and stored in `Merchant.voucher_receipts`. Both are keyed
+/// `Receipt<Payment>` is built at the end of `merchant::pay` and
+/// `merchant::pay_with_coin` and stored in `Merchant.invoice_receipts`.
+/// `Receipt<Redemption>` is built at the end of `merchant::redeem` and stored in
+/// `Merchant.voucher_receipts`. Both are keyed
 /// by the originating invoice/voucher ID and record the settling `customer` for
 /// attribution. `T` is the flow-specific payload (`Payment` / `Redemption`): the
 /// generic keeps the shared fields in one place while giving each flow a
@@ -160,6 +161,20 @@ public(package) fun compute_total(items: &vector<Item>): u64 {
 }
 
 /// Build a `Receipt<Payment>`.
+///
+/// #### Parameters
+/// - `customer`: The paying customer the receipt is attributed to.
+/// - `items`: Line items copied from the originating invoice.
+/// - `amount`: Total settled stablecoin amount.
+/// - `timestamp_ms`: Settlement clock timestamp (ms since epoch).
+/// - `invoice_id`: ID of the `Invoice` this receipt settled.
+/// - `payout_address`: Payout address that received the stablecoin.
+/// - `payment_type`: `TypeName` of the stablecoin the customer paid in.
+/// - `loyalty`: LOYALTY units minted to the customer on settlement.
+/// - `order_ref`: Merchant-supplied order reference carried over from the invoice.
+///
+/// #### Returns
+/// - The constructed `Receipt<Payment>`.
 public(package) fun new_payment(
     customer: address,
     items: vector<Item>,
@@ -181,6 +196,16 @@ public(package) fun new_payment(
 }
 
 /// Build a `Receipt<Redemption>`.
+///
+/// #### Parameters
+/// - `customer`: The redeeming customer the receipt is attributed to.
+/// - `items`: Line items copied from the originating voucher.
+/// - `amount`: Total redeemed LOYALTY amount.
+/// - `timestamp_ms`: Settlement clock timestamp (ms since epoch).
+/// - `voucher_id`: ID of the `Voucher` this receipt settled.
+///
+/// #### Returns
+/// - The constructed `Receipt<Redemption>`.
 public(package) fun new_redemption(
     customer: address,
     items: vector<Item>,
@@ -200,6 +225,9 @@ public(package) fun new_redemption(
 /// Destroy a receipt, reclaiming its storage. Used by the merchant's prune
 /// path; the `InvoicePaid` / `VoucherRedeemed` event keeps totals + metadata,
 /// but the `items` line-item breakdown is lost.
+///
+/// #### Parameters
+/// - `receipt`: The receipt to destroy.
 public(package) fun destroy<T: store + drop>(receipt: Receipt<T>) {
     let Receipt { customer: _, items: _, amount: _, timestamp_ms: _, data: _ } = receipt;
 }

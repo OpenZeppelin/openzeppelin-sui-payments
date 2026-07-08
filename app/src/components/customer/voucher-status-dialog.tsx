@@ -29,7 +29,7 @@ const POLL_MS = 1_000;
  *                    `merchant.voucher_receipts[voucher_id]`. Shows what was
  *                    burned (LOY) + line items + when.
  *   - **Canceled** — voucher gone from `merchant.vouchers` AND no receipt
- *                    arrived (expired and someone called `cancel_voucher`).
+ *                    arrived (expired and someone called `cancel_expired_voucher`).
  *                    Shows a "Refunded" notice — the LOY went back to the
  *                    customer's PAS Account.
  */

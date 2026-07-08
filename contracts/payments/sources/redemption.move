@@ -21,8 +21,10 @@ use sui::balance::Balance;
 /// `store`-only (no `key`): identity is the `Table` key, not an object UID. No
 /// `drop` either - it holds `Balance<LOYALTY>`, which is a linear resource.
 public struct Voucher has store {
-    /// Owner of the unlock request that funded this voucher. Recipient of the
-    /// `Receipt` on `redeem` and of the returned balance on `cancel`.
+    /// Owner of the unlock request that funded this voucher. On `redeem` this is
+    /// the attribution field on the stored `Receipt` (a store-only value kept in
+    /// `Merchant.voucher_receipts`, not transferred to the customer). On `cancel`
+    /// it is the recipient of the returned balance.
     customer: address,
     /// Line items with snapshot LOYALTY prices.
     items: vector<Item>,
@@ -37,6 +39,9 @@ public struct Voucher has store {
     /// redeemer holds the secret the customer revealed at the till and
     /// prevents `CashierRole` alone from sweeping vouchers observed in
     /// public `VoucherCreated` events.
+    ///
+    /// MUST be single-use: `redeem` reveals the preimage on-chain, so a reused
+    /// `redeem_hash` can be redeemed by an observer of the earlier reveal.
     redeem_hash: vector<u8>,
 }
 

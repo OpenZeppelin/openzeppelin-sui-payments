@@ -354,7 +354,7 @@ fun update_config_updates_values() {
         assert_eq!(merchant.config().max_loyalty_per_payment(), 500_000);
         assert_eq!(merchant.config().invoice_ttl_ms(), 300_000);
         assert_eq!(merchant.config().voucher_ttl_ms(), 300_000);
-        assert_emitted!(events::config_updated());
+        assert_emitted!(events::config_updated(*merchant.config()));
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);
@@ -424,7 +424,7 @@ fun update_display_updates_name_and_logo() {
         );
         assert_eq!(*merchant.name(), b"Renamed Shop".to_string());
         assert_eq!(*merchant.logo_url().borrow(), b"https://example.com/logo.png".to_string());
-        assert_emitted!(events::display_updated());
+        assert_emitted!(events::display_updated(*merchant.name(), *merchant.logo_url()));
 
         test_scenario::return_shared(merchant);
         test_scenario::return_shared(ac);

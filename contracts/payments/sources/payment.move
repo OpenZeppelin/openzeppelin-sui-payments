@@ -16,23 +16,16 @@ use std::type_name::TypeName;
 /// Merchant-issued invoice. Stored in `Merchant.invoices` keyed by a freshly
 /// minted ID; that ID is surfaced via QR for the customer to scan and settle.
 ///
-/// **Snapshot semantics - invoice as a merchant commitment.** Every settlement-
-/// relevant field below (`payout_address`, `payment_type`, item prices,
-/// `amount`, `loyalty`) is captured from the live `Merchant.config` at issuance
-/// and is **immutable** for the invoice's lifetime. This makes the issued
-/// invoice a binding commitment from the merchant to the customer: the moment
-/// the QR is shown, the customer can rely on:
-///
-///   - exactly `amount` stablecoin units of exactly `payment_type` will be due,
-///   - those funds will go to **this** `payout_address` (the real on-chain
-///     destination - not a configurable mid-flight redirect),
-///   - exactly `loyalty` LOYALTY will be minted back to them,
-///   - line-item prices won't drift between scan and settle.
-///
-/// A subsequent `merchant::update_config` updates the live config for *future*
-/// invoices but does not retro-mutate already-issued ones. Open invoices either
-/// settle against their snapshot, expire and get permissionlessly cleaned via
-/// `cancel_invoice`.
+/// **Snapshot semantics.** Every settlement-relevant field below
+/// (`payout_address`, `payment_type`, item prices, `amount`, `loyalty`) is
+/// captured from the live `Merchant.config` at issuance and is **immutable** for
+/// the invoice's lifetime, so a later `merchant::update_config` only affects
+/// *future* invoices. While open, the invoice is thus a binding commitment: the
+/// customer settles at exactly these terms. Its continued *existence* is not
+/// guaranteed, though - it settles against the snapshot until it either expires
+/// (then anyone can clean it up via `cancel_expired_invoice`) or a `MerchantRole` holder
+/// voids it early via `merchant::cancel_invoice` (the escape hatch for a
+/// wrongly issued invoice).
 ///
 /// `store`-only (no `key`): identity is the `Table` key, not an object UID.
 public struct Invoice has store {

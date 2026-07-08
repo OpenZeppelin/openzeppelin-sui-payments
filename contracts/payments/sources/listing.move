@@ -20,6 +20,19 @@ const EZeroPrice: vector<u8> = "Price must be greater than zero";
 const EVariantNotFound: vector<u8> = "Listing variant not found";
 #[error(code = 3)]
 const EActiveStateUnchanged: vector<u8> = "Listing already has the requested active state";
+#[error(code = 4)]
+const ETooManyVariants: vector<u8> = "Listing has reached the maximum number of variants";
+
+// === Constants ===
+
+/// Maximum number of variants a single listing may hold.
+///
+/// Bounds two operations that scale linearly with a listing's variant count:
+/// the O(n) `VecMap` lookup performed while pricing each invoice/voucher line,
+/// and the per-variant `variant_index` deletions `Merchant::remove_listing`
+/// issues in one transaction. Chosen conservatively to keep both well within
+/// Sui's per-transaction object and gas limits.
+const MAX_VARIANTS_PER_LISTING: u64 = 256;
 
 // === Structs ===
 
@@ -31,7 +44,10 @@ public struct Listing has drop, store {
     name: String,
     /// Priced variants, keyed by `Variant.id`.
     variants: VecMap<ID, Variant>,
-    /// Whether this listing is currently purchasable (display hint).
+    /// Whether this listing is currently purchasable. Enforced, not just a
+    /// display hint: `merchant::active_listing_variant` aborts with
+    /// `EListingInactive`, so an inactive listing cannot be sold or redeemed
+    /// against via `create_invoice` / `create_voucher`.
     active: bool,
 }
 
@@ -46,7 +62,7 @@ public struct Variant has drop, store {
     /// Stablecoin price in token units.
     price: u64,
     /// Optional LOYALTY price. `None` means this variant cannot be paid for in
-    /// LOYALTY (voucher creation aborts with `receipt::ENoLoyaltyPrice`).
+    /// LOYALTY (voucher creation aborts with `merchant::ENoLoyaltyPrice`).
     loyalty_price: Option<u64>,
 }
 
@@ -158,9 +174,13 @@ public fun loyalty_price(self: &Variant): Option<u64> { self.loyalty_price }
 /// - The inserted variant's ID.
 ///
 /// #### Aborts
+/// - `ETooManyVariants` if the listing already holds `MAX_VARIANTS_PER_LISTING`
+///   variants.
 /// - Aborts (via `vec_map::insert`) if the variant's `id` already exists in
 ///   this listing.
 public(package) fun add_variant(self: &mut Listing, variant: Variant): ID {
+    assert!(self.variants.length() < MAX_VARIANTS_PER_LISTING, ETooManyVariants);
+
     let id = variant.id;
     self.variants.insert(id, variant);
     id

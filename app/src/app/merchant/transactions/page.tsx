@@ -331,7 +331,7 @@ function OpenInvoiceRow({
 
 /**
  * Renders a `VoucherCreated` row enriched with live data from the Voucher stored
- * on `merchant.vouchers`. Mirrors `OpenInvoiceRow` but with `cancel_voucher` (which
+ * on `merchant.vouchers`. Mirrors `OpenInvoiceRow` but with `cancel_expired_voucher` (which
  * needs the customer's PAS account — the server route resolves that from the
  * voucher's `customer` field).
  */

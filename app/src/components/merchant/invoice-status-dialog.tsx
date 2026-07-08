@@ -30,7 +30,7 @@ const POLL_MS = 1_000;
  *                         `merchant.invoice_receipts[invoice_id]`. Renders the
  *                         payment summary (amount, LOY minted, customer).
  *   - **Canceled**      — invoice is gone from `merchant.invoices` AND no
- *                         receipt landed (someone called `cancel_invoice` after
+ *                         receipt landed (someone called `cancel_expired_invoice` after
  *                         expiry). Renders a "Canceled" notice.
  *
  * Both polls run every POLL_MS while the dialog is open. We require both

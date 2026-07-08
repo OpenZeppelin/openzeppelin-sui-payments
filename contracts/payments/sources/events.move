@@ -2,9 +2,10 @@
 ///
 /// All on-chain state transitions worth indexing emit one event from this
 /// module. Indexers filter by event type (`InvoicePaid`, `VoucherRedeemed`, ...).
-/// Note the embedded identifiers are `Table` keys for store-only `Invoice`,
-/// `Voucher`, `Listing`, and `Variant` values held inside the `Merchant`, not
-/// IDs of standalone Sui objects, so they cannot be resolved via object lookup.
+/// Note the embedded identifiers are keys for store-only values owned by the
+/// merchant. `Invoice`, `Voucher`, and `Listing` entries are `Table` keys.
+/// A `Variant` is keyed inside its parent listing. These are not standalone Sui
+/// object IDs, so they cannot be resolved via object lookup.
 module openzeppelin_payments::events;
 
 use openzeppelin_payments::config::Config;

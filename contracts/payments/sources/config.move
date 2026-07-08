@@ -135,7 +135,6 @@ public struct Config has copy, drop, store {
 /// - `voucher_ttl_ms`: Voucher lifetime in milliseconds. Must be in `(0, MAX_TTL_MS]`.
 ///
 /// #### Aborts
-/// (listed in the order the checks run)
 /// - `EDecimalsTooLarge` if `currency.decimals() > MAX_DECIMALS`.
 /// - `EZeroInvoiceTtl` if `invoice_ttl_ms` is zero.
 /// - `ETtlTooLarge` if `invoice_ttl_ms` exceeds `MAX_TTL_MS`.

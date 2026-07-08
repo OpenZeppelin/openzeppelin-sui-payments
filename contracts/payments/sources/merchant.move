@@ -486,7 +486,6 @@ public fun cancel_expired_invoice(self: &mut Merchant, invoice_id: ID, clock: &C
 /// - The issuance ID (the `Table` key and QR value).
 ///
 /// #### Aborts
-/// (listed in the order the checks run)
 /// - `ENoItems` if `listing_variant_ids` is empty.
 /// - `EItemsTooMany` if `listing_variant_ids.length() > MAX_INVOICE_ITEMS`.
 /// - `ELengthMismatch` if the two vectors differ in length.
@@ -1093,7 +1092,6 @@ public fun remove_listing_variant(
 /// - The issuance ID (the `Table` key and QR value).
 ///
 /// #### Aborts
-/// (listed in the order the checks run)
 /// - `ENoItems` if `listing_variant_ids` is empty.
 /// - `EItemsTooMany` if `listing_variant_ids.length() > MAX_INVOICE_ITEMS`.
 /// - `ELengthMismatch` if the two vectors differ in length.

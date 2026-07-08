@@ -494,6 +494,11 @@ public fun cancel_expired_invoice(self: &mut Merchant, invoice_id: ID, clock: &C
 /// requires the matching preimage, so `CashierRole` alone - even when armed
 /// with the publicly-emitted `voucher_id`, cannot sweep vouchers without
 /// the customer also revealing the preimage. See `merchant::redeem`.
+///
+/// The commitment MUST be single-use: `redeem` reveals the preimage on-chain,
+/// so any reused `redeem_hash` can be redeemed by an observer of the earlier
+/// reveal. Only length is checked here, not uniqueness - the client must supply
+/// a fresh, high-entropy preimage per voucher.
 public fun create_voucher(
     self: &mut Merchant,
     mut unlock_req: Request<UnlockFunds<Balance<LOYALTY>>>,
@@ -1138,6 +1143,10 @@ public fun create_invoice(
 /// the till). The preimage is opaque random bytes the customer's dApp
 /// generates client-side and stores locally - it never appears on chain
 /// until reveal time.
+///
+/// The reveal is public and permanent, so a reused `redeem_hash` can be
+/// redeemed by anyone who recorded an earlier preimage. Clients must use a
+/// fresh, high-entropy, single-use preimage per voucher.
 ///
 /// #### Parameters
 /// - `self`: The merchant to mutate.

@@ -1,8 +1,10 @@
 /// Event types and package-private emit helpers for the payments package.
 ///
 /// All on-chain state transitions worth indexing emit one event from this
-/// module. Indexers filter by event type (`InvoicePaid`, `VoucherRedeemed`, ...)
-/// and resolve the embedded IDs back to the relevant objects.
+/// module. Indexers filter by event type (`InvoicePaid`, `VoucherRedeemed`, ...).
+/// Note the embedded identifiers are `Table` keys for store-only `Invoice`,
+/// `Voucher`, `Listing`, and `Variant` values held inside the `Merchant`, not
+/// IDs of standalone Sui objects, so they cannot be resolved via object lookup.
 module openzeppelin_payments::events;
 
 use openzeppelin_payments::config::Config;
@@ -14,13 +16,15 @@ use sui::event;
 
 /// Emitted when a merchant issues a fresh `Invoice` via `merchant::create_invoice`.
 public struct InvoiceCreated has copy, drop {
-    /// ID of the newly-shared `Invoice` object.
+    /// Issuance identifier keying the new store-only `Invoice` in
+    /// `Merchant.invoices` (not a standalone Sui object ID).
     invoice_id: ID,
 }
 
 /// Emitted when a customer creates a fresh `Voucher` via `merchant::create_voucher`.
 public struct VoucherCreated has copy, drop {
-    /// ID of the newly-shared `Voucher` object.
+    /// Issuance identifier keying the new store-only `Voucher` in
+    /// `Merchant.vouchers` (not a standalone Sui object ID).
     voucher_id: ID,
 }
 

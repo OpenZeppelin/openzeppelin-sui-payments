@@ -2,8 +2,10 @@
 /// for everything that differs between merchants:
 ///
 /// - **Settlement identity**: `payout_address` (where stablecoin lands) and
-///   `accepted_payment_type` (a `TypeName` snapshot used at runtime to reject
-///   `pay<C>` calls in the wrong currency).
+///   `accepted_payment_type` (a `TypeName` snapshot). This value is copied onto
+///   each `Invoice` at `create_invoice` time. The currency check in `pay<C>` /
+///   `pay_with_coin<C>` reads the invoice's snapshotted `payment_type`, not this
+///   live field, so rotating it only binds *future* invoices.
 /// - **Decimals**: `payment_decimals` is read once from `&Currency<C>` at
 ///   `config::new<C>` time. Stored on the Config so `compute_loyalty` doesn't
 ///   have to round-trip through the `CoinRegistry` on every invoice, and so the
@@ -19,10 +21,11 @@
 ///       `invoice.expires_at_ms = clock + invoice_ttl_ms`
 ///       `voucher.expires_at_ms = clock + voucher_ttl_ms`
 ///
-/// Updated atomically via `merchant::update_config(new: Config)`. There are no
-/// targeted setters: rotating the payout address, swapping the loyalty rate, or
-/// changing the accepted currency all happen via a fresh `Config` constructed
-/// with `config::new<C'>` for the new `C'`.
+/// Updated atomically via
+/// `merchant::update_config(&mut Merchant, &Auth<MerchantRole>, config: Config)`
+/// (gated by `MerchantRole`). There are no targeted setters: rotating the payout
+/// address, swapping the loyalty rate, or changing the accepted currency all
+/// happen via a fresh `Config` constructed with `config::new<C'>` for the new `C'`.
 module openzeppelin_payments::config;
 
 use std::type_name::{Self, TypeName};
@@ -49,9 +52,12 @@ const EDecimalsTooLarge: vector<u8> = "Currency decimals must be no greater than
 /// `clock.timestamp_ms() + ttl_ms` computation.
 const MAX_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 
-/// Hard cap on currency decimals. `10^18` still fits in u64; anything bigger
-/// would make the scale factor in `compute_loyalty` overflow u128 in pathological
-/// combinations with `loyalty_coefficient`.
+/// Hard cap on currency decimals. `compute_loyalty` raises `10` to this power as
+/// a u128 scale factor (`10u128.pow(payment_decimals)`). Capping at 18 keeps
+/// `10^payment_decimals` far below the u128 ceiling (which raw `10^decimals`
+/// would only approach past ~38 decimals). This cap is not the binding overflow
+/// constraint in `compute_loyalty` - that is the `amount * coefficient` product.
+/// See the notes there.
 const MAX_DECIMALS: u8 = 18;
 
 /// Fixed-point scale for `loyalty_coefficient`. A raw value of
@@ -70,9 +76,11 @@ public struct Config has copy, drop, store {
     /// `Invoice` at `create_invoice` time, so changing this mid-flight does not
     /// affect open invoices.
     payout_address: address,
-    /// `TypeName` of `C` - used at runtime to reject `pay<C'>` calls with a
-    /// non-matching currency. Off-chain readers can identify the accepted
-    /// currency from this without parsing type tags from BCS.
+    /// `TypeName` of `C`. Snapshotted onto each `Invoice` at `create_invoice`
+    /// time. The runtime currency check in `pay<C'>` / `pay_with_coin<C'>` compares
+    /// `C'` against the invoice's snapshotted `payment_type`, not this live field.
+    /// Off-chain readers can identify the accepted currency from this without
+    /// parsing type tags from BCS.
     accepted_payment_type: TypeName,
     /// Decimals of `C`, read from `&Currency<C>` at `config::new`. Used to
     /// normalize `payment_amount` into "human units" inside `compute_loyalty`.
@@ -98,8 +106,9 @@ public struct Config has copy, drop, store {
 /// with `C` regardless of what the caller might claim.
 ///
 /// `loyalty_coefficient = 0` and/or `max_loyalty_per_payment = 0` are permitted -
-/// loyalty mint becomes a no-op. Pass the returned value to `merchant::create<C>`
-/// (initial setup) or `merchant::update_config` (replacement).
+/// loyalty mint becomes a no-op. Pass the returned value to `merchant::create`
+/// (initial setup - not generic, the currency `C` is already pinned into the
+/// `Config`) or `merchant::update_config` (replacement).
 ///
 /// Note for merchants: this config is the live source for *future* invoices
 /// only. Each issued `Invoice` snapshots `payout_address`, `payment_type`,
@@ -126,10 +135,12 @@ public struct Config has copy, drop, store {
 /// - `voucher_ttl_ms`: Voucher lifetime in milliseconds. Must be in `(0, MAX_TTL_MS]`.
 ///
 /// #### Aborts
+/// (listed in the order the checks run)
 /// - `EDecimalsTooLarge` if `currency.decimals() > MAX_DECIMALS`.
 /// - `EZeroInvoiceTtl` if `invoice_ttl_ms` is zero.
+/// - `ETtlTooLarge` if either TTL exceeds `MAX_TTL_MS` (the `invoice_ttl_ms`
+///   check runs before the `voucher_ttl_ms` one).
 /// - `EZeroVoucherTtl` if `voucher_ttl_ms` is zero.
-/// - `ETtlTooLarge` if either TTL exceeds `MAX_TTL_MS`.
 public fun new<C>(
     currency: &Currency<C>,
     payout_address: address,
@@ -185,16 +196,24 @@ public fun new<C>(
 /// #### Returns
 /// - The LOYALTY units to mint, clamped to `max_loyalty_per_payment`.
 public fun compute_loyalty(self: &Config, payment_amount: u64): u64 {
+    // u128 scale factor. `MAX_DECIMALS` (18) keeps `10^payment_decimals` far
+    // below the u128 ceiling.
     let scale = 10u128.pow(self.payment_decimals);
 
-    // Should not overflow LOYALTY_FLOAT_SCALING < u64::max & scale < u64::max
+    // `LOYALTY_FLOAT_SCALING` (1e9) * `scale` (<= 1e18) is at most ~1e27, well
+    // within u128.
     let denom = (LOYALTY_FLOAT_SCALING as u128) * scale;
 
-    // Should not overflow amount < u64::max & coefficient < u64::max
+    // Binding overflow constraint: `amount` and `coefficient` are each widened
+    // from u64, so their product is at most `(2^64 - 1)^2 < 2^128` - it fits in
+    // u128 but sits near the ceiling, which is why the multiply must run in u128.
     let amount = payment_amount as u128;
     let coefficient = self.loyalty_coefficient as u128;
     let value = (amount * coefficient) / denom;
 
+    // The clamp comparison runs in u128 first, so in the `else` branch
+    // `value <= max <= u64::max` and the narrowing cast cannot truncate;
+    // `max as u64` is trivially safe since `max` was widened from a u64.
     let max = self.max_loyalty_per_payment as u128;
     if (value > max) { max as u64 } else { value as u64 }
 }

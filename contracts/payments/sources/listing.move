@@ -44,7 +44,10 @@ public struct Listing has drop, store {
     name: String,
     /// Priced variants, keyed by `Variant.id`.
     variants: VecMap<ID, Variant>,
-    /// Whether this listing is currently purchasable (display hint).
+    /// Whether this listing is currently purchasable. Enforced, not just a
+    /// display hint: `merchant::active_listing_variant` aborts with
+    /// `EListingInactive`, so an inactive listing cannot be sold or redeemed
+    /// against via `create_invoice` / `create_voucher`.
     active: bool,
 }
 
@@ -59,7 +62,7 @@ public struct Variant has drop, store {
     /// Stablecoin price in token units.
     price: u64,
     /// Optional LOYALTY price. `None` means this variant cannot be paid for in
-    /// LOYALTY (voucher creation aborts with `receipt::ENoLoyaltyPrice`).
+    /// LOYALTY (voucher creation aborts with `merchant::ENoLoyaltyPrice`).
     loyalty_price: Option<u64>,
 }
 

@@ -1,8 +1,9 @@
 /// Receipts - on-chain proof of settlement, stored in the `Merchant`.
 ///
-/// `Receipt<Payment>` is built at the end of `merchant::pay` and stored in
-/// `Merchant.invoice_receipts`; `Receipt<Redemption>` is built at the end of
-/// `merchant::redeem` and stored in `Merchant.voucher_receipts`. Both are keyed
+/// `Receipt<Payment>` is built at the end of `merchant::pay` and
+/// `merchant::pay_with_coin` and stored in `Merchant.invoice_receipts`.
+/// `Receipt<Redemption>` is built at the end of `merchant::redeem` and stored in
+/// `Merchant.voucher_receipts`. Both are keyed
 /// by the originating invoice/voucher ID and record the settling `customer` for
 /// attribution. `T` is the flow-specific payload (`Payment` / `Redemption`): the
 /// generic keeps the shared fields in one place while giving each flow a

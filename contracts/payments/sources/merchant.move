@@ -492,10 +492,10 @@ public fun cancel_expired_invoice(self: &mut Merchant, invoice_id: ID, clock: &C
 /// - `EBadHashLength` if `redeem_hash` is not 32 bytes (blake2b256 digest).
 /// - `EZeroQuantity` / `ENoLoyaltyPrice` / `EVariantNotFound` / `EListingInactive`
 ///   for catalog/price problems.
-/// - `EInvalidAmount` if the unlocked amount differs from the items' total
-///   (a zero unlocked amount also aborts here, since the items total is always positive).
 /// - Propagates `EAmountOverflow` from `receipt::compute_total` if a
 ///   `price * quantity` product or the running items total exceeds the u64 range.
+/// - `EInvalidAmount` if the unlocked amount differs from the items' total
+///   (a zero unlocked amount also aborts here, since the items total is always positive).
 /// - Propagates `EInvalidVersion` from `pas::versioning` (via `unlock_funds::resolve`)
 ///   if the loyalty `Policy<Balance<LOYALTY>>` version is stale.
 /// - Propagates `EInvalidNumberOfApprovals` from `pas::request` (via

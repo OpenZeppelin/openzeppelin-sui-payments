@@ -15,7 +15,9 @@
 /// itself; the deployer becomes its sole holder. Three operational roles split
 /// the admin surface:
 ///   - `MerchantRole`         -> merchant-level identity + treasury settings
-///                              (`set_payout_address`, `update_config`, `update_display`)
+///                              (`update_config`, `update_display`,
+///                              `prune_invoice_receipts`, `prune_voucher_receipts`.
+///                              Payout is rotated through `update_config`)
 ///   - `CatalogManagerRole`   -> catalog CRUD (`add_listing`, `remove_listing`,
 ///                              `set_listing_status`, `add_listing_variant`,
 ///                              `remove_listing_variant`)
@@ -34,8 +36,9 @@
 ///      - root role on the shared `AccessControl<MERCHANT>`.
 ///   2. Deployer's PTB:
 ///        loyalty   = loyalty::create(&mut namespace, treasury_cap)
-///        config    = config::new(num, den, max, invoice_ttl_ms, voucher_ttl_ms)
-///        merchant  = merchant::create(loyalty, config, name, logo_url, payout, ctx)
+///        config    = config::new<C>(&currency, payout, loyalty_coefficient,
+///                                   max_loyalty_per_payment, invoice_ttl_ms, voucher_ttl_ms)
+///        merchant  = merchant::create(loyalty, config, name, logo_url, ctx)
 ///        merchant::share(merchant)
 ///        ac.grant_role<MERCHANT, MerchantRole>(merchant_admin_addr, ctx)
 ///        ac.grant_role<MERCHANT, CatalogManagerRole>(catalog_op_addr, ctx)
@@ -150,7 +153,9 @@ const MAX_INVOICE_ITEMS: u64 = 256;
 public struct MERCHANT has drop {}
 
 /// Holder gates merchant-level identity/treasury operations:
-/// `set_payout_address`, `update_config`, `update_display`.
+/// `update_config` (which also rotates the payout address), `update_display`,
+/// and receipt pruning (`prune_invoice_receipts`, `prune_voucher_receipts`),
+/// which can irreversibly delete stored receipt detail.
 public struct MerchantRole {}
 
 /// Holder gates catalog CRUD: `add_listing`, `remove_listing`,
@@ -162,18 +167,21 @@ public struct CashierRole {}
 
 /// Central shared object holding the merchant's entire on-chain state. The
 /// accepted stablecoin currency is identified by `config.accepted_payment_type`
-/// (snapshotted from `type_name::with_defining_ids<C>()` at `config::new<C>` time);
-/// `pay<C>` checks `type_name::with_defining_ids<C>() == config.accepted_payment_type`
-/// at runtime to enforce the binding.
+/// (snapshotted from `type_name::with_defining_ids<C>()` at `config::new<C>` time).
+/// Each invoice snapshots that `payment_type` at `create_invoice` time. `pay<C>` /
+/// `pay_with_coin<C>` then check `type_name::with_defining_ids<C>()` against the
+/// invoice's snapshotted `payment_type` (not the live config) to enforce the binding.
 public struct Merchant has key {
     id: UID,
     /// Display name (e.g. "Joe's Coffee"). Mutable via `update_display`.
     name: String,
     /// Optional logo URL. Mutable via `update_display`.
     logo_url: Option<String>,
-    /// Loyalty asset bundle (treasury cap, policy cap, policy id). Stored whole;
-    /// read via `loyalty()`. The treasury cap is reached internally by `pay`
-    /// (mint) and `redeem` (burn).
+    /// Loyalty asset bundle (treasury cap, policy cap, policy id). Stored whole
+    /// and never exposed as a bundle - only derived scalars are readable, via
+    /// `loyalty_treasury_cap_id`, `loyalty_policy_cap_id`, `loyalty_policy_id`,
+    /// and `loyalty_supply`. The treasury cap is reached internally by `pay` and
+    /// `pay_with_coin` (mint) and `redeem` (burn).
     loyalty: Loyalty,
     /// Full merchant configuration - payout address, accepted payment type,
     /// payment decimals, loyalty mint rate, and TTLs. Replaceable atomically via
@@ -286,8 +294,8 @@ public fun share(self: Merchant) {
 /// For settling with a plain, unrestricted coin instead, see `pay_with_coin`.
 ///
 /// #### Generics
-/// - `C`: The settlement coin type; must match the merchant's accepted payment
-///   type (checked at runtime via `config.accepted_payment_type`).
+/// - `C`: The settlement coin type - must match the invoice's snapshotted
+///   `payment_type` (checked at runtime against the invoice, not the live config).
 ///
 /// #### Parameters
 /// - `self`: The merchant to mutate.
@@ -370,8 +378,8 @@ public fun pay<C>(
 /// named," not a cryptographically-proven payer.
 ///
 /// #### Generics
-/// - `C`: The settlement coin type; must match the merchant's accepted payment
-///   type (checked at runtime via `config.accepted_payment_type`).
+/// - `C`: The settlement coin type - must match the invoice's snapshotted
+///   `payment_type` (checked at runtime against the invoice, not the live config).
 ///
 /// #### Parameters
 /// - `self`: The merchant to mutate.
@@ -481,13 +489,13 @@ public fun cancel_expired_invoice(self: &mut Merchant, invoice_id: ID, clock: &C
 /// - `ENoItems` if `listing_variant_ids` is empty.
 /// - `EItemsTooMany` if `listing_variant_ids.length() > MAX_INVOICE_ITEMS`.
 /// - `ELengthMismatch` if the two vectors differ in length.
-/// - `EInvalidAmount` if the unlocked amount differs from the items' total
-///   (a zero unlocked amount also aborts here, since the items total is always positive).
+/// - `EBadHashLength` if `redeem_hash` is not 32 bytes (blake2b256 digest).
 /// - `EZeroQuantity` / `ENoLoyaltyPrice` / `EVariantNotFound` / `EListingInactive`
 ///   for catalog/price problems.
-/// - `EBadHashLength` if `redeem_hash` is not 32 bytes (blake2b256 digest).
 /// - Propagates `EAmountOverflow` from `receipt::compute_total` if a
 ///   `price * quantity` product or the running items total exceeds the u64 range.
+/// - `EInvalidAmount` if the unlocked amount differs from the items' total
+///   (a zero unlocked amount also aborts here, since the items total is always positive).
 /// - Propagates `EInvalidVersion` from `pas::versioning` (via `unlock_funds::resolve`)
 ///   if the loyalty `Policy<Balance<LOYALTY>>` version is stale.
 /// - Propagates `EInvalidNumberOfApprovals` from `pas::request` (via
@@ -1010,7 +1018,9 @@ public fun remove_listing(self: &mut Merchant, _auth: &Auth<CatalogManagerRole>,
 ///
 /// #### Aborts
 /// - `EListingNotFound` if no listing with `listing_id` is stored.
-/// - `EActiveStateUnchanged` if `active` already matches the listing's state.
+/// - `listing::EActiveStateUnchanged` (raised by `listing::set_active`) if
+///   `active` already matches the listing's state. Note this is `listing`'s
+///   error code, distinct from any same-numbered code in `merchant`.
 public fun set_listing_status(
     self: &mut Merchant,
     _auth: &Auth<CatalogManagerRole>,
@@ -1110,12 +1120,12 @@ public fun remove_listing_variant(
 ///
 /// #### Aborts
 /// - `ENoItems` if `listing_variant_ids` is empty.
-/// - `ELengthMismatch` if the two vectors differ in length.
 /// - `EItemsTooMany` if `listing_variant_ids.length() > MAX_INVOICE_ITEMS`.
+/// - `ELengthMismatch` if the two vectors differ in length.
+/// - `EOrderRefTooLong` if `order_ref` is longer than `MAX_ORDER_REF_LEN` bytes.
 /// - `EZeroQuantity` if any quantity is zero.
 /// - `EVariantNotFound` / `EListingInactive` if a variant is unregistered or its
 ///   parent listing is inactive.
-/// - `EOrderRefTooLong` if `order_ref` is longer than `MAX_ORDER_REF_LEN` bytes.
 /// - Propagates `EAmountOverflow` from `receipt::compute_total` if a
 ///   `price * quantity` product or the running items total exceeds the u64 range.
 public fun create_invoice(

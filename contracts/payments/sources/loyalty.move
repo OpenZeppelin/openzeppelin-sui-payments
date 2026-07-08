@@ -179,7 +179,7 @@ public(package) fun decrease_supply(self: &mut Loyalty, funds: Balance<LOYALTY>)
     balance::decrease_supply(coin::supply_mut(&mut self.treasury_cap), funds);
 }
 
-/// Witness factory. Only `redemption::create` calls this.
+/// Witness factory. Only `merchant::create_voucher` calls this.
 public(package) fun new_redeem_unlock_approval(): RedeemUnlockApproval {
     RedeemUnlockApproval()
 }

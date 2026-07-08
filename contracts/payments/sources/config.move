@@ -138,9 +138,9 @@ public struct Config has copy, drop, store {
 /// (listed in the order the checks run)
 /// - `EDecimalsTooLarge` if `currency.decimals() > MAX_DECIMALS`.
 /// - `EZeroInvoiceTtl` if `invoice_ttl_ms` is zero.
-/// - `ETtlTooLarge` if either TTL exceeds `MAX_TTL_MS` (the `invoice_ttl_ms`
-///   check runs before the `voucher_ttl_ms` one).
+/// - `ETtlTooLarge` if `invoice_ttl_ms` exceeds `MAX_TTL_MS`.
 /// - `EZeroVoucherTtl` if `voucher_ttl_ms` is zero.
+/// - `ETtlTooLarge` if `voucher_ttl_ms` exceeds `MAX_TTL_MS`.
 public fun new<C>(
     currency: &Currency<C>,
     payout_address: address,

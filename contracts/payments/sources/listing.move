@@ -20,6 +20,19 @@ const EZeroPrice: vector<u8> = "Price must be greater than zero";
 const EVariantNotFound: vector<u8> = "Listing variant not found";
 #[error(code = 3)]
 const EActiveStateUnchanged: vector<u8> = "Listing already has the requested active state";
+#[error(code = 4)]
+const ETooManyVariants: vector<u8> = "Listing has reached the maximum number of variants";
+
+// === Constants ===
+
+/// Maximum number of variants a single listing may hold.
+///
+/// Bounds two operations that scale linearly with a listing's variant count:
+/// the O(n) `VecMap` lookup performed while pricing each invoice/voucher line,
+/// and the per-variant `variant_index` deletions `Merchant::remove_listing`
+/// issues in one transaction. Chosen conservatively to keep both well within
+/// Sui's per-transaction object and gas limits.
+const MAX_VARIANTS_PER_LISTING: u64 = 256;
 
 // === Structs ===
 
@@ -158,9 +171,13 @@ public fun loyalty_price(self: &Variant): Option<u64> { self.loyalty_price }
 /// - The inserted variant's ID.
 ///
 /// #### Aborts
+/// - `ETooManyVariants` if the listing already holds `MAX_VARIANTS_PER_LISTING`
+///   variants.
 /// - Aborts (via `vec_map::insert`) if the variant's `id` already exists in
 ///   this listing.
 public(package) fun add_variant(self: &mut Listing, variant: Variant): ID {
+    assert!(self.variants.length() < MAX_VARIANTS_PER_LISTING, ETooManyVariants);
+
     let id = variant.id;
     self.variants.insert(id, variant);
     id

@@ -135,6 +135,37 @@ fun set_active_to_same_value_aborts() {
     scenario.end();
 }
 
+#[test]
+fun add_variant_up_to_max_succeeds() {
+    let mut scenario = test_scenario::begin(@0xA);
+    let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+
+    // Fill the listing exactly to MAX_VARIANTS_PER_LISTING (256).
+    256u64.do!(|_| {
+        let v = listing::new_variant(b"V".to_string(), 500, std::option::none(), scenario.ctx());
+        listing.add_variant(v);
+    });
+    assert_eq!(listing.variants().length(), 256);
+
+    destroy(listing);
+    scenario.end();
+}
+
+#[test, expected_failure(abort_code = listing::ETooManyVariants)]
+fun add_variant_over_max_aborts() {
+    let mut scenario = test_scenario::begin(@0xA);
+    let mut listing = listing::new(b"Coffee".to_string(), scenario.ctx());
+
+    // The 257th variant must abort.
+    257u64.do!(|_| {
+        let v = listing::new_variant(b"V".to_string(), 500, std::option::none(), scenario.ctx());
+        listing.add_variant(v);
+    });
+
+    destroy(listing);
+    scenario.end();
+}
+
 #[test, expected_failure(abort_code = listing::EZeroPrice)]
 fun new_variant_zero_price_aborts() {
     let mut scenario = test_scenario::begin(@0xA);

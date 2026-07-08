@@ -310,7 +310,7 @@ public fun share(self: Merchant) {
 /// - Propagates from `send_funds::resolve_balance` if the request's approvals do
 ///   not satisfy the stablecoin `Policy<Balance<C>>`.
 /// - Propagates from `loyalty::mint_to` if minting `loyalty` would overflow the
-///   `LOYALTY` total supply.
+///   `LOYALTY` total supply, or if `customer_loyalty_account`'s PAS version is stale.
 public fun pay<C>(
     self: &mut Merchant,
     invoice_id: ID,
@@ -388,7 +388,7 @@ public fun pay<C>(
 /// - `EWrongPaymentType` if `C` does not match the invoice's `payment_type`.
 /// - `EAmountMismatch` if `coin.value()` is not the invoice amount.
 /// - Propagates from `loyalty::mint_to` if minting `loyalty` would overflow the
-///   `LOYALTY` total supply.
+///   `LOYALTY` total supply, or if `customer_loyalty_account`'s PAS version is stale.
 public fun pay_with_coin<C>(
     self: &mut Merchant,
     invoice_id: ID,
@@ -466,7 +466,7 @@ public fun cancel_expired_invoice(self: &mut Merchant, invoice_id: ID, clock: &C
 /// - `unlock_req`: Customer-approved `unlock_funds` request whose amount equals
 ///   the items' total `loyalty_price`. Resolved into a locked `Balance<LOYALTY>`.
 /// - `policy_loyalty`: Shared `Policy<Balance<LOYALTY>>` consulted by
-///   `unlock_funds::resolve_balance` to validate the request's approvals.
+///   `unlock_funds::resolve` to validate the request's approvals.
 /// - `listing_variant_ids`: Variants to redeem against, same length as `quantities`.
 /// - `quantities`: Per-variant quantities; each must be non-zero.
 /// - `redeem_hash`: 32-byte blake2b256 commitment to a customer-chosen secret.
@@ -486,6 +486,17 @@ public fun cancel_expired_invoice(self: &mut Merchant, invoice_id: ID, clock: &C
 /// - `EZeroQuantity` / `ENoLoyaltyPrice` / `EVariantNotFound` / `EListingInactive`
 ///   for catalog/price problems.
 /// - `EBadHashLength` if `redeem_hash` is not 32 bytes (blake2b256 digest).
+/// - Propagates `EAmountOverflow` from `receipt::compute_total` if a
+///   `price * quantity` product or the running items total exceeds the u64 range.
+/// - Propagates `EInvalidVersion` from `pas::versioning` (via `unlock_funds::resolve`)
+///   if the loyalty `Policy<Balance<LOYALTY>>` version is stale.
+/// - Propagates `EInvalidNumberOfApprovals` from `pas::request` (via
+///   `unlock_funds::resolve`) if the request's approval count differs from the
+///   policy's required count - e.g. `unlock_req` carries any approval beyond the
+///   one added here.
+/// - Propagates `EInsufficientApprovals` from `pas::request` (via
+///   `unlock_funds::resolve`) if the approval count matches but an approval type
+///   does not match the policy's required set.
 ///
 /// #### Hashlock authorization
 /// `redeem_hash` is a 32-byte blake2b256 commitment to a customer-chosen
@@ -556,6 +567,8 @@ public fun create_voucher(
 /// - `EVoucherNotFound` if no open voucher with `voucher_id` is stored.
 /// - `ENotExpired` if the voucher has not yet expired.
 /// - `EWrongCustomer` if the account owner is not the voucher's customer.
+/// - Propagates `EInvalidVersion` from `pas::versioning` (via `deposit_balance`)
+///   if `customer_loyalty_account`'s PAS version is stale.
 public fun cancel_expired_voucher(
     self: &mut Merchant,
     voucher_id: ID,
@@ -865,6 +878,11 @@ public fun prune_voucher_receipts(
 /// fires after expiry. Just removal + event (an invoice holds no balance). Gated
 /// by `MerchantRole`. Emits `InvoiceCanceled`.
 ///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+/// - `invoice_id`: Issuance id of the open invoice to cancel.
+///
 /// #### Aborts
 /// - `EInvoiceNotFound` if no open invoice with `invoice_id` is stored.
 public fun cancel_invoice(self: &mut Merchant, _auth: &Auth<MerchantRole>, invoice_id: ID) {
@@ -886,9 +904,18 @@ public fun cancel_invoice(self: &mut Merchant, _auth: &Auth<MerchantRole>, invoi
 /// down, never *where* the balance goes. Gated by `MerchantRole`. Emits
 /// `VoucherCanceled`.
 ///
+/// #### Parameters
+/// - `self`: The merchant to mutate.
+/// - `_auth`: `MerchantRole` authorization.
+/// - `voucher_id`: Issuance id of the open voucher to cancel.
+/// - `customer_loyalty_account`: PAS Account that receives the refunded LOYALTY.
+///   Its owner must equal the voucher's `customer`.
+///
 /// #### Aborts
 /// - `EVoucherNotFound` if no open voucher with `voucher_id` is stored.
 /// - `EWrongCustomer` if the account owner is not the voucher's customer.
+/// - Propagates `EInvalidVersion` from `pas::versioning` (via `deposit_balance`)
+///   if `customer_loyalty_account`'s PAS version is stale.
 public fun cancel_voucher(
     self: &mut Merchant,
     _auth: &Auth<MerchantRole>,
@@ -1089,6 +1116,8 @@ public fun remove_listing_variant(
 /// - `EVariantNotFound` / `EListingInactive` if a variant is unregistered or its
 ///   parent listing is inactive.
 /// - `EOrderRefTooLong` if `order_ref` is longer than `MAX_ORDER_REF_LEN` bytes.
+/// - Propagates `EAmountOverflow` from `receipt::compute_total` if a
+///   `price * quantity` product or the running items total exceeds the u64 range.
 public fun create_invoice(
     self: &mut Merchant,
     _auth: &Auth<CashierRole>,

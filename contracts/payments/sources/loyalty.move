@@ -99,6 +99,11 @@ fun init(otw: LOYALTY, ctx: &mut TxContext) {
 ///
 /// #### Returns
 /// - The `Loyalty` bundle (treasury cap, policy cap, policy id) for `merchant::create`.
+///
+/// #### Aborts
+/// - Propagates from `policy::new_for_currency` if a `Policy<Balance<LOYALTY>>`
+///   already exists for the namespace (e.g. if `create` is called a second time),
+///   or if the PAS `Namespace` version check fails.
 public fun create(namespace: &mut Namespace, mut treasury_cap: TreasuryCap<LOYALTY>): Loyalty {
     let (mut policy, policy_cap) = policy::new_for_currency(namespace, &mut treasury_cap, false);
 
@@ -151,6 +156,11 @@ public fun supply(self: &Loyalty): u64 {
 /// - `self`: The merchant's `Loyalty` bundle, mutated to mint from.
 /// - `customer_account`: The payer's PAS account to deposit the minted balance into.
 /// - `amount`: LOYALTY units to mint.
+///
+/// #### Aborts
+/// - Propagates from `mint_balance` if minting `amount` would overflow the
+///   `LOYALTY` total supply.
+/// - Propagates from `deposit_balance` if `customer_account`'s PAS version check fails.
 public(package) fun mint_to(self: &mut Loyalty, customer_account: &Account, amount: u64) {
     customer_account.deposit_balance(self.treasury_cap.mint_balance(amount));
 }

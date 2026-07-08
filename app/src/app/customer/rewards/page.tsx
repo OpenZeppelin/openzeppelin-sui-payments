@@ -14,7 +14,7 @@ import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
 import { buildAccountNewAuth, buildUnlockBalance } from "@/lib/move/pas";
-import { buildCancelVoucher, buildCreateVoucher } from "@/lib/move/redemption";
+import { buildCancelExpiredVoucher, buildCreateVoucher } from "@/lib/move/redemption";
 import {
   blake2b256,
   clearPreimage,
@@ -346,13 +346,13 @@ function OpenVoucherRow({
   const expired = voucher.expiresAtMs <= now;
   const when = new Date(Number(voucher.expiresAtMs)).toLocaleString();
 
-  // Customer signs cancel_voucher themselves (sponsored). The tx needs their
+  // Customer signs cancel_expired_voucher themselves (sponsored). The tx needs their
   // PAS account id to route the unlocked LOY back — look it up by the
   // voucher's `customer` field.
   const customerPas = usePasAccount(voucher.customer);
   const reclaim = useSponsoredMutation<{ voucherId: string; customerLoyaltyAccountId: string }>(
     (tx, args) =>
-      buildCancelVoucher(tx, {
+      buildCancelExpiredVoucher(tx, {
         voucherId: args.voucherId,
         customerLoyaltyAccountId: args.customerLoyaltyAccountId,
       }),

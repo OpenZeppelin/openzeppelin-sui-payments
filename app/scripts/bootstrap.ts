@@ -272,6 +272,47 @@ function getActiveEnvAlias(): string {
   return execSync("sui client active-env", { encoding: "utf8" }).trim();
 }
 
+/**
+ * Optional CLI arg — `pnpm bootstrap <network>` shorthand. Accepts
+ * `localnet`/`testnet`/`mainnet`; anything else returns null (fall back to
+ * whatever `sui client active-env` is set to). Side effects when set:
+ *   1. `sui client switch --env <alias>` so the CLI targets the right chain
+ *      (with a `local` fallback since Sui CLI's default localnet alias name
+ *      varies between installs).
+ *   2. `NEXT_PUBLIC_SUI_NETWORK=<network>` written to `.env.local` so the
+ *      dev server matches on next start.
+ */
+function applyNetworkFromArgv(): "localnet" | "testnet" | "mainnet" | null {
+  const arg = process.argv[2];
+  if (!arg) return null;
+  if (arg !== "localnet" && arg !== "testnet" && arg !== "mainnet") {
+    throw new Error(
+      `unknown network arg "${arg}" — expected one of localnet | testnet | mainnet`,
+    );
+  }
+  const tryAliases = arg === "localnet" ? ["localnet", "local"] : [arg];
+  let switched: string | null = null;
+  for (const alias of tryAliases) {
+    try {
+      execSync(`sui client switch --env ${alias}`, { encoding: "utf8", stdio: "pipe" });
+      switched = alias;
+      break;
+    } catch {
+      // try next alias
+    }
+  }
+  if (!switched) {
+    throw new Error(
+      `sui client has no env alias matching ${tryAliases.join(" or ")}. ` +
+        `Add one with \`sui client new-env --alias ${arg} --rpc <url>\` first.`,
+    );
+  }
+  console.log(`→ switched sui client to env "${switched}" (from CLI arg)`);
+  patchEnv({ NEXT_PUBLIC_SUI_NETWORK: arg });
+  console.log(`→ patched .env.local: NEXT_PUBLIC_SUI_NETWORK=${arg}`);
+  return arg;
+}
+
 function getActiveRpcUrl(envAlias: string): string {
   const out = execSync("sui client envs --json", { encoding: "utf8" });
   const data = JSON.parse(out) as Array<{ alias: string; rpc: string }>[];
@@ -703,6 +744,7 @@ async function postPublishPTB({
 }
 
 async function main() {
+  applyNetworkFromArgv();
   const envAlias = getActiveEnvAlias();
   const rpcUrl = getActiveRpcUrl(envAlias);
   const deployer = getActiveAddress();

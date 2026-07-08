@@ -22,8 +22,8 @@ import {
 import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { deployment } from "@/lib/deployment";
-import { buildCancelInvoice, buildPruneInvoiceReceipts } from "@/lib/move/payment";
-import { buildCancelVoucher, buildPruneVoucherReceipts } from "@/lib/move/redemption";
+import { buildCancelExpiredInvoice, buildPruneInvoiceReceipts } from "@/lib/move/payment";
+import { buildCancelExpiredVoucher, buildPruneVoucherReceipts } from "@/lib/move/redemption";
 import { STABLECOIN_DECIMALS, formatAmount, formatItems, shortAddr } from "@/lib/utils";
 
 const PRUNE_BATCH_SIZE = 50;
@@ -273,7 +273,7 @@ function OpenInvoiceRow({
   // any signer works. Sponsored (localnet gas station on localnet; Enoki with
   // an Enoki wallet on testnet; wallet-paid otherwise).
   const remove = useSponsoredMutation<{ invoiceId: string }>(
-    (tx, args) => buildCancelInvoice(tx, args.invoiceId),
+    (tx, args) => buildCancelExpiredInvoice(tx, args.invoiceId),
     {
       invalidate: [
         qk.events(`${deployment.packageId}::events::InvoiceCanceled`),
@@ -360,7 +360,7 @@ function OpenVoucherRow({
       ? { label: "Expired", variant: "destructive" }
       : { label: "Voucher open", variant: "outline" };
 
-  // Merchant signs cancel_voucher themselves (permissionless after expiry).
+  // Merchant signs cancel_expired_voucher themselves (permissionless after expiry).
   // Needs the voucher owner's PAS account id to refund unlocked LOY — derived
   // from `voucher.customer` via the standard `usePasAccount` lookup.
   const customerPas = usePasAccount(voucher.data?.customer ?? null);
@@ -369,7 +369,7 @@ function OpenVoucherRow({
     customerLoyaltyAccountId: string;
   }>(
     (tx, args) =>
-      buildCancelVoucher(tx, {
+      buildCancelExpiredVoucher(tx, {
         voucherId: args.voucherId,
         customerLoyaltyAccountId: args.customerLoyaltyAccountId,
       }),

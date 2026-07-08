@@ -70,8 +70,10 @@ export function buildRedeem(tx: Transaction, voucherId: string, preimage: Uint8A
 /**
  * `merchant::cancel_expired_voucher(self, voucher_id, customer_loy_acct, clock)`. Permissionless
  * after expiry — returns the locked LOYALTY balance to the customer's PAS account.
+ * Distinct from the `MerchantRole`-gated `merchant::cancel_voucher` used for early
+ * invalidation of a still-open voucher (not wired into the FE yet).
  */
-export function buildCancelVoucher(
+export function buildCancelExpiredVoucher(
   tx: Transaction,
   args: { voucherId: string; customerLoyaltyAccountId: string },
 ): void {

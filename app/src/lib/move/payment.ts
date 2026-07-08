@@ -88,8 +88,10 @@ export function buildPayWithCoin(
   });
 }
 
-/** `merchant::cancel_expired_invoice(self, invoice_id, clock)` — permissionless after expiry. */
-export function buildCancelInvoice(tx: Transaction, invoiceId: string): void {
+/** `merchant::cancel_expired_invoice(self, invoice_id, clock)` — permissionless after expiry.
+ *  Distinct from the `MerchantRole`-gated `merchant::cancel_invoice` used for early
+ *  invalidation of a still-open invoice (not wired into the FE yet). */
+export function buildCancelExpiredInvoice(tx: Transaction, invoiceId: string): void {
   tx.moveCall({
     target: `${deployment.packageId}::merchant::cancel_expired_invoice`,
     arguments: [

@@ -6,10 +6,14 @@ import { EnokiClient } from "@mysten/enoki";
  * Lazily instantiates the Enoki server client from `ENOKI_PRIVATE_API_KEY`.
  * Cached for the lifetime of the server process.
  *
- * Only used by the zkLogin proxy routes (`/api/zklogin-nonce`, `/api/zklogin-prove`)
- * — Enoki's server backend has the standing whitelist arrangement with Mysten's
- * zkLogin prover that lets our own Google OAuth client_id be accepted (as long
- * as it's registered in the Enoki dashboard).
+ * Consumed by the sponsored-tx routes:
+ *   - `/api/enoki-sponsor`  → `createSponsoredTransaction`
+ *   - `/api/enoki-execute`  → `executeSponsoredTransaction`
+ *
+ * On testnet/mainnet an Enoki-registered wallet triggers this pair to get a
+ * sponsor-signed gas leg for user txs. Enoki charges sponsorship against the
+ * app registered to this API key, subject to the dashboard's
+ * `allowedMoveCallTargets` allowlist.
  */
 let cached: EnokiClient | null = null;
 

@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { qk, useInvoice, useListings } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
+import { useSuiClockMs } from "@/hooks/use-sui-clock";
 import { deployment } from "@/lib/deployment";
 import {
   buildAccountNewAuth,
@@ -90,8 +91,11 @@ export default function CustomerPayPage() {
     router.push("/customer");
   }
 
-  const now = Date.now();
-  const expired = invoice.data ? invoice.data.expiresAtMs <= BigInt(now) : false;
+  // Compare against the on-chain Clock, not wallclock. Sui's `Clock` is what
+  // sets `expires_at_ms`, so wallclock drift (particularly on localnet) can
+  // otherwise mark a fresh invoice as expired the moment it's issued.
+  const chainNow = useSuiClockMs().data;
+  const expired = invoice.data && chainNow ? invoice.data.expiresAtMs <= chainNow : false;
   const merchantAccountReady = merchantPas.data !== null && merchantPas.data !== undefined;
   const customerAccountReady = customerPas.data !== null && customerPas.data !== undefined;
   // Self-payment is a structural dead-end: `account::send_balance(from, .., to, ..)`

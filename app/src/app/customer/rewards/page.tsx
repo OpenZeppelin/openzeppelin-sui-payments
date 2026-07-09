@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { qk, useBalances, useListings, useMyOpenVouchers } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
+import { useSuiClockMs } from "@/hooks/use-sui-clock";
 import { deployment } from "@/lib/deployment";
 import { buildAccountNewAuth, buildUnlockBalance } from "@/lib/move/pas";
 import { buildCancelExpiredVoucher, buildCreateVoucher } from "@/lib/move/redemption";
@@ -342,8 +343,10 @@ function OpenVoucherRow({
   voucher: Voucher;
   onShow: (voucher: Voucher) => void;
 }) {
-  const now = BigInt(Date.now());
-  const expired = voucher.expiresAtMs <= now;
+  // Compare against on-chain Clock, not wallclock — same reason as invoices
+  // in `/customer/pay`: `expires_at_ms` is `clock.timestamp_ms() + ttl`.
+  const chainNow = useSuiClockMs().data;
+  const expired = chainNow ? voucher.expiresAtMs <= chainNow : false;
   const when = new Date(Number(voucher.expiresAtMs)).toLocaleString();
 
   // Customer signs cancel_expired_voucher themselves (sponsored). The tx needs their

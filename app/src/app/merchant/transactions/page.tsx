@@ -21,6 +21,7 @@ import {
 } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
+import { useSuiClockMs } from "@/hooks/use-sui-clock";
 import { deployment } from "@/lib/deployment";
 import { buildCancelExpiredInvoice, buildPruneInvoiceReceipts } from "@/lib/move/payment";
 import { buildCancelExpiredVoucher, buildPruneVoucherReceipts } from "@/lib/move/redemption";
@@ -255,11 +256,11 @@ function OpenInvoiceRow({
   const invoice = useInvoice(terminated ? null : invoiceId);
   const { data: listings = [] } = useListings();
   // Re-render on the clock tick so the "Expired" badge flips on time even
-  // when no chain event has fired (TTL elapsed but nobody canceled yet).
-  useClockTick(CLOCK_TICK_MS);
-
-  const now = BigInt(Date.now());
-  const expired = Boolean(invoice.data && invoice.data.expiresAtMs <= now);
+  // Compare against on-chain Clock; wallclock can drift on localnet (see
+  // `useSuiClockMs`). Polling inside that hook also re-renders us when the
+  // TTL elapses, so no separate `useClockTick` needed here.
+  const chainNow = useSuiClockMs().data;
+  const expired = Boolean(invoice.data && chainNow && invoice.data.expiresAtMs <= chainNow);
 
   const status = terminated ? "closed" : expired ? "expired" : "open";
   const badge: { label: string; variant: "outline" | "destructive" | "accent" } =
@@ -347,10 +348,9 @@ function OpenVoucherRow({
   const queryClient = useQueryClient();
   const voucher = useVoucher(terminated ? null : voucherId);
   const { data: listings = [] } = useListings();
-  useClockTick(CLOCK_TICK_MS);
 
-  const now = BigInt(Date.now());
-  const expired = Boolean(voucher.data && voucher.data.expiresAtMs <= now);
+  const chainNow = useSuiClockMs().data;
+  const expired = Boolean(voucher.data && chainNow && voucher.data.expiresAtMs <= chainNow);
 
   const status = terminated ? "closed" : expired ? "expired" : "open";
   const badge: { label: string; variant: "outline" | "destructive" | "accent" } =

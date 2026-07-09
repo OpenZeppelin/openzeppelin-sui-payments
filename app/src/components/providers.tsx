@@ -75,9 +75,20 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <QueryClientProvider client={queryClient}>
       <SuiClientProvider networks={networkConfig} defaultNetwork={NETWORK}>
         <EnokiWalletRegistration />
-        {/* No walletFilter — any wallet-standard wallet (browser extension,
+        {/* Per-tab wallet state: default `storage` is `localStorage`, which
+            leaks across tabs/windows of the same origin (auto-connect fires
+            everywhere the moment one tab connects). Using `sessionStorage`
+            isolates that state per browsing context — you can run two
+            windows side-by-side (e.g. one merchant, one customer) without
+            one flipping the other's connection.
+            No walletFilter — any wallet-standard wallet (browser extension,
             Enoki zkLogin, etc.) shows up in the connect modal. */}
-        <WalletProvider autoConnect>{children}</WalletProvider>
+        <WalletProvider
+          autoConnect
+          storage={typeof window !== "undefined" ? window.sessionStorage : undefined}
+        >
+          {children}
+        </WalletProvider>
       </SuiClientProvider>
     </QueryClientProvider>
   );

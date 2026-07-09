@@ -57,14 +57,23 @@ function sortWallets(wallets: readonly Wallet[]): Wallet[] {
   return [...enoki, ...others];
 }
 
-/** Shared anchored-popover + click-outside/Escape close. */
+/**
+ * Shared anchored-popover primitive: click-outside + Escape close, focus into
+ * the first menu item on open, focus back to the trigger on close. Callers
+ * wire `triggerRef` on the button that opens the menu and `containerRef` on
+ * the popover's outer element (`role="menu"`).
+ */
 function useAnchoredPopover(): {
   containerRef: React.RefObject<HTMLDivElement | null>;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
   open: boolean;
   setOpen: (next: boolean) => void;
 } {
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
     if (!open) return;
     function onPointerDown(e: PointerEvent) {
@@ -76,12 +85,48 @@ function useAnchoredPopover(): {
     }
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKey);
+    // Autofocus the first menu item once the popover mounts. Uses
+    // `requestAnimationFrame` so the DOM has painted before we look for it.
+    const raf = requestAnimationFrame(() => {
+      const first = containerRef.current?.querySelector<HTMLElement>('[role="menuitem"]');
+      first?.focus();
+    });
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKey);
+      cancelAnimationFrame(raf);
     };
   }, [open]);
-  return { containerRef, open, setOpen };
+
+  // On close, restore focus to the trigger — but only when we're closing after
+  // having been open (not on initial mount).
+  useEffect(() => {
+    if (!open && wasOpenRef.current) {
+      triggerRef.current?.focus();
+    }
+    wasOpenRef.current = open;
+  }, [open]);
+
+  return { containerRef, triggerRef, open, setOpen };
+}
+
+/** Arrow/Home/End keyboard nav across all `[role="menuitem"]` in the menu. */
+function onMenuKey(e: React.KeyboardEvent<HTMLDivElement>) {
+  const items = Array.from(
+    e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])'),
+  );
+  if (items.length === 0) return;
+  const active = document.activeElement as HTMLElement | null;
+  const idx = active ? items.indexOf(active) : -1;
+  let next = -1;
+  if (e.key === "ArrowDown") next = idx < 0 ? 0 : (idx + 1) % items.length;
+  else if (e.key === "ArrowUp") next = idx <= 0 ? items.length - 1 : idx - 1;
+  else if (e.key === "Home") next = 0;
+  else if (e.key === "End") next = items.length - 1;
+  if (next >= 0) {
+    e.preventDefault();
+    items[next].focus();
+  }
 }
 
 export function ConnectButton() {
@@ -92,17 +137,24 @@ export function ConnectButton() {
 function DisconnectedControl() {
   const wallets = useWallets();
   const { mutate: connect, isPending } = useConnectWallet();
-  const { containerRef, open, setOpen } = useAnchoredPopover();
+  const { containerRef, triggerRef, open, setOpen } = useAnchoredPopover();
   const sorted = sortWallets(wallets);
 
   return (
     <div ref={containerRef} className="relative flex items-center">
-      <Button size="sm" onClick={() => setOpen(!open)} aria-expanded={open}>
+      <Button
+        ref={triggerRef}
+        size="sm"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+      >
         Log in
       </Button>
       {open ? (
         <div
           role="menu"
+          onKeyDown={onMenuKey}
           className="absolute right-0 top-full z-50 mt-2 w-64 rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)] p-2 text-[color:var(--color-card-foreground)] shadow-lg"
         >
           {sorted.length === 0 ? (
@@ -160,7 +212,7 @@ function ConnectedControl() {
   const accounts = useAccounts();
   const { mutate: switchAccount } = useSwitchAccount();
   const { mutate: disconnect } = useDisconnectWallet();
-  const { containerRef, open, setOpen } = useAnchoredPopover();
+  const { containerRef, triggerRef, open, setOpen } = useAnchoredPopover();
   const multiAccount = accounts.length > 1;
 
   return (
@@ -168,9 +220,11 @@ function ConnectedControl() {
       <div ref={containerRef} className="relative flex items-center">
         {multiAccount ? (
           <button
+            ref={triggerRef}
             type="button"
             onClick={() => setOpen(!open)}
             aria-expanded={open}
+            aria-haspopup="menu"
             className="flex items-center gap-2 rounded-md px-2 py-1 text-[color:var(--color-muted-foreground)] transition-colors hover:bg-[color:var(--color-muted)] focus-visible:bg-[color:var(--color-muted)] focus-visible:outline-none"
           >
             <span className="font-mono">{shortAddr(account.address)}</span>
@@ -184,6 +238,7 @@ function ConnectedControl() {
         {multiAccount && open ? (
           <div
             role="menu"
+            onKeyDown={onMenuKey}
             className="absolute right-0 top-full z-50 mt-2 w-72 rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)] p-2 text-[color:var(--color-card-foreground)] shadow-lg"
           >
             <div className="px-3 pb-1 pt-2 text-xs uppercase tracking-wide text-[color:var(--color-muted-foreground)]">

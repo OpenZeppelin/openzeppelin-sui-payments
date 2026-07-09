@@ -881,11 +881,31 @@ async function main() {
     // Merchant payout PAS account. On localnet this is created inside
     // `setupPasOnFreshChain`; on testnet/mainnet we do it here so the
     // customer-side `pay` flow can take the payout `&Account` without an
-    // extra manual init hop. Tolerant of "already exists" — the derived
-    // address is stable per (namespace, payout_address), so re-bootstraps
-    // with the same deployer land on the same account.
-    console.log(`\n→ creating payout PAS account for ${deployer}`);
-    try {
+    // extra manual init hop. Pre-check via dev-inspect so we don't hit the
+    // `EAccountAlreadyExists` abort on re-runs — the derived address is
+    // stable per (namespace, payout_address), so re-bootstraps with the
+    // same deployer land on the same account. Any other failure propagates.
+    const probe = new Transaction();
+    probe.moveCall({
+      target: `${pasPackageId}::namespace::account_exists`,
+      arguments: [probe.object(namespaceId), probe.pure.address(deployer)],
+    });
+    const probeResult = await client.devInspectTransactionBlock({
+      sender: deployer,
+      transactionBlock: probe,
+    });
+    if (probeResult.effects?.status?.status !== "success") {
+      throw new Error(
+        `namespace::account_exists probe failed: ${probeResult.effects?.status?.error ?? "unknown"}`,
+      );
+    }
+    const alreadyExists =
+      probeResult.results?.[0]?.returnValues?.[0]?.[0]?.[0] === 1;
+
+    if (alreadyExists) {
+      console.log(`\n✓ payout PAS account for ${deployer} already exists — reusing.`);
+    } else {
+      console.log(`\n→ creating payout PAS account for ${deployer}`);
       const tx = new Transaction();
       tx.moveCall({
         target: `${pasPackageId}::account::create_and_share`,
@@ -897,14 +917,13 @@ async function main() {
         signer: deployerKeypair(deployer),
         options: { showEffects: true },
       });
-      if (result.effects?.status?.status === "success") {
-        await client.waitForTransaction({ digest: result.digest });
-        console.log(`  payout account created (${result.digest})`);
-      } else {
-        console.log(`  payout account already exists (skipping): ${result.effects?.status?.error}`);
+      if (result.effects?.status?.status !== "success") {
+        throw new Error(
+          `payout account creation failed: ${result.effects?.status?.error ?? "unknown"}`,
+        );
       }
-    } catch (err) {
-      console.log(`  payout account creation skipped: ${err instanceof Error ? err.message : err}`);
+      await client.waitForTransaction({ digest: result.digest });
+      console.log(`  payout account created (${result.digest})`);
     }
   }
 

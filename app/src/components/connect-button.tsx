@@ -11,6 +11,7 @@ import {
 } from "@mysten/dapp-kit";
 import { Check, ChevronDown } from "lucide-react";
 import { isEnokiWallet } from "@mysten/enoki";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { shortAddr } from "@/lib/utils";
@@ -116,7 +117,17 @@ function DisconnectedControl() {
                 role="menuitem"
                 disabled={isPending}
                 onClick={() =>
-                  connect({ wallet }, { onSuccess: () => setOpen(false) })
+                  connect(
+                    { wallet },
+                    {
+                      onSuccess: () => setOpen(false),
+                      // Popup cancels surface here too ("User rejected …") —
+                      // fine to surface: the user just clicked X, a brief
+                      // toast confirms nothing happened silently.
+                      onError: (err) =>
+                        toast.error(err instanceof Error ? err.message : "Connect failed"),
+                    },
+                  )
                 }
                 className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[color:var(--color-muted)] focus-visible:bg-[color:var(--color-muted)] focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -184,7 +195,14 @@ function ConnectedControl() {
                 account={a}
                 current={a.address === account.address}
                 onSelect={() => {
-                  switchAccount({ account: a }, { onSuccess: () => setOpen(false) });
+                  switchAccount(
+                    { account: a },
+                    {
+                      onSuccess: () => setOpen(false),
+                      onError: (err) =>
+                        toast.error(err instanceof Error ? err.message : "Switch failed"),
+                    },
+                  );
                 }}
               />
             ))}

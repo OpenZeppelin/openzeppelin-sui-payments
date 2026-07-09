@@ -160,30 +160,6 @@ function clearFile(absPath: string, label: string) {
   }
 }
 
-/**
- * Look up `[published.<network>].published-at` in a package's `Published.toml`.
- * Returns the recorded package id if present, else null. Used on canonical
- * networks to skip re-publishing when a Move-committed deployment is already
- * on record.
- */
-function readPublishedAt(pkgRel: string, network: string): string | null {
-  const path = resolve(REPO_ROOT, pkgRel, "Published.toml");
-  let raw = "";
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return null;
-  }
-  const section = `[published.${network}]`;
-  const idx = raw.indexOf(section);
-  if (idx < 0) return null;
-  const rest = raw.slice(idx + section.length);
-  const nextSection = rest.indexOf("\n[");
-  const block = nextSection >= 0 ? rest.slice(0, nextSection) : rest;
-  const m = block.match(/published-at\s*=\s*"([^"]+)"/);
-  return m ? m[1] : null;
-}
-
 function publishPackage(
   pkgRel: string,
   opts: {
@@ -868,25 +844,21 @@ async function main() {
       );
     }
 
-    // Reuse an existing Move-committed deployment when present. If both
-    // packages have a `[published.<envAlias>]` block in Published.toml AND
-    // `.env.local` already has the derived object ids from a prior bootstrap
-    // (merchant, access control, currency, ...), we skip the publish +
-    // post-publish PTB entirely — running twice would only orphan the old
-    // packages on chain.
+    // Reuse an existing deployment when `.env.local` already records one.
+    // Bootstrap wrote `NEXT_PUBLIC_MERCHANT_ID` after the last successful
+    // publish, so its presence is our "already deployed" signal — running
+    // publish again would only orphan the previous packages on chain.
     //
     // To force a fresh publish (e.g. after changing a contract), delete the
     // two Published.toml files and clear the deployment-id NEXT_PUBLIC_* lines
-    // in .env.local. `sui client upgrade` is the cleaner path for real
-    // upgrades, but not automated here.
-    const paymentsPublishedAt = readPublishedAt("contracts/payments", envAlias);
-    const stablePublishedAt = readPublishedAt("contracts/stablecoin-mock", envAlias);
+    // in .env.local. If Published.toml still records a deployment but env is
+    // cleared, `sui client publish` will error clearly on its own with
+    // "already published on this environment — use `sui client upgrade`".
     const existingMerchant =
       process.env.NEXT_PUBLIC_MERCHANT_ID ?? readEnvFile("NEXT_PUBLIC_MERCHANT_ID");
-    if (paymentsPublishedAt && stablePublishedAt && existingMerchant) {
+    if (existingMerchant) {
       console.log(
-        `\n✓ ${envAlias}: reusing existing deployment (payments ${paymentsPublishedAt.slice(0, 10)}…, ` +
-          `stablecoin ${stablePublishedAt.slice(0, 10)}…, merchant ${existingMerchant.slice(0, 10)}…).`,
+        `\n✓ ${envAlias}: reusing existing deployment (merchant ${existingMerchant.slice(0, 10)}…).`,
       );
       console.log(
         `  To force a fresh publish: delete contracts/payments/Published.toml, ` +
@@ -894,13 +866,6 @@ async function main() {
           `deployment ids in .env.local, then re-run.`,
       );
       return;
-    }
-    if (paymentsPublishedAt || stablePublishedAt) {
-      throw new Error(
-        `Published.toml on ${envAlias} is out of sync with .env.local. ` +
-          `Either restore the missing package's Published.toml, or delete both ` +
-          `Published.toml files and clear NEXT_PUBLIC_* deployment ids to republish.`,
-      );
     }
 
     payments = publishPackage("contracts/payments");

@@ -65,7 +65,19 @@ type PublishResult = {
 };
 
 const REPO_ROOT = resolve(__dirname, "..", "..");
-const APP_ENV = resolve(__dirname, "..", ".env.local");
+const APP_DIR = resolve(__dirname, "..");
+/** The Next.js dev server reads `.env.local`; we keep it as a mirror of
+ *  whichever per-network `.env.<network>` is currently active. */
+const LOCAL_ENV = resolve(APP_DIR, ".env.local");
+/** Per-network source-of-truth file bootstrap reads/writes. Set once the
+ *  active network is known (from the CLI arg or `sui client active-env`);
+ *  `patchEnv` and `readEnvFile` operate against this path exclusively. */
+let TARGET_ENV: string = LOCAL_ENV;
+
+function envFileForNetwork(network: string): string {
+  const normalized = network === "local" ? "localnet" : network;
+  return resolve(APP_DIR, `.env.${normalized}`);
+}
 // Shared pubfile used by every package's test-publish call. Per-package
 // pubfiles would let the second publish miss pas's address from the first.
 const PUBFILE_LOCAL_PATH = resolve(REPO_ROOT, "Pubfile.local.toml");
@@ -237,7 +249,7 @@ function findCreated(r: PublishResult, p: (o: PublishObject) => boolean): string
 function readEnvFile(key: string): string | undefined {
   let raw = "";
   try {
-    raw = readFileSync(APP_ENV, "utf8");
+    raw = readFileSync(TARGET_ENV, "utf8");
   } catch {
     return undefined;
   }
@@ -250,7 +262,7 @@ function readEnvFile(key: string): string | undefined {
 function patchEnv(updates: Record<string, string>) {
   let raw = "";
   try {
-    raw = readFileSync(APP_ENV, "utf8");
+    raw = readFileSync(TARGET_ENV, "utf8");
   } catch {
     /* file may not exist yet */
   }
@@ -261,7 +273,7 @@ function patchEnv(updates: Record<string, string>) {
     if (idx >= 0) lines[idx] = next;
     else lines.push(next);
   }
-  writeFileSync(APP_ENV, lines.join("\n"), "utf8");
+  writeFileSync(TARGET_ENV, lines.join("\n"), "utf8");
 }
 
 function getActiveAddress(): string {
@@ -307,9 +319,10 @@ function applyNetworkFromArgv(): "localnet" | "testnet" | "mainnet" | null {
         `Add one with \`sui client new-env --alias ${arg} --rpc <url>\` first.`,
     );
   }
+  TARGET_ENV = envFileForNetwork(arg);
   console.log(`→ switched sui client to env "${switched}" (from CLI arg)`);
   patchEnv({ NEXT_PUBLIC_SUI_NETWORK: arg });
-  console.log(`→ patched .env.local: NEXT_PUBLIC_SUI_NETWORK=${arg}`);
+  console.log(`→ target env file: ${TARGET_ENV}`);
   return arg;
 }
 
@@ -744,8 +757,13 @@ async function postPublishPTB({
 }
 
 async function main() {
-  applyNetworkFromArgv();
+  const fromArg = applyNetworkFromArgv();
   const envAlias = getActiveEnvAlias();
+  // Fallback when no CLI arg was passed: derive the target env file from the
+  // sui client's active env. `local` and `localnet` both map to `.env.localnet`.
+  if (!fromArg) {
+    TARGET_ENV = envFileForNetwork(envAlias);
+  }
   const rpcUrl = getActiveRpcUrl(envAlias);
   const deployer = getActiveAddress();
   const client = new SuiClient({ url: rpcUrl });
@@ -1052,7 +1070,15 @@ async function main() {
     );
   }
 
-  console.log(`\n✓ Bootstrap complete. .env.local patched.\n`);
+  // Mirror the per-network file to `.env.local` so the Next.js dev server
+  // picks it up. `.env.<network>` remains the source of truth for this
+  // network; `pnpm use <network>` swaps which one gets mirrored.
+  const perNetworkContents = readFileSync(TARGET_ENV, "utf8");
+  writeFileSync(LOCAL_ENV, perNetworkContents, "utf8");
+
+  console.log(`\n✓ Bootstrap complete.`);
+  console.log(`  wrote:   ${TARGET_ENV}`);
+  console.log(`  mirror:  ${LOCAL_ENV}\n`);
   console.log(`  pas package          ${pasPackageId}`);
   console.log(`  Namespace            ${namespaceId}`);
   console.log(`  payments package     ${payments.packageId}`);

@@ -5,11 +5,13 @@ dist/
 build/
 *.tsbuildinfo
 
-# env
+# env — everything except the template. Per-network files (`.env.localnet`,
+# `.env.testnet`, `.env.mainnet`) hold private keys and Enoki secrets.
 .env
 .env.local
-.env.development.local
-.env.production.local
+.env.localnet
+.env.testnet
+.env.mainnet
 
 # logs
 npm-debug.log*

@@ -10,7 +10,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "bootstrap": "tsx scripts/bootstrap.ts",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "use": "tsx scripts/use.ts"
   },
   "dependencies": {
     "@mysten/dapp-kit": "^0.16.5",

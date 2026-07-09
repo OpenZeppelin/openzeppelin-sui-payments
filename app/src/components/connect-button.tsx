@@ -2,33 +2,37 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  useAccounts,
   useConnectWallet,
   useCurrentAccount,
   useDisconnectWallet,
+  useSwitchAccount,
   useWallets,
 } from "@mysten/dapp-kit";
+import { Check, ChevronDown } from "lucide-react";
 import { isEnokiWallet } from "@mysten/enoki";
 
 import { Button } from "@/components/ui/button";
 import { shortAddr } from "@/lib/utils";
 
 /**
- * Header login control. Custom wallet picker (replaces dapp-kit's built-in
+ * Header login control. Custom picker (replaces dapp-kit's built-in
  * `ConnectButton`) so we can:
  *   - Relabel entries to "Continue with X" — friendlier than the raw wallet
  *     names ("Sign in with Google", "Slush", …).
  *   - Sort Enoki-registered wallets (walletless zkLogin) to the top on
- *     testnet/mainnet, since that's the "user never sees a wallet" path
- *     the template is meant to demonstrate.
+ *     testnet/mainnet.
+ *   - Let a connected user switch between accounts the wallet exposes
+ *     (wallets like Slush hold multiple accounts; the disconnected state
+ *     is a wallet picker, the connected state is an account switcher).
  *
- * Rendered as an anchored popover directly under the trigger button (not a
- * centered modal), so the login feels like part of the header rather than
- * a screen-blocking dialog.
- *
- * Connected state shows a short-form address plus a Log-out button.
+ * Both modes render as an anchored popover directly under the trigger button
+ * (not a centered modal), so the login feels like part of the header rather
+ * than a screen-blocking dialog.
  */
 
 type Wallet = ReturnType<typeof useWallets>[number];
+type Account = ReturnType<typeof useAccounts>[number];
 
 const PROVIDER_LABEL: Record<string, string> = {
   google: "Google",
@@ -52,15 +56,14 @@ function sortWallets(wallets: readonly Wallet[]): Wallet[] {
   return [...enoki, ...others];
 }
 
-export function ConnectButton() {
-  const account = useCurrentAccount();
-  const wallets = useWallets();
-  const { mutate: connect, isPending } = useConnectWallet();
-  const { mutate: disconnect } = useDisconnectWallet();
-  const [open, setOpen] = useState(false);
+/** Shared anchored-popover + click-outside/Escape close. */
+function useAnchoredPopover(): {
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  open: boolean;
+  setOpen: (next: boolean) => void;
+} {
   const containerRef = useRef<HTMLDivElement>(null);
-
-  // Close on outside click + Escape when the popover is open.
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!open) return;
     function onPointerDown(e: PointerEvent) {
@@ -77,25 +80,23 @@ export function ConnectButton() {
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
+  return { containerRef, open, setOpen };
+}
 
-  if (account) {
-    return (
-      <div className="flex items-center gap-3 text-sm">
-        <span className="text-[color:var(--color-muted-foreground)]">
-          {shortAddr(account.address)}
-        </span>
-        <Button size="sm" variant="outline" onClick={() => disconnect()}>
-          Log out
-        </Button>
-      </div>
-    );
-  }
+export function ConnectButton() {
+  const account = useCurrentAccount();
+  return account ? <ConnectedControl /> : <DisconnectedControl />;
+}
 
+function DisconnectedControl() {
+  const wallets = useWallets();
+  const { mutate: connect, isPending } = useConnectWallet();
+  const { containerRef, open, setOpen } = useAnchoredPopover();
   const sorted = sortWallets(wallets);
 
   return (
     <div ref={containerRef} className="relative flex items-center">
-      <Button size="sm" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+      <Button size="sm" onClick={() => setOpen(!open)} aria-expanded={open}>
         Log in
       </Button>
       {open ? (
@@ -140,5 +141,90 @@ export function ConnectButton() {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ConnectedControl() {
+  const account = useCurrentAccount()!;
+  const accounts = useAccounts();
+  const { mutate: switchAccount } = useSwitchAccount();
+  const { mutate: disconnect } = useDisconnectWallet();
+  const { containerRef, open, setOpen } = useAnchoredPopover();
+  const multiAccount = accounts.length > 1;
+
+  return (
+    <div className="flex items-center gap-3 text-sm">
+      <div ref={containerRef} className="relative flex items-center">
+        {multiAccount ? (
+          <button
+            type="button"
+            onClick={() => setOpen(!open)}
+            aria-expanded={open}
+            className="flex items-center gap-2 rounded-md px-2 py-1 text-[color:var(--color-muted-foreground)] transition-colors hover:bg-[color:var(--color-muted)] focus-visible:bg-[color:var(--color-muted)] focus-visible:outline-none"
+          >
+            <span className="font-mono">{shortAddr(account.address)}</span>
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        ) : (
+          <span className="px-2 font-mono text-[color:var(--color-muted-foreground)]">
+            {shortAddr(account.address)}
+          </span>
+        )}
+        {multiAccount && open ? (
+          <div
+            role="menu"
+            className="absolute right-0 top-full z-50 mt-2 w-72 rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)] p-2 text-[color:var(--color-card-foreground)] shadow-lg"
+          >
+            <div className="px-3 pb-1 pt-2 text-xs uppercase tracking-wide text-[color:var(--color-muted-foreground)]">
+              Accounts
+            </div>
+            {accounts.map((a) => (
+              <AccountRow
+                key={a.address}
+                account={a}
+                current={a.address === account.address}
+                onSelect={() => {
+                  switchAccount({ account: a }, { onSuccess: () => setOpen(false) });
+                }}
+              />
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <Button size="sm" variant="outline" onClick={() => disconnect()}>
+        Log out
+      </Button>
+    </div>
+  );
+}
+
+function AccountRow({
+  account,
+  current,
+  onSelect,
+}: {
+  account: Account;
+  current: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onSelect}
+      className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[color:var(--color-muted)] focus-visible:bg-[color:var(--color-muted)] focus-visible:outline-none"
+    >
+      <span className="flex h-4 w-4 items-center justify-center text-[color:var(--color-primary)]">
+        {current ? <Check className="h-4 w-4" /> : null}
+      </span>
+      <div className="min-w-0 flex-1">
+        {account.label ? (
+          <div className="truncate text-sm font-medium">{account.label}</div>
+        ) : null}
+        <div className="truncate font-mono text-xs text-[color:var(--color-muted-foreground)]">
+          {shortAddr(account.address, 8)}
+        </div>
+      </div>
+    </button>
   );
 }

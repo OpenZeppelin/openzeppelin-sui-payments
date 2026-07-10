@@ -41,7 +41,8 @@ public struct Voucher has store {
     /// public `VoucherCreated` events.
     ///
     /// MUST be single-use: `redeem` reveals the preimage on-chain, so a reused
-    /// `redeem_hash` can be redeemed by an observer of the earlier reveal.
+    /// `redeem_hash` can be redeemed by a `CashierRole` holder who recorded the
+    /// earlier reveal, without the customer present.
     redeem_hash: vector<u8>,
 }
 

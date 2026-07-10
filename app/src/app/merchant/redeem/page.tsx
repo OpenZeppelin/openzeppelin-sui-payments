@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { qk, useListings, useVoucher } from "@/hooks/queries";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
+import { useSuiClockMs } from "@/hooks/use-sui-clock";
 import { buildRedeem } from "@/lib/move/redemption";
 import { deployment } from "@/lib/deployment";
 import { blake2b256, bytesEqual } from "@/lib/preimage";
@@ -78,8 +79,10 @@ export default function RedeemPage() {
     setScanned(parsed);
   }
 
-  const now = Date.now();
-  const expired = voucher.data ? voucher.data.expiresAtMs <= BigInt(now) : false;
+  // Compare against the on-chain Clock at 0x6 — wallclock can lag the localnet
+  // Clock by many minutes, so `Date.now()` mismarks fresh vouchers as expired.
+  const chainNow = useSuiClockMs().data;
+  const expired = Boolean(voucher.data && chainNow && voucher.data.expiresAtMs <= chainNow);
 
   return (
     <section>

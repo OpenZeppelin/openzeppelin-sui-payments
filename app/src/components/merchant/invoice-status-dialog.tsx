@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, XCircle } from "lucide-react";
 
@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { qk, useInvoice, useInvoiceReceipt } from "@/hooks/queries";
+import { qk, useInvoice, useInvoiceReceipt, useListings } from "@/hooks/queries";
 import { deployment } from "@/lib/deployment";
 import { encodeInvoiceQr } from "@/lib/qr";
 import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
@@ -51,6 +51,15 @@ export function InvoiceStatusDialog({
   const target = open ? invoiceId : null;
   const invoice = useInvoice(target, { pollMs: POLL_MS });
   const receipt = useInvoiceReceipt(target, { pollMs: POLL_MS });
+  // Catalog lookup for readable "Listing · Variant" line items on the paid
+  // view. Invoices can outlive the catalog — misses fall back to a short id.
+  const { data: listings = [] } = useListings();
+  const variantLookup = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const l of listings)
+      for (const v of l.variants) m.set(v.id, `${l.name} · ${v.name}`);
+    return m;
+  }, [listings]);
 
   // Cross-page consistency: when terminal state is reached, refresh the
   // transactions feed + per-invoice caches.
@@ -114,6 +123,22 @@ export function InvoiceStatusDialog({
                     {paid.loyalty.toString()} LOY
                   </div>
                 </div>
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-wide text-[color:var(--color-muted-foreground)]">
+                  Items
+                </div>
+                <ul className="mt-1 list-disc pl-5">
+                  {paid.items.map((it, i) => {
+                    const label = variantLookup.get(it.variantId) ?? shortAddr(it.variantId, 6);
+                    return (
+                      <li key={i}>
+                        {it.quantity.toString()}× {label} ·{" "}
+                        {formatAmount(it.price, STABLECOIN_DECIMALS)} USD
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
               <div>
                 <div className="text-xs uppercase tracking-wide text-[color:var(--color-muted-foreground)]">

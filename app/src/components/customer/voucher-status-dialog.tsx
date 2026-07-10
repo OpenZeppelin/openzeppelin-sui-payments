@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, XCircle } from "lucide-react";
 
@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { qk, useVoucher, useVoucherReceipt } from "@/hooks/queries";
+import { qk, useListings, useVoucher, useVoucherReceipt } from "@/hooks/queries";
 import { deployment } from "@/lib/deployment";
 import { shortAddr } from "@/lib/utils";
 
@@ -54,6 +54,16 @@ export function VoucherStatusDialog({
   const target = open ? voucherId : null;
   const voucher = useVoucher(target, { pollMs: POLL_MS });
   const receipt = useVoucherReceipt(target, { pollMs: POLL_MS });
+  // Look up each item's `variantId` in the current catalog to render a readable
+  // "Listing · Variant" label. Vouchers can outlive the catalog, so misses fall
+  // back to a short variant id — matches the merchant redeem view and history.
+  const { data: listings = [] } = useListings();
+  const variantLookup = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const l of listings)
+      for (const v of l.variants) m.set(v.id, `${l.name} · ${v.name}`);
+    return m;
+  }, [listings]);
 
   useEffect(() => {
     if (!receipt.data && !(voucher.isSuccess && voucher.data === null)) return;
@@ -114,12 +124,14 @@ export function VoucherStatusDialog({
                   Items
                 </div>
                 <ul className="mt-1 list-disc pl-5">
-                  {redeemed.items.map((it, i) => (
-                    <li key={i}>
-                      {it.quantity.toString()}× variant{" "}
-                      {shortAddr(it.variantId, 4)} · {it.price.toString()} LOY
-                    </li>
-                  ))}
+                  {redeemed.items.map((it, i) => {
+                    const label = variantLookup.get(it.variantId) ?? shortAddr(it.variantId, 6);
+                    return (
+                      <li key={i}>
+                        {it.quantity.toString()}× {label} · {it.price.toString()} LOY
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
               <div className="text-xs text-[color:var(--color-muted-foreground)]">

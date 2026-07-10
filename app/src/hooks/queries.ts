@@ -332,8 +332,15 @@ export function useReceipts(
       // MoveEventField] }` filter returns "Invalid params" on public testnet
       // fullnodes (the RPC parser rejects the compound form entirely), so
       // server-side filtering by `/customer` is not viable. Fetch by event
-      // type, then filter the parsedJson. Page walk is capped at MAX_PAGES —
-      // at scale a template deployment should be paired with a real indexer.
+      // type, then filter the parsedJson. Page walk is capped at MAX_PAGES.
+      //
+      // Failure mode at scale: since the cap is global across all customers
+      // (not per-customer), once total on-chain InvoicePaid + VoucherRedeemed
+      // volume exceeds MAX_PAGES * pageSize (~1000 each), older receipts for
+      // any given customer silently fall outside the walked window and vanish
+      // from History with no error or user-visible indication. A template
+      // deployment intended for real traffic should be paired with a proper
+      // indexer that supports customer-scoped queries.
       const MAX_PAGES = 5;
       const [paid, redeemed] = await Promise.all([
         queryEvents(client, `${deployment.packageId}::events::InvoicePaid`, MAX_PAGES),

@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { SuiClient } from "@mysten/sui/client";
+import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { Transaction, type TransactionArgument } from "@mysten/sui/transactions";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -90,10 +90,14 @@ function readEnv(key: string): string {
 }
 
 function networkUrl(network: string): string {
-  if (network === "localnet") return "http://127.0.0.1:9000";
-  if (network === "testnet") return "https://fullnode.testnet.sui.io:443";
-  if (network === "mainnet") return "https://fullnode.mainnet.sui.io:443";
-  if (network === "devnet") return "https://fullnode.devnet.sui.io:443";
+  if (
+    network === "localnet" ||
+    network === "testnet" ||
+    network === "mainnet" ||
+    network === "devnet"
+  ) {
+    return getFullnodeUrl(network);
+  }
   throw new Error(`unknown NEXT_PUBLIC_SUI_NETWORK: ${network}`);
 }
 

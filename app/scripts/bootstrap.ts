@@ -455,14 +455,20 @@ function resolveSponsorKeypair(): { keypair: Ed25519Keypair; privateKey: string 
   const existing =
     process.env.SPONSOR_PRIVATE_KEY ?? readEnvFile("SPONSOR_PRIVATE_KEY");
   if (existing && existing.length > 0) {
-    const { schema, secretKey } = decodeSuiPrivateKey(existing);
-    if (schema === "ED25519") {
-      const keypair = Ed25519Keypair.fromSecretKey(secretKey);
-      return { keypair, privateKey: existing };
+    try {
+      const { schema, secretKey } = decodeSuiPrivateKey(existing);
+      if (schema === "ED25519") {
+        const keypair = Ed25519Keypair.fromSecretKey(secretKey);
+        return { keypair, privateKey: existing };
+      }
+      console.warn(
+        `  SPONSOR_PRIVATE_KEY schema is "${schema}"; regenerating an ed25519 key.`,
+      );
+    } catch (err) {
+      console.warn(
+        `  SPONSOR_PRIVATE_KEY failed to decode (${err instanceof Error ? err.message : String(err)}); regenerating an ed25519 key.`,
+      );
     }
-    console.warn(
-      `  SPONSOR_PRIVATE_KEY schema is "${schema}"; regenerating an ed25519 key.`,
-    );
   }
   const keypair = new Ed25519Keypair();
   return { keypair, privateKey: keypair.getSecretKey() };

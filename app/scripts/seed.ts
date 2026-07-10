@@ -78,6 +78,13 @@ const CATALOG: ListingSpec[] = [
 
 /** Read a `KEY=value` line from `.env.local`. tsx doesn't auto-load it. */
 function readEnv(key: string): string {
+  const v = readEnvOpt(key);
+  if (v === undefined)
+    throw new Error(`missing ${key} in ${ENV_PATH} — run \`pnpm bootstrap\` first`);
+  return v;
+}
+
+function readEnvOpt(key: string): string | undefined {
   let raw = "";
   try {
     raw = readFileSync(ENV_PATH, "utf8");
@@ -85,11 +92,17 @@ function readEnv(key: string): string {
     throw new Error(`could not read ${ENV_PATH} — run \`pnpm bootstrap\` first`);
   }
   const line = raw.split("\n").find((l) => l.startsWith(`${key}=`));
-  if (!line) throw new Error(`missing ${key} in ${ENV_PATH} — run \`pnpm bootstrap\` first`);
-  return line.slice(key.length + 1).trim();
+  if (!line) return undefined;
+  const v = line.slice(key.length + 1).trim();
+  return v.length === 0 ? undefined : v;
 }
 
 function networkUrl(network: string): string {
+  // Honor the per-deploy override so seed picks up the same alternate fullnode
+  // (Blockvision, PublicNode, …) the Next.js app is using when Mysten's default
+  // fullnode is down or rate-limiting. See sui-client.ts for the app-side pair.
+  const override = readEnvOpt("NEXT_PUBLIC_SUI_RPC_URL");
+  if (override) return override;
   if (
     network === "localnet" ||
     network === "testnet" ||

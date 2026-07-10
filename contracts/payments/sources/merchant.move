@@ -238,6 +238,9 @@ fun init(otw: MERCHANT, ctx: &mut TxContext) {
 /// `CatalogManagerRole` / `CashierRole` via `AccessControl<MERCHANT>`. Caller is
 /// expected to follow up with `merchant::share(merchant)` in the same PTB.
 ///
+/// Emits `ConfigUpdated` with the initial config, so it serves as the baseline
+/// that the first subsequent `update_config` diffs against.
+///
 /// #### Parameters
 /// - `loyalty`: The `Loyalty` bundle from `loyalty::create`.
 /// - `config`: The merchant's `Config` - payout address, accepted payment type,
@@ -260,6 +263,8 @@ public fun create(
     ctx: &mut TxContext,
 ): Merchant {
     assert!(!name.is_empty(), EEmptyName);
+
+    events::emit_config_updated(config);
 
     Merchant {
         id: object::new(ctx),

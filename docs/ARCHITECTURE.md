@@ -99,22 +99,28 @@ reads `0x6` and polls every 5 s; every UI expiry check goes through it.
 
 ### 6. Sponsored transactions with a three-way branch
 
-The `useSponsoredMutation` hook picks a signing path per environment:
+The `useSponsoredMutation` hook picks a signing path per (network, sender):
 
-- **Localnet** → `/api/sponsor` (server-side gas station holding
-  `SPONSOR_PRIVATE_KEY`, funded from the local faucet). Convenience only,
-  never shipped to a live network.
+- **Localnet + non-deployer sender** → `/api/sponsor` (the deployer key
+  pays gas). Customers and any extra cashier wallets granted `CashierRole`
+  fall here — they get a fully-sponsored UX on localnet without holding
+  SUI. Convenience only, never shipped to a live network.
 - **Testnet + Enoki-registered wallet** → two-phase Enoki: `/api/enoki-sponsor`
   (`createSponsoredTransaction`) then `/api/enoki-execute`
   (`executeSponsoredTransaction`). The Enoki service pays gas; user signs the
   tx data separately.
-- **Testnet + any other wallet** → `useSignAndExecuteTransaction` from
-  dapp-kit. The wallet pays gas itself.
+- **Testnet + any other wallet, OR localnet + deployer sender** →
+  `useSignAndExecuteTransaction` from dapp-kit. The wallet pays gas itself.
+  The deployer wallet is bootstrap-funded on localnet, so it always has SUI
+  to spend on its own txs; self-sponsorship would collide with the wallet's
+  own gas-coin selection anyway.
 
 In every branch the **sender** is the connected wallet, and Move sees
 `ctx.sender()` = the customer/cashier. The sponsor pays gas and has no
 authority over the tx's effects — they can't add move calls or swap
-arguments.
+arguments. `NEXT_PUBLIC_DEPLOYER_ADDRESS` is written by bootstrap so the
+client can detect deployer-sent txs and route them to the wallet-pays
+path.
 
 ## Move module layout
 

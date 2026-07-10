@@ -30,20 +30,25 @@
  *     • PTB prepends `namespace::setup(&mut ns, &UpgradeCap)` before the
  *       system-env steps to wire pas to its UpgradeCap on this fresh chain.
  *
- * The active address must hold gas. On localnet:
+ * The deployer key is passed explicitly via `--deployer-key=<suiprivkey1...>`
+ * or `DEPLOYER_PRIVATE_KEY` in the shell env — never auto-exported from the
+ * Sui CLI keystore. The derived address must equal `sui client active-address`,
+ * since `sui client publish` signs the initial publish with the CLI's active
+ * key. The active address must also hold gas. On localnet:
  *   sui start --with-faucet --force-regenesis     # in another terminal
- *   sui client switch --env local
+ *   sui client switch --env localnet
  *   sui client faucet
+ *   pnpm bootstrap localnet --deployer-key="$(sui keytool export \
+ *     --key-identity $(sui client active-address) --json | jq -r .exportedPrivateKey)"
  */
 
 import { execSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { parseArgs } from "node:util";
 
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { SuiClient } from "@mysten/sui/client";
-import { getFaucetHost, requestSuiFromFaucetV2 } from "@mysten/sui/faucet";
 import { Transaction } from "@mysten/sui/transactions";
 
 type ObjectChange = Record<string, unknown>;
@@ -218,9 +223,10 @@ function findCreated(r: PublishResult, p: (o: PublishObject) => boolean): string
 }
 
 /**
- * Read a single `KEY=value` line from `.env.local` without loading any dotenv
- * machinery. Used by `resolveSponsorKeypair` so the local gas-station key
- * survives a re-bootstrap (the funded sponsor address stays stable across runs).
+ * Read a single `KEY=value` line from the active per-network env file without
+ * loading any dotenv machinery. Used for reading secret values populated by
+ * a previous bootstrap (tsx doesn't auto-load `.env.local`, so process.env
+ * is empty here even if the file has a value).
  */
 function readEnvFile(key: string): string | undefined {
   let raw = "";
@@ -261,17 +267,37 @@ function getActiveEnvAlias(): string {
 }
 
 /**
- * Optional CLI arg — `pnpm bootstrap <network>` shorthand. Accepts
- * `localnet`/`testnet`/`mainnet`; anything else returns null (fall back to
- * whatever `sui client active-env` is set to). Side effects when set:
+ * CLI: `pnpm bootstrap <network> [--deployer-key=...] [--enoki-api-key=...]`
+ *
+ * `<network>` accepts `localnet`/`testnet`/`mainnet`; anything else throws.
+ * Omitting it falls back to `sui client active-env`. Side effects when set:
  *   1. `sui client switch --env <alias>` so the CLI targets the right chain
  *      (with a `local` fallback since Sui CLI's default localnet alias name
  *      varies between installs).
- *   2. `NEXT_PUBLIC_SUI_NETWORK=<network>` written to `.env.local` so the
- *      dev server matches on next start.
+ *   2. `NEXT_PUBLIC_SUI_NETWORK=<network>` written to `.env.<network>` and
+ *      mirrored to `.env.local` so the dev server matches on next start.
+ *
+ * Optional flags export their value into `process.env` under the canonical
+ * `DEPLOYER_PRIVATE_KEY` / `ENOKI_PRIVATE_API_KEY` name so downstream
+ * `process.env.X ?? readEnvFile(X)` readers pick them up transparently, and
+ * the terminal env-write block persists them.
  */
 function applyNetworkFromArgv(): "localnet" | "testnet" | "mainnet" | null {
-  const arg = process.argv[2];
+  const { values, positionals } = parseArgs({
+    args: process.argv.slice(2),
+    allowPositionals: true,
+    options: {
+      "deployer-key": { type: "string" },
+      "enoki-api-key": { type: "string" },
+    },
+  });
+
+  // Plumb resolved secrets before the network switch so any downstream reader
+  // (including code paths that fire before the terminal patchEnv) sees them.
+  if (values["deployer-key"]) process.env.DEPLOYER_PRIVATE_KEY = values["deployer-key"];
+  if (values["enoki-api-key"]) process.env.ENOKI_PRIVATE_API_KEY = values["enoki-api-key"];
+
+  const arg = positionals[0];
   if (!arg) return null;
   if (arg !== "localnet" && arg !== "testnet" && arg !== "mainnet") {
     throw new Error(
@@ -428,57 +454,29 @@ async function discoverPasContextFromPubfile(
   return { packageId, namespaceId: ns.objectId, upgradeCapId };
 }
 
-function deployerKeypair(address: string): Ed25519Keypair {
-  return Ed25519Keypair.fromSecretKey(deployerPrivateKey(address));
-}
-
-function deployerPrivateKey(address: string): string {
-  const out = execSync(`sui keytool export --key-identity ${address} --json`, {
-    encoding: "utf8",
-  });
-  return (JSON.parse(out) as { exportedPrivateKey: string }).exportedPrivateKey;
-}
-
 /**
- * Resolve a stable sponsor keypair for the localnet gas-station route
- * (`/api/sponsor`). Reuses `SPONSOR_PRIVATE_KEY` from `.env.local` when present
- * so the funded sponsor address survives a re-bootstrap; otherwise mints a
- * fresh ed25519 key. Caller is responsible for funding it via the faucet.
+ * Load the deployer's ed25519 keypair from `DEPLOYER_PRIVATE_KEY` (set via
+ * `--deployer-key=<suiprivkey1...>` or exported into the shell before
+ * running bootstrap). Same shape on every network — no keystore auto-
+ * export.
  *
- * Localnet only — on testnet/mainnet sponsorship is handled by Enoki via the
- * connected wallet, and no server-side sponsor key is provisioned.
+ * The keypair's derived address must equal `sui client active-address`
+ * because `sui client publish` signs the initial publish tx with the
+ * CLI's active key; a mismatch would land the publish under a different
+ * address than the one bootstrap wires the merchant / access-control
+ * objects to. `main()` runs that check before this helper is ever called.
  */
-function resolveSponsorKeypair(): { keypair: Ed25519Keypair; privateKey: string } {
-  // tsx doesn't auto-load `.env.local`, so process.env is empty here even if the
-  // file has a value. Read the file directly as a fallback before generating
-  // anything new.
-  const existing =
-    process.env.SPONSOR_PRIVATE_KEY ?? readEnvFile("SPONSOR_PRIVATE_KEY");
-  if (existing && existing.length > 0) {
-    try {
-      const { schema, secretKey } = decodeSuiPrivateKey(existing);
-      if (schema === "ED25519") {
-        const keypair = Ed25519Keypair.fromSecretKey(secretKey);
-        return { keypair, privateKey: existing };
-      }
-      console.warn(
-        `  SPONSOR_PRIVATE_KEY schema is "${schema}"; regenerating an ed25519 key.`,
-      );
-    } catch (err) {
-      console.warn(
-        `  SPONSOR_PRIVATE_KEY failed to decode (${err instanceof Error ? err.message : String(err)}); regenerating an ed25519 key.`,
-      );
-    }
+function deployerKeypair(): Ed25519Keypair {
+  const key = process.env.DEPLOYER_PRIVATE_KEY;
+  if (!key || key.length === 0) {
+    throw new Error(
+      "DEPLOYER_PRIVATE_KEY is required. Pass --deployer-key=<suiprivkey1...> " +
+        "or export DEPLOYER_PRIVATE_KEY in your shell. To reuse the Sui CLI's " +
+        "active keystore key: `sui keytool export --key-identity " +
+        "$(sui client active-address) --json | jq -r .exportedPrivateKey`.",
+    );
   }
-  const keypair = new Ed25519Keypair();
-  return { keypair, privateKey: keypair.getSecretKey() };
-}
-
-async function fundFromLocalFaucet(address: string): Promise<void> {
-  await requestSuiFromFaucetV2({
-    host: getFaucetHost("localnet"),
-    recipient: address,
-  });
+  return Ed25519Keypair.fromSecretKey(key);
 }
 
 /**
@@ -631,7 +629,7 @@ async function postPublishPTB({
 }> {
   console.log(`\n→ running post-publish PTB`);
 
-  const keypair = deployerKeypair(deployer);
+  const keypair = deployerKeypair();
   const client = new SuiClient({ url: rpcUrl });
   const tx = new Transaction();
 
@@ -747,7 +745,22 @@ async function main() {
     TARGET_ENV = envFileForNetwork(envAlias);
   }
   const rpcUrl = getActiveRpcUrl(envAlias);
-  const deployer = getActiveAddress();
+  const deployer = deployerKeypair().toSuiAddress();
+  // `sui client publish` (and `test-publish`) signs the initial publish tx
+  // with the CLI's active address. If that differs from the address derived
+  // from --deployer-key, the publish lands under one identity while every
+  // subsequent PTB signs under another. Refuse rather than silently split.
+  const activeCliAddress = getActiveAddress();
+  if (deployer !== activeCliAddress) {
+    throw new Error(
+      `--deployer-key maps to ${deployer} but \`sui client active-address\` ` +
+        `is ${activeCliAddress}. \`sui client publish\` uses the CLI's active ` +
+        `key, so these must match. If the deployer key is already in your Sui ` +
+        `CLI keystore, run \`sui client switch --address ${deployer}\`. ` +
+        `Otherwise import it first: \`sui keytool import "<suiprivkey1...>" ` +
+        `ed25519\`.`,
+    );
+  }
   const client = new SuiClient({ url: rpcUrl });
 
   // Verify the CLI alias actually points where it claims. `sui client active-env`
@@ -823,7 +836,7 @@ async function main() {
     // Templates id (for stablecoin_mock::setup).
     const pasInit = await setupPasOnFreshChain(
       client,
-      deployerKeypair(deployer),
+      deployerKeypair(),
       pasPackageId,
       namespaceId,
       pasUpgradeCapId!,
@@ -920,7 +933,7 @@ async function main() {
       tx.setGasBudget(50_000_000n);
       const result = await client.signAndExecuteTransaction({
         transaction: tx,
-        signer: deployerKeypair(deployer),
+        signer: deployerKeypair(),
         options: { showEffects: true },
       });
       if (result.effects?.status?.status !== "success") {
@@ -984,7 +997,7 @@ async function main() {
   }
   const stablecoinCurrencyId = await finalizeStablecoinCurrency({
     client,
-    keypair: deployerKeypair(deployer),
+    keypair: deployerKeypair(),
     ttoCurrencyId,
     stablecoinType,
   });
@@ -1006,23 +1019,12 @@ async function main() {
     deployer,
   });
 
-  // Local gas-station signer for `/api/sponsor`. Only provisioned on ephemeral
-  // chains — on testnet/mainnet, Enoki handles sponsorship via the connected
-  // wallet, so no server-side sponsor key is needed. Persisted in `.env.local`
-  // so subsequent runs reuse the same address; topped up from the localnet
-  // faucet on every bootstrap so a freshly-regenesised chain doesn't leave the
-  // sponsor broke.
-  let sponsorPrivateKey: string | null = null;
-  if (ephemeral) {
-    const sponsor = resolveSponsorKeypair();
-    const sponsorAddress = sponsor.keypair.toSuiAddress();
-    console.log(`\n→ funding sponsor address ${sponsorAddress}`);
-    await fundFromLocalFaucet(sponsorAddress);
-    sponsorPrivateKey = sponsor.privateKey;
-  }
-
   // Public deployment IDs — always written; no risk if exposed (they're
   // already on chain, and the FE imports them client-side via NEXT_PUBLIC_*).
+  // NEXT_PUBLIC_DEPLOYER_ADDRESS lets the client detect deployer-signed txs
+  // on localnet and skip `/api/sponsor` for them (the deployer doubles as
+  // the localnet gas sponsor — self-sponsorship collides with wallet gas
+  // selection).
   patchEnv({
     NEXT_PUBLIC_PACKAGE_ID: payments.packageId!,
     NEXT_PUBLIC_MERCHANT_ID: merchantId,
@@ -1036,27 +1038,27 @@ async function main() {
     NEXT_PUBLIC_PAS_PACKAGE_ID: pasPackageId,
     NEXT_PUBLIC_OZ_ACCESS_PACKAGE_ID: ozAccessPkg,
     NEXT_PUBLIC_TEMPLATES_ID: templatesId!,
+    NEXT_PUBLIC_DEPLOYER_ADDRESS: deployer,
   });
 
-  // Server-side signing keys — only persist on ephemeral (localnet) chains. On
-  // testnet/mainnet, auto-exporting these would turn the deployed app's
-  // `/api/topup` route into an unauthenticated mint endpoint (deployer holds
-  // `TreasuryCap<STABLECOIN_MOCK>`). Operators who genuinely want the dev
-  // faucet on a shared chain must populate these manually with full awareness.
-  if (ephemeral) {
-    patchEnv({
-      // Used by `/api/topup` to sign the stablecoin faucet mint.
-      DEPLOYER_PRIVATE_KEY: deployerPrivateKey(deployer),
-      // Used by `/api/sponsor` to sign the gas leg of localnet sponsored txs.
-      // testnet/mainnet sponsor via Enoki, not this key.
-      SPONSOR_PRIVATE_KEY: sponsorPrivateKey!,
-    });
-  } else {
+  // Server-side signing keys — persist whatever the operator supplied via
+  // `--deployer-key` / `--enoki-api-key`, or already had in the shell env.
+  // DEPLOYER_PRIVATE_KEY is guaranteed set by this point (the earlier
+  // `deployerKeypair()` check would have thrown otherwise). ENOKI is
+  // optional and only relevant on testnet/mainnet.
+  const suppliedSecrets: Record<string, string> = {
+    DEPLOYER_PRIVATE_KEY: process.env.DEPLOYER_PRIVATE_KEY!,
+  };
+  if (process.env.ENOKI_PRIVATE_API_KEY) {
+    suppliedSecrets.ENOKI_PRIVATE_API_KEY = process.env.ENOKI_PRIVATE_API_KEY;
+  }
+  patchEnv(suppliedSecrets);
+  console.log(`  wrote secrets: ${Object.keys(suppliedSecrets).join(", ")}`);
+  if (!ephemeral && !process.env.ENOKI_PRIVATE_API_KEY) {
     console.log(
-      `\n⚠ ${envAlias}: skipping DEPLOYER_PRIVATE_KEY / SPONSOR_PRIVATE_KEY ` +
-        `auto-export. /api/topup and /api/sponsor are gated to localnet at the ` +
-        `route layer regardless; populate these manually only if you understand ` +
-        `the implications.`,
+      `\n⚠ ${envAlias}: ENOKI_PRIVATE_API_KEY not written. Pass ` +
+        `--enoki-api-key to enable Enoki-sponsored txs on this network, ` +
+        `or populate it manually in ${TARGET_ENV}.`,
     );
   }
 

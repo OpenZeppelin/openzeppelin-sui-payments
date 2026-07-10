@@ -46,18 +46,31 @@ interface SponsorOptions {
 }
 
 /**
+ * Deployer address (public). Injected at build time by Next.js from
+ * `NEXT_PUBLIC_DEPLOYER_ADDRESS`. Localnet-only failure mode: the deployer
+ * doubles as the localnet gas sponsor, so a deployer-signed tx that goes
+ * through `/api/sponsor` would try to self-sponsor and collide with the
+ * wallet's own gas-coin picking. When the connected address matches this,
+ * we fall through to the wallet-pays path even on localnet.
+ */
+const DEPLOYER_ADDRESS = process.env.NEXT_PUBLIC_DEPLOYER_ADDRESS;
+
+/**
  * useMutation wrapper that picks one of three tx submission paths, depending
  * on identity + network:
  *
- *  A. **localnet** — build a `TransactionKind`, POST to `/api/sponsor` (local
- *     gas station), ask the wallet to co-sign the same bytes, submit
- *     `[userSig, sponsorSig]` directly. Fully-sponsored UX with any wallet.
+ *  A. **localnet + non-deployer sender** — build a `TransactionKind`, POST
+ *     to `/api/sponsor` (the deployer's key pays gas), ask the wallet to
+ *     co-sign the same bytes, submit `[userSig, sponsorSig]`. Fully-
+ *     sponsored UX for customers and extra cashier wallets.
  *  B. **testnet/mainnet + Enoki-registered wallet** — `/api/enoki-sponsor`
  *     wraps the kind as a sponsored tx (subject to the Enoki app's
  *     allowedMoveCallTargets rules), the Enoki wallet signs with the zkLogin
  *     keypair, `/api/enoki-execute` finalizes.
- *  C. **testnet/mainnet + any other wallet** — plain
- *     `useSignAndExecuteTransaction`, user pays gas.
+ *  C. **testnet/mainnet + any other wallet, OR localnet + deployer sender**
+ *     — plain `useSignAndExecuteTransaction`, user pays gas. On localnet
+ *     the deployer wallet was funded during bootstrap, so it has SUI to
+ *     spend on its own txs.
  */
 export function useSponsoredMutation<TArgs>(
   build: (tx: Transaction, args: TArgs) => void,
@@ -80,8 +93,9 @@ export function useSponsoredMutation<TArgs>(
       const tx = new Transaction();
       build(tx, args);
 
-      const useLocalSponsor = NETWORK === "localnet";
-      const useEnokiSponsor = !useLocalSponsor && enokiConnected;
+      const useLocalSponsor =
+        NETWORK === "localnet" && senderAddress !== DEPLOYER_ADDRESS;
+      const useEnokiSponsor = NETWORK !== "localnet" && enokiConnected;
       let digest: string;
 
       if (useLocalSponsor) {

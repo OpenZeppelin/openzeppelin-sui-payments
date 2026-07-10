@@ -5,7 +5,7 @@ import { SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 import { fromBase64, toBase64 } from "@mysten/sui/utils";
 
-import { sponsorAddress, sponsorKeypair } from "@/lib/sponsor-server";
+import { deployerAddress, deployerKeypair } from "@/lib/deployer-server";
 import { NETWORK, networkConfig } from "@/lib/sui-client";
 
 type SponsorRequestBody = {
@@ -28,16 +28,20 @@ const GAS_BUDGET = 50_000_000n;
  * POST /api/sponsor
  *
  * Localnet gas station. Takes a client-built `TransactionKind` (no gas set),
- * wraps it as a sponsored `TransactionData` with this server's funded sponsor
- * account paying gas, and returns the bytes + sponsor signature. The client
- * then asks the user's wallet to co-sign the same bytes and submits
- * `[userSig, sponsorSignature]` to the chain.
+ * wraps it as a sponsored `TransactionData` with the deployer account paying
+ * gas, and returns the bytes + sponsor signature. The client then asks the
+ * user's wallet to co-sign the same bytes and submits `[userSig,
+ * sponsorSignature]` to the chain.
  *
- * Localnet only. testnet/mainnet sponsorship is handled by Enoki via the
- * connected wallet — there is no server-side sponsor key on shared chains,
- * and this route hard-aborts unless `NETWORK === "localnet"`. Bootstrap is
- * also gated to only persist `SPONSOR_PRIVATE_KEY` on localnet; this route
- * check is defense-in-depth against a copied env.
+ * The deployer doubles as the localnet gas sponsor — there's no separate
+ * SPONSOR_PRIVATE_KEY. Two constraints follow:
+ *   - Deployer-signed txs are refused here (400). Sponsoring yourself
+ *     collides with the wallet's own gas-coin selection; the client's
+ *     `useSponsoredMutation` already routes deployer-sent txs to the
+ *     wallet-pays path, so hitting this branch means an env mismatch.
+ *   - Localnet only. testnet/mainnet sponsorship is handled by Enoki via
+ *     the connected wallet; this route hard-aborts unless `NETWORK ===
+ *     "localnet"`.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   if (NETWORK !== "localnet") {
@@ -64,9 +68,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       { status: 400 },
     );
   }
+  if (body.sender === deployerAddress()) {
+    return NextResponse.json(
+      {
+        error:
+          "sender is the deployer address — deployer-signed txs must pay their " +
+          "own gas (self-sponsorship collides with wallet gas selection). The " +
+          "client should have routed this through the wallet-pays path.",
+      },
+      { status: 400 },
+    );
+  }
 
   const client = new SuiClient({ url: networkConfig[NETWORK].url });
-  const sponsor = sponsorKeypair();
+  const sponsor = deployerKeypair();
 
   // Reconstruct the client-built TransactionKind, then add sender + gas leg.
   let tx: Transaction;
@@ -79,7 +94,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
   tx.setSender(body.sender);
-  tx.setGasOwner(sponsorAddress());
+  tx.setGasOwner(deployerAddress());
   tx.setGasBudget(GAS_BUDGET);
 
   // Build → returns the full TransactionData bytes that both parties sign.

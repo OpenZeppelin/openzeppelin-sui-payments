@@ -64,7 +64,7 @@ What you do here:
 - The **Invoice** card shows the amount in USD, the LOY the customer will
   earn on settlement, the itemised line-items (looked up in the current
   catalog), and the on-chain expiry (compared against the `0x6` Clock so
-  freshly issued invoices never mis-render as expired — see
+  freshly issued invoices never misrender as expired — see
   [ARCHITECTURE.md § 5](ARCHITECTURE.md#5-time-comes-from-the-on-chain-clock-not-the-wallclock)).
 - **Pay** submits `merchant::pay` under a `SendUnlockApproval` on the
   customer's stablecoin PAS account. On success, the confirmation dialog

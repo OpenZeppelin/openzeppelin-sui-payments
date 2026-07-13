@@ -137,10 +137,12 @@ public struct VariantRemoved has copy, drop {
     variant_id: ID,
 }
 
-/// Emitted when a merchant replaces its `Config` (which now subsumes payout
-/// address and accepted payment type). Carries the full new config values.
+/// Emitted with the initial config at `merchant::create`, and again whenever a
+/// merchant replaces its `Config` via `update_config` (which now subsumes payout
+/// address and accepted payment type). Carries the full config values, so the
+/// creation event is the baseline the first `update_config` diffs against.
 public struct ConfigUpdated has copy, drop {
-    /// The full replacement config.
+    /// The full config.
     config: Config,
 }
 

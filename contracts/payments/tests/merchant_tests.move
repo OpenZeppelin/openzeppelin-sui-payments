@@ -29,6 +29,22 @@ fun merchant_create_and_share() {
             scenario.ctx(),
         );
 
+        // `create` emits `ConfigUpdated` with the initial config as the baseline.
+        // Assert in the same tx as `setup_merchant` (events reset on `next_tx`),
+        // rebuilding the identical config the helper constructed.
+        let (currency, treasury) = test_setup::new_test_currency(1);
+        let expected_cfg = config::new<TEST_USD>(
+            &currency,
+            PAYOUT,
+            config::loyalty_float_scaling() / 10,
+            1_000_000,
+            600_000,
+            600_000,
+        );
+        assert_emitted!(events::config_updated(expected_cfg));
+        destroy(currency);
+        destroy(treasury);
+
         scenario.next_tx(ADMIN);
         let merchant = scenario.take_shared_by_id<Merchant>(merchant_id);
 

@@ -27,11 +27,13 @@ The result behaves like a coffee-shop counter with two rails:
 Every settlement side keeps its balances in a PAS account, not as owned
 `Coin<T>` objects on an EOA. Customers hold stablecoin + `LOYALTY` in their
 own account, the payout address holds the merchant's stablecoin earnings, and
-the merchant itself has an account for internal transfers. Payments and
-redemptions are `unlock_funds` calls on the sender's account gated by
-per-currency `SendUnlockApproval` / `RedeemUnlockApproval` policies —
-soulbound tokens are enforced by *not* registering `send_funds` for
-`LOYALTY`, so account-to-account transfers of loyalty can never resolve.
+the merchant itself has an account for internal transfers. A stablecoin
+payment moves funds via a PAS `send_funds` request gated by the stablecoin
+policy's approval (the mock registers a permissive `TransferApproval`), while
+voucher creation pulls `LOYALTY` out of the customer's account via an
+`unlock_funds` request gated by `RedeemUnlockApproval` — soulbound tokens are
+enforced by *not* registering `send_funds` for `LOYALTY`, so
+account-to-account transfers of loyalty can never resolve.
 
 ### 2. Two settlement flows sharing one Merchant shared object
 
@@ -76,17 +78,20 @@ deployer becomes its sole holder. Three operational roles split the admin
 surface:
 
 - **`MerchantRole`** — identity + treasury settings
-  (`update_config`, `update_display`, receipt pruning). Payout address is
-  rotated through `update_config`.
+  (`update_config`, `update_display`, receipt pruning) plus pre-expiry
+  `cancel_invoice` / `cancel_voucher`. Payout address is rotated through
+  `update_config`.
 - **`CatalogManagerRole`** — catalog CRUD (`add_listing`,
   `add_listing_variant`, status toggle, remove).
-- **`CashierRole`** — day-to-day counter ops (`create_invoice`, `cancel_invoice`).
+- **`CashierRole`** — settlement (`create_invoice`, `redeem`).
 
-`redeem` is intentionally not role-gated: preimage possession *is* the
-authorization. Voucher creation is customer-initiated and equally
-role-free. Cancellation post-expiry is permissionless (see
-`cancel_expired_invoice` / `cancel_expired_voucher`); pre-expiry cancellation
-is `MerchantRole`-gated.
+`redeem` is gated by **both** `CashierRole` and the customer's preimage: the
+till operator authorizes settlement, and the preimage proves the customer
+revealed the secret committed at voucher creation — so `CashierRole` alone
+can't sweep vouchers seen in public `VoucherCreated` events. Voucher creation
+is customer-initiated and role-free. Cancellation post-expiry is permissionless
+(see `cancel_expired_invoice` / `cancel_expired_voucher`); pre-expiry
+cancellation is `MerchantRole`-gated.
 
 ### 5. Time comes from the on-chain Clock, not the wallclock
 
@@ -135,7 +140,8 @@ contracts/payments/sources/
   listing.move       Listing: menu entry with a map of priced Variants keyed
                      by auto-generated ID. Stored as values inside Merchant.listings.
   loyalty.move       LOYALTY OTW + Loyalty resource bundle. Soulbound:
-                     RedeemUnlockApproval registered, SendUnlockApproval NOT.
+                     RedeemUnlockApproval registered for unlock_funds,
+                     send_funds NOT registered.
   merchant.move      Merchant (shared): catalog + open invoices + open vouchers
                      + both receipt tables + AccessControl<MERCHANT> hooks.
                      Owns all merchant-aware logic: pay, redeem, cancel*, prune*,
@@ -236,6 +242,7 @@ flowchart LR
   BPay --> Mpay
   BVoucher --> Mac_auth
   BVoucher --> Mcreate_vou
+  BRedeem --> Mac_auth
   BRedeem --> Mredeem
   BCancelInv --> Mcancel_inv
   BCancelVou --> Mcancel_vou

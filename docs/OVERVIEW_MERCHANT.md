@@ -74,8 +74,9 @@ What you do here:
   Expired vouchers can only be cleaned up via `cancel_expired_voucher`
   (permissionless — the customer usually does it themselves to reclaim the
   locked LOY).
-- **Redeem** requires neither role nor sponsorship secrets — preimage
-  possession *is* the authorization (see
+- **Redeem** submits `merchant::redeem` under `CashierRole` (via
+  `access_control::new_auth`) and additionally requires the scanned preimage —
+  the chain enforces both, so `CashierRole` alone can't sweep vouchers (see
   [ARCHITECTURE.md § 3](ARCHITECTURE.md#3-hashlock-voucher-for-offline-scan-to-redeem)).
 
 ![Voucher redeemed dialog — CheckCircle icon, "Voucher redeemed" title, LOY burned, customer address, hand-over-the-goods reminder, Done button](images/merchant_redeem_confirmation.png)
@@ -142,8 +143,8 @@ What you do here:
   `create_invoice` snapshots onto every invoice's `payout_address` field.
   Rotating it here (via `update_config`) affects only future invoices.
 - **Transfer** issues a `namespace::send_funds` call between the merchant's
-  PAS account and the payout PAS account, gated by `SendUnlockApproval` on
-  the source account.
+  PAS account and the payout PAS account, gated by the stablecoin policy's
+  `TransferApproval` on the source account.
 
 ## Where to go next
 

@@ -66,9 +66,9 @@ What you do here:
   catalog), and the on-chain expiry (compared against the `0x6` Clock so
   freshly issued invoices never misrender as expired — see
   [ARCHITECTURE.md § 5](ARCHITECTURE.md#5-time-comes-from-the-on-chain-clock-not-the-wallclock)).
-- **Pay** submits `merchant::pay` under a `SendUnlockApproval` on the
-  customer's stablecoin PAS account. On success, the confirmation dialog
-  opens.
+- **Pay** submits `merchant::pay` with a `send_funds` request on the
+  customer's stablecoin PAS account, stamped with the stablecoin policy's
+  `TransferApproval`. On success, the confirmation dialog opens.
 
 ![Payment confirmation dialog — CheckCircle icon, "Payment sent" title, amount + LOY earned summary, items list, Done button](images/customer_payment_confirmation.png)
 

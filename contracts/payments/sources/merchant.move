@@ -16,8 +16,9 @@
 /// the admin surface:
 ///   - `MerchantRole`         -> merchant-level identity + treasury settings
 ///                              (`update_config`, `update_display`,
-///                              `prune_invoice_receipts`, `prune_voucher_receipts`.
-///                              Payout is rotated through `update_config`)
+///                              `prune_invoice_receipts`, `prune_voucher_receipts`)
+///                              plus pre-expiry `cancel_invoice` / `cancel_voucher`.
+///                              Payout is rotated through `update_config`
 ///   - `CatalogManagerRole`   -> catalog CRUD (`add_listing`, `remove_listing`,
 ///                              `set_listing_status`, `add_listing_variant`,
 ///                              `remove_listing_variant`)
@@ -154,8 +155,9 @@ public struct MERCHANT has drop {}
 
 /// Holder gates merchant-level identity/treasury operations:
 /// `update_config` (which also rotates the payout address), `update_display`,
-/// and receipt pruning (`prune_invoice_receipts`, `prune_voucher_receipts`),
-/// which can irreversibly delete stored receipt detail.
+/// receipt pruning (`prune_invoice_receipts`, `prune_voucher_receipts`),
+/// which can irreversibly delete stored receipt detail, and pre-expiry
+/// `cancel_invoice` / `cancel_voucher`.
 public struct MerchantRole {}
 
 /// Holder gates catalog CRUD: `add_listing`, `remove_listing`,

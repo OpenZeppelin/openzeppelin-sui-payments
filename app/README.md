@@ -56,36 +56,47 @@ app/
    ```bash
    pnpm install
    ```
-2. **Publish the Move packages** and have IDs written to `.env.local`. The
-   script picks its publish strategy from `sui client active-env`:
-   ```bash
-   # Option A - testnet / mainnet (pas + OZ deps are already on chain).
-   sui client switch --env testnet
-   sui client faucet           # fund active address + sponsor address
-   pnpm bootstrap              # uses `sui client publish`; MVR resolves deps
+2. **Publish the Move packages** and have IDs written to `.env.<network>`
+   (mirrored to `.env.local` for the Next.js dev server). `bootstrap.ts`
+   requires `--deployer-key=<suiprivkey1...>` on every network; the
+   derived address must match `sui client active-address` because
+   `sui client publish` signs the initial publish tx with the CLI's
+   active key. Publish strategy is picked from the network arg:
 
-   # Option B - localnet (everything starts empty).
-   sui start --with-faucet --force-regenesis     # in another terminal
-   sui client switch --env local
+   ```bash
+   # Option A - testnet / mainnet (pas + openzeppelin_access are already
+   # on chain). Bootstrap resolves them via `mvr resolve` and runs
+   # `sui client publish` for payments + stablecoin-mock.
+   sui client switch --env testnet
    sui client faucet
-   pnpm bootstrap              # uses `sui client test-publish
-                               # --publish-unpublished-deps`: republishes pas
-                               # + ptb + OZ deps onto the fresh chain alongside
-                               # payments, recording addresses in
-                               # `contracts/*/Pubfile.local.toml` (gitignored).
+   pnpm bootstrap testnet \
+     --deployer-key=suiprivkey1... \
+     --enoki-api-key=enoki_private_...   # optional; enables Enoki sponsorship
+
+   # Option B - localnet (everything starts empty). Bootstrap runs
+   # `sui client test-publish --publish-unpublished-deps` to republish pas
+   # + openzeppelin_access onto the fresh chain alongside payments +
+   # stablecoin-mock, recording addresses in `Pubfile.local.toml`
+   # (gitignored). See the root README's Quickstart for the fresh
+   # `sui client new-address ed25519 deployer` + faucet flow.
+   sui start --with-faucet --force-regenesis     # in another terminal
+   sui client switch --env localnet
+   pnpm bootstrap localnet --deployer-key=suiprivkey1...
    ```
+
    In either mode, `bootstrap.ts`:
    - resolves (or freshly publishes) pas + its Namespace,
    - publishes `contracts/payments/` and `contracts/stablecoin-mock/`,
-   - runs one PTB to wire up the stablecoin policy, mint the loyalty bundle,
-     create + share a Merchant, and grant the deployer the three operational
-     roles (on localnet it also prepends `pas::namespace::setup` to link
-     the fresh Namespace to its UpgradeCap),
-   - patches `app/.env.local` with every `NEXT_PUBLIC_*` id.
+   - runs one PTB to wire up the stablecoin policy, mint the loyalty
+     bundle, create + share a Merchant, and grant the deployer all three
+     operational roles (on localnet it also prepends
+     `pas::namespace::setup` to link the fresh Namespace to its UpgradeCap),
+   - creates the payout PAS account,
+   - writes every `NEXT_PUBLIC_*` id to `.env.<network>` (mode 0o600,
+     temp+rename atomic) and mirrors it to `.env.local`.
 
    When re-bootstrapping localnet after `--force-regenesis`, the stale
-   `Pubfile.local.toml` files are cleared automatically - no manual cleanup
-   needed.
+   `Pubfile.local.toml` files are cleared automatically.
 3. **Add your Enoki *public* API key** to `.env.local`:
    ```
    NEXT_PUBLIC_ENOKI_API_KEY=enoki_public_...

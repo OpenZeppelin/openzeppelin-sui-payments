@@ -1,7 +1,11 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { LayoutGrid, Receipt, Settings, Wallet, QrCode } from "lucide-react";
 
 import { ConnectButton } from "@/components/connect-button";
+import { cn } from "@/lib/utils";
 
 const nav = [
   { href: "/merchant/catalogue", label: "Catalogue", icon: LayoutGrid },
@@ -12,6 +16,7 @@ const nav = [
 ];
 
 export default function MerchantLayout({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   return (
     <div className="grid min-h-screen grid-cols-[16rem_1fr]">
       <aside className="border-r border-[color:var(--color-border)] bg-[color:var(--color-card)] p-6">
@@ -19,16 +24,25 @@ export default function MerchantLayout({ children }: { children: React.ReactNode
           Merchant
         </Link>
         <nav className="mt-8 flex flex-col gap-1">
-          {nav.map(({ href, label, icon: Icon }) => (
-            <Link
-              key={href}
-              href={href}
-              className="flex items-center gap-3 rounded-md px-3 py-2 text-sm text-[color:var(--color-muted-foreground)] transition-colors hover:bg-[color:var(--color-muted)] hover:text-[color:var(--color-foreground)]"
-            >
-              <Icon className="h-4 w-4" />
-              {label}
-            </Link>
-          ))}
+          {nav.map(({ href, label, icon: Icon }) => {
+            const active = pathname === href || pathname.startsWith(`${href}/`);
+            return (
+              <Link
+                key={href}
+                href={href}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                  active
+                    ? "bg-[color:var(--color-muted)] text-[color:var(--color-foreground)]"
+                    : "text-[color:var(--color-muted-foreground)] hover:bg-[color:var(--color-muted)] hover:text-[color:var(--color-foreground)]",
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </Link>
+            );
+          })}
         </nav>
       </aside>
       <div className="flex min-h-screen flex-col">

@@ -1,7 +1,7 @@
 # Customer overview
 
 A page-by-page tour of the customer side of the dApp once you've completed
-the [Quickstart](../README.md#quickstart) and logged in
+the [Quickstart](../README.md#quickstart-localnet) and logged in
 (see [OVERVIEW.md](OVERVIEW.md) for the landing page and login options).
 Every page reads live from chain and submits PTBs through the connected
 wallet (or the Enoki-registered sign-in on testnet - see
@@ -100,7 +100,7 @@ The QR that the customer shows the merchant carries `{ voucher_id, preimage }`.
 It's a bearer credential - anyone with the image can redeem - so show it
 only at the counter and let it expire if unused.
 
-![Voucher QR dialog - Full-screen QR image, voucher id short-address, LOY-locked amount, items list, "Waiting for redemption…" caption](images/customer_redeem_qr.png)
+![Voucher QR dialog - Full-screen QR image, voucher id short-address, LOY-locked amount, items list, "Waiting for redemption..." caption](images/customer_redeem_qr.png)
 
 When the merchant scans + redeems, the dialog auto-flips to the "redeemed"
 view (polling `merchant.voucher_receipts[voucher_id]` at 1 s intervals). The

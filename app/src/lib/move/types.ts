@@ -187,7 +187,12 @@ export function parseInvoice(id: SuiObjectId, raw: any): Invoice {
     items: (f.items as any[]).map(parseItem),
     amount: BigInt(f.amount),
     loyalty: BigInt(f.loyalty),
-    orderRef: f.order_ref as number[],
+    // `order_ref` is a `vector<u8>` — same shape-versioning issue as
+    // `redeem_hash`: newer fullnodes return it as `number[]`, older ones
+    // (and some third-party RPCs) return the hex string. Route through
+    // `bytesFromVectorU8` so both are handled, then flatten back to
+    // `number[]` for the interface.
+    orderRef: Array.from(bytesFromVectorU8(f.order_ref)),
     expiresAtMs: BigInt(f.expires_at_ms),
   };
 }
@@ -249,7 +254,7 @@ export function parsePaymentReceipt(invoiceId: SuiObjectId, raw: any): PaymentRe
     items: (f.items as any[]).map(parseItem),
     amount: BigInt(f.amount),
     loyalty: BigInt(d.loyalty),
-    orderRef: d.order_ref as number[],
+    orderRef: Array.from(bytesFromVectorU8(d.order_ref)),
     timestampMs: BigInt(f.timestamp_ms),
   };
 }

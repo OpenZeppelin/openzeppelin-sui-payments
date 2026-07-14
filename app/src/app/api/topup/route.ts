@@ -65,6 +65,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       { status: 400 },
     );
   }
+  // Sui object ids are 32-byte hex (0x + 64 hex chars). Reject anything
+  // else up front so a malformed id doesn't get inserted into the PTB and
+  // fail cryptically deep in build.
+  if (!/^0x[0-9a-fA-F]{64}$/.test(body.recipientAccountId)) {
+    return NextResponse.json(
+      { error: "recipientAccountId must be a 32-byte hex id (0x + 64 hex chars)" },
+      { status: 400 },
+    );
+  }
   if (!STABLECOIN_PACKAGE_ID || !STABLECOIN_TYPE || !PACKAGE_ID) {
     return NextResponse.json(
       { error: "deployment env vars are missing — run `pnpm bootstrap`" },
@@ -80,6 +89,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   if (amount <= 0n) {
     return NextResponse.json({ error: "amount must be > 0" }, { status: 400 });
+  }
+  // u64 upper bound — `tx.pure.u64(amount)` throws synchronously above this,
+  // which would bypass the try/catch further down and surface as a raw 500.
+  const U64_MAX = (1n << 64n) - 1n;
+  if (amount > U64_MAX) {
+    return NextResponse.json({ error: "amount exceeds u64 max" }, { status: 400 });
   }
 
   const keypair = deployerKeypair();

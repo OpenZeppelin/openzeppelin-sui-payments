@@ -17,13 +17,13 @@ Two settlement flows, mirroring real-world POS. The `Merchant` shared object is 
 it stores open invoices, open vouchers, and settlement receipts in tables and owns both
 flows.
 
-- **Invoice → Pay** - merchant issues an invoice via `merchant::create_invoice` (cap-gated)
+- **Invoice -> Pay** - merchant issues an invoice via `merchant::create_invoice` (role-gated on `CashierRole`)
   carrying line items and the snapshotted loyalty reward; it's stored in the `Merchant` and
   surfaced by ID (off-chain QR). Customer scans, sends stablecoin via PAS through
   `merchant::pay`, earns LOYALTY balance, and a `Receipt` is recorded in the `Merchant`.
   For open-loop settlement with a plain (non-PAS) `Coin<C>`, `merchant::pay_with_coin`
   transfers the coin directly to the payout address; same loyalty + receipt outcome.
-- **Voucher → Redeem** - customer locks LOYALTY balance in a voucher via
+- **Voucher -> Redeem** - customer locks LOYALTY balance in a voucher via
   `merchant::create_voucher` (stored in the `Merchant`, surfaced by ID for the QR);
   merchant scans + `merchant::redeem`s, the balance burns, and a `Receipt` is recorded.
 
@@ -86,7 +86,7 @@ alongside the payments package with `--publish-unpublished-deps`.
 - **pnpm** and **Node 20+** - the app is a Next.js 15 project.
 - **Google OAuth client id** (only if you want the Enoki-registered
   Google login option - Slush works without it). Register at Google
-  Cloud Console → Web application, then paste it into Enoki's dashboard
+  Cloud Console -> Web application, then paste it into Enoki's dashboard
   and expose it as `NEXT_PUBLIC_GOOGLE_CLIENT_ID`.
 
 ## Quickstart (localnet)
@@ -114,7 +114,7 @@ sui client faucet
 # 5. Export the deployer private key. It's a bech32 `suiprivkey1...` string.
 #    You'll paste it into bootstrap below, AND - since the deployer holds
 #    all three merchant roles after bootstrap - you can import the same
-#    key into Slush (Slush → Import Wallet → Private Key) to sign as the
+#    key into Slush (Slush -> Import Wallet -> Private Key) to sign as the
 #    deployer in the browser at http://localhost:3000 and land straight on
 #    /merchant/catalogue.
 # sui keytool export --key-identity deployer

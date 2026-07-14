@@ -222,6 +222,10 @@ function RecentTransactions({ address }: { address: string }) {
       <CardContent>
         {receipts.isLoading && !receipts.data ? (
           <p className="text-sm text-[color:var(--color-muted-foreground)]">Loading…</p>
+        ) : receipts.isError ? (
+          <p className="text-sm text-[color:var(--color-destructive)]">
+            Could not load activity: {receipts.error?.message ?? "unknown error"}
+          </p>
         ) : top.length === 0 ? (
           <p className="text-sm text-[color:var(--color-muted-foreground)]">
             No activity yet. Pay an invoice or redeem a voucher to see it here.

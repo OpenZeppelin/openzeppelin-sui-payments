@@ -43,7 +43,7 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -241,6 +241,19 @@ function readEnvFile(key: string): string | undefined {
   return line.slice(prefix.length).trim();
 }
 
+/**
+ * Atomic + owner-only write of a secret-carrying file. `writeFileSync`
+ * alone is (a) not atomic (an interrupt mid-write can truncate) and
+ * (b) uses the default umask (typically 0644 = world-readable). Both
+ * matter for `.env.<network>` and `.env.local`, which hold
+ * `DEPLOYER_PRIVATE_KEY` + `ENOKI_PRIVATE_API_KEY`.
+ */
+function writeSecretFile(absPath: string, contents: string): void {
+  const tmp = `${absPath}.tmp`;
+  writeFileSync(tmp, contents, { encoding: "utf8", mode: 0o600 });
+  renameSync(tmp, absPath);
+}
+
 function patchEnv(updates: Record<string, string>) {
   let raw = "";
   try {
@@ -255,7 +268,7 @@ function patchEnv(updates: Record<string, string>) {
     if (idx >= 0) lines[idx] = next;
     else lines.push(next);
   }
-  writeFileSync(TARGET_ENV, lines.join("\n"), "utf8");
+  writeSecretFile(TARGET_ENV, lines.join("\n"));
 }
 
 function getActiveAddress(): string {
@@ -330,7 +343,10 @@ function applyNetworkFromArgv(): "localnet" | "testnet" | "mainnet" | null {
 
 function getActiveRpcUrl(envAlias: string): string {
   const out = execSync("sui client envs --json", { encoding: "utf8" });
-  const data = JSON.parse(out) as Array<{ alias: string; rpc: string }>[];
+  // Actual shape: `[Array<{alias, rpc, ...}>, "activeAlias"]` — a tuple, not
+  // a 2D array. Type it accurately so [0] is the env list and [1] is the
+  // active-alias string (unused here but part of the shape).
+  const data = JSON.parse(out) as [Array<{ alias: string; rpc: string }>, string];
   const envs = data[0];
   const match = envs.find((e) => e.alias === envAlias);
   if (!match) throw new Error(`could not resolve RPC for env "${envAlias}"`);
@@ -851,9 +867,11 @@ async function main() {
     ozAccessPkg = resolveMVR("@openzeppelin-move/access", envAlias);
 
     // pas on canonical networks should already have `Templates` initialized.
-    // We can't easily discover it from the publish tx (Templates is created by
-    // a separate `templates::setup` call, not by pas::init), so for now we
-    // expect it to be supplied via env. TODO: derive via derived_object math.
+    // We can't easily discover it from the publish tx (Templates is created
+    // by a separate `templates::setup` call, not by pas::init), so we
+    // require it to be supplied via env. Deriving it from a `derived_object`
+    // scheme would remove that requirement — leave that as follow-up work
+    // if it becomes an operational pain-point.
     templatesId =
       process.env.NEXT_PUBLIC_TEMPLATES_ID ?? readEnvFile("NEXT_PUBLIC_TEMPLATES_ID");
     if (!templatesId) {
@@ -1066,7 +1084,7 @@ async function main() {
   // picks it up. `.env.<network>` remains the source of truth for this
   // network; `pnpm use <network>` swaps which one gets mirrored.
   const perNetworkContents = readFileSync(TARGET_ENV, "utf8");
-  writeFileSync(LOCAL_ENV, perNetworkContents, "utf8");
+  writeSecretFile(LOCAL_ENV, perNetworkContents);
 
   console.log(`\n✓ Bootstrap complete.`);
   console.log(`  wrote:   ${TARGET_ENV}`);

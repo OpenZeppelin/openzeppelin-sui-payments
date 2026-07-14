@@ -26,14 +26,22 @@ import {
 // ---------------------------------------------------------------------------
 export const qk = {
   merchant: () => ["merchant"] as const,
-  listings: () => ["merchant", "listings"] as const,
+  // Independent root so `qk.merchant()` invalidations (config edits) don't
+  // re-trigger the expensive N+1 listings walk.
+  listings: () => ["listings"] as const,
   invoice: (id: string) => ["invoice", id] as const,
   voucher: (id: string) => ["voucher", id] as const,
   invoiceReceipt: (id: string) => ["invoiceReceipt", id] as const,
   voucherReceipt: (id: string) => ["voucherReceipt", id] as const,
   receipts: (address: string) => ["receipts", address] as const,
   balances: (accountId: string) => ["balances", accountId] as const,
-  events: (type: string) => ["events", type] as const,
+  // `limit` is part of the cache key so two callers with different limits
+  // don't share (and clobber) one cache entry.
+  events: (type: string, limit?: number) =>
+    (limit === undefined ? ["events", type] : ["events", type, limit]) as readonly unknown[],
+  myOpenVouchers: (customerAddress: string) => ["my-open-vouchers", customerAddress] as const,
+  storedReceipts: (invoiceReceiptsTableId: string, voucherReceiptsTableId: string) =>
+    ["stored-receipts", invoiceReceiptsTableId, voucherReceiptsTableId] as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -196,7 +204,7 @@ export function useMyOpenVouchers(customerAddress: string | null | undefined) {
   const merchantQuery = useMerchant();
   const vouchersTableId = merchantQuery.data?.vouchersTableId;
   return useQuery({
-    queryKey: ["my-open-vouchers", customerAddress ?? ""],
+    queryKey: qk.myOpenVouchers(customerAddress ?? ""),
     enabled: Boolean(customerAddress) && Boolean(vouchersTableId),
     queryFn: async (): Promise<Voucher[]> => {
       const out: Voucher[] = [];
@@ -240,7 +248,7 @@ export function useStoredReceipts(options: { pollMs?: number } = {}) {
   const inv = merchantQuery.data?.invoiceReceiptsTableId;
   const vou = merchantQuery.data?.voucherReceiptsTableId;
   return useQuery({
-    queryKey: ["stored-receipts", inv ?? "", vou ?? ""],
+    queryKey: qk.storedReceipts(inv ?? "", vou ?? ""),
     enabled: Boolean(inv) && Boolean(vou),
     refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
     queryFn: async (): Promise<{ invoice: string[]; voucher: string[] }> => {
@@ -415,27 +423,32 @@ export function useBalances(accountId: string | null | undefined, coinTypes: str
 // Events (for the merchant Transactions page)
 // ---------------------------------------------------------------------------
 
-const EVENT_TYPES = {
-  InvoicePaid: `${deployment.packageId}::events::InvoicePaid`,
-  InvoiceCanceled: `${deployment.packageId}::events::InvoiceCanceled`,
-  VoucherRedeemed: `${deployment.packageId}::events::VoucherRedeemed`,
-  VoucherCanceled: `${deployment.packageId}::events::VoucherCanceled`,
-  InvoiceCreated: `${deployment.packageId}::events::InvoiceCreated`,
-  VoucherCreated: `${deployment.packageId}::events::VoucherCreated`,
-} as const;
+// Event-type keys accepted by `useEvents`. The fully-qualified type string
+// is built inside the hook (see below) rather than at module load, so any
+// module importing `queries.ts` doesn't trigger `deployment.packageId`'s
+// throwing getter when `NEXT_PUBLIC_PACKAGE_ID` is unset.
+type EventName =
+  | "InvoicePaid"
+  | "InvoiceCanceled"
+  | "VoucherRedeemed"
+  | "VoucherCanceled"
+  | "InvoiceCreated"
+  | "VoucherCreated";
 
-export function useEvents<T extends keyof typeof EVENT_TYPES>(
+export function useEvents<T extends EventName>(
   name: T,
   options: { limit?: number; pollMs?: number } = {},
 ) {
   const client = useSuiClient();
+  const limit = options.limit ?? 50;
+  const eventType = `${deployment.packageId}::events::${name}`;
   return useQuery({
-    queryKey: qk.events(EVENT_TYPES[name]),
+    queryKey: qk.events(eventType, limit),
     refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
     queryFn: async () => {
       const r = await client.queryEvents({
-        query: { MoveEventType: EVENT_TYPES[name] },
-        limit: options.limit ?? 50,
+        query: { MoveEventType: eventType },
+        limit,
         order: "descending",
       });
       return r.data.map((e) => ({

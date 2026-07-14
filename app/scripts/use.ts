@@ -10,7 +10,7 @@
  * currently active — Next.js reads it on dev-server start.
  */
 
-import { copyFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -43,7 +43,13 @@ function main(): void {
     process.exit(1);
   }
 
-  copyFileSync(source, dest);
+  // Temp + rename with mode 0o600. `.env.local` holds DEPLOYER_PRIVATE_KEY
+  // and ENOKI_PRIVATE_API_KEY; the default `copyFileSync` inherits the
+  // source's mode (typically 0644 = world-readable) and is not atomic — an
+  // interrupt mid-copy would truncate the mirror.
+  const tmp = `${dest}.tmp`;
+  writeFileSync(tmp, readFileSync(source), { mode: 0o600 });
+  renameSync(tmp, dest);
   console.log(`✓ Copied ${source}\n     to ${dest}`);
   console.log(`\nRestart the dev server (\`pnpm dev\`) so the change takes effect.`);
 }

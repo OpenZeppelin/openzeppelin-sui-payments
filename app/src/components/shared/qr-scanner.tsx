@@ -82,6 +82,7 @@ export function QrScanner({ onResult, placeholder = "Paste ID" }: QrScannerProps
           value={pasted}
           onChange={(e) => setPasted(e.target.value)}
           placeholder={placeholder}
+          aria-label={placeholder}
           className="flex-1"
         />
         <Button type="submit" variant="secondary">

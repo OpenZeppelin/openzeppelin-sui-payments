@@ -1,7 +1,7 @@
 # Merchant overview
 
 A page-by-page tour of the merchant side of the dApp once you've completed
-the [Quickstart](../README.md#quickstart), logged in
+the [Quickstart](../README.md#quickstart-localnet), logged in
 (see [OVERVIEW.md](OVERVIEW.md) for the landing page and login options),
 and been granted `CashierRole` / `CatalogManagerRole` / `MerchantRole` on
 the `AccessControl<MERCHANT>` object - the deployer holds all three after
@@ -14,7 +14,7 @@ see [ARCHITECTURE.md § 4](ARCHITECTURE.md#4-access-control-roles-gate-the-admin
 
 ## /merchant/catalogue - Catalogue
 
-The counter. Every listing (`Espresso`, `Black coffee`, …) renders as a card
+The counter. Every listing (`Espresso`, `Black coffee`, ...) renders as a card
 with its variants (S / M / L, each carrying a USD price and an optional LOY
 price). The cashier picks variants into a cart, adds an optional order ref,
 and clicks **Create invoice** to mint an on-chain `Invoice` and open its QR
@@ -37,7 +37,7 @@ What you do here:
   `merchant.invoice_receipts[invoice_id]` at 1 s intervals to detect
   settlement.
 
-![Invoice QR dialog - Full-screen QR image, invoice id short-address, amount + LOY + items summary, expiry countdown, "Waiting for payment…" caption](images/merchant_payment_qr.png)
+![Invoice QR dialog - Full-screen QR image, invoice id short-address, amount + LOY + items summary, expiry countdown, "Waiting for payment..." caption](images/merchant_payment_qr.png)
 
 The three terminal states are:
 
@@ -123,8 +123,8 @@ What you do here:
   outstanding invoices settle against their snapshotted terms (see
   [payment.move: snapshot semantics](../contracts/payments/sources/payment.move)).
 - **Loyalty coefficient** is a decimal (`1.0` = 1 LOY per $1). Under the
-  hood it's stored as `coefficient × 1e9` and applied per invoice as
-  `(payment_units × coefficient) / (1e9 × 10^payment_decimals)`, capped at
+  hood it's stored as `coefficient x 1e9` and applied per invoice as
+  `(payment_units x coefficient) / (1e9 x 10^payment_decimals)`, capped at
   `max_loyalty_per_payment`.
 
 ## /merchant/balance - Balance

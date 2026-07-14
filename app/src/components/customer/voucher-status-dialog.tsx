@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, XCircle } from "lucide-react";
 
@@ -13,7 +13,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { qk, useListings, useVoucher, useVoucherReceipt } from "@/hooks/queries";
+import { qk, useVoucher, useVoucherReceipt } from "@/hooks/queries";
+import { useVariantLookup } from "@/hooks/use-variant-lookup";
 import { deployment } from "@/lib/deployment";
 import { shortAddr } from "@/lib/utils";
 
@@ -54,16 +55,7 @@ export function VoucherStatusDialog({
   const target = open ? voucherId : null;
   const voucher = useVoucher(target, { pollMs: POLL_MS });
   const receipt = useVoucherReceipt(target, { pollMs: POLL_MS });
-  // Look up each item's `variantId` in the current catalog to render a readable
-  // "Listing · Variant" label. Vouchers can outlive the catalog, so misses fall
-  // back to a short variant id — matches the merchant redeem view and history.
-  const { data: listings = [] } = useListings();
-  const variantLookup = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const l of listings)
-      for (const v of l.variants) m.set(v.id, `${l.name} · ${v.name}`);
-    return m;
-  }, [listings]);
+  const variantLookup = useVariantLookup();
 
   useEffect(() => {
     if (!receipt.data && !(voucher.isSuccess && voucher.data === null)) return;

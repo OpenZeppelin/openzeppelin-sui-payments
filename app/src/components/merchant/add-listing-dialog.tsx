@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Plus } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -75,6 +76,12 @@ export function AddListingDialog() {
           className="grid gap-4"
           onSubmit={(e) => {
             e.preventDefault();
+            // `type=number` allows "1.5" and "1e3" — both would throw an ugly
+            // Cannot-convert error from BigInt() downstream. Reject up front.
+            if (form.loyaltyPrice && !/^\d+$/.test(form.loyaltyPrice.trim())) {
+              toast.error("Loyalty price must be a positive integer.");
+              return;
+            }
             addListing.mutate(form, {
               onSuccess: () => {
                 setForm(empty);

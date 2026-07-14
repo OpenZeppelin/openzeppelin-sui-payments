@@ -55,11 +55,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   } catch (err) {
     if (err instanceof EnokiClientError) {
       const first = err.errors[0];
+      // Forward Enoki's status when it's a 4xx (bad signature, digest not
+      // found, etc.). Otherwise fall back to 500 for opaque upstream
+      // failures.
+      const status = err.status >= 400 && err.status < 500 ? err.status : 500;
       return NextResponse.json(
         {
           error: `enoki execute failed (${err.status} ${err.code}): ${first?.message ?? err.message}`,
         },
-        { status: 500 },
+        { status },
       );
     }
     return NextResponse.json(

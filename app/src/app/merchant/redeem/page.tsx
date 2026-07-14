@@ -15,9 +15,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { qk, useListings, useVoucher } from "@/hooks/queries";
+import { qk, useVoucher } from "@/hooks/queries";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
 import { useSuiClockMs } from "@/hooks/use-sui-clock";
+import { useVariantLookup } from "@/hooks/use-variant-lookup";
 import { buildRedeem } from "@/lib/move/redemption";
 import { deployment } from "@/lib/deployment";
 import { blake2b256, bytesEqual } from "@/lib/preimage";
@@ -34,15 +35,7 @@ export default function RedeemPage() {
   const [done, setDone] = useState<{ amount: bigint; customer: string } | null>(null);
   const voucher = useVoucher(scanned?.voucherId ?? null);
 
-  // Variant lookup for readable item labels. Vouchers outlive the catalog, so
-  // missing entries fall back to a short variant id.
-  const { data: listings = [] } = useListings();
-  const variantLookup = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const l of listings)
-      for (const v of l.variants) m.set(v.id, `${l.name} · ${v.name}`);
-    return m;
-  }, [listings]);
+  const variantLookup = useVariantLookup();
 
   const redeem = useSponsoredMutation<ScannedVoucher>(
     (tx, args) => {

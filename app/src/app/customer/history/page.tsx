@@ -52,6 +52,10 @@ export default function HistoryPage() {
         </p>
       ) : receipts.isLoading ? (
         <p className="text-sm text-[color:var(--color-muted-foreground)]">Loading…</p>
+      ) : receipts.isError ? (
+        <p className="text-sm text-[color:var(--color-destructive)]">
+          Could not load history: {receipts.error?.message ?? "unknown error"}
+        </p>
       ) : tab === "payments" ? (
         <PaymentList rows={receipts.data?.payment ?? []} listings={listings} />
       ) : (

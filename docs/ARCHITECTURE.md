@@ -106,15 +106,15 @@ reads `0x6` and polls every 5 s; every UI expiry check goes through it.
 
 The `useSponsoredMutation` hook picks a signing path per (network, sender):
 
-- **Localnet + non-deployer sender** → `/api/sponsor` (the deployer key
+- **Localnet + non-deployer sender** -> `/api/sponsor` (the deployer key
   pays gas). Customers and any extra cashier wallets granted `CashierRole`
   fall here - they get a fully-sponsored UX on localnet without holding
   SUI. Convenience only, never shipped to a live network.
-- **Testnet + Enoki-registered wallet** → two-phase Enoki: `/api/enoki-sponsor`
+- **Testnet + Enoki-registered wallet** -> two-phase Enoki: `/api/enoki-sponsor`
   (`createSponsoredTransaction`) then `/api/enoki-execute`
   (`executeSponsoredTransaction`). The Enoki service pays gas; user signs the
   tx data separately.
-- **Testnet + any other wallet, OR localnet + deployer sender** →
+- **Testnet + any other wallet, OR localnet + deployer sender** ->
   `useSignAndExecuteTransaction` from dapp-kit. The wallet pays gas itself.
   The deployer wallet is bootstrap-funded on localnet, so it always has SUI
   to spend on its own txs; self-sponsorship would collide with the wallet's
@@ -176,13 +176,13 @@ flowchart LR
 
   subgraph Entry[Entry points]
     direction TB
-    UICat["Merchant /catalogue · Create invoice"]:::ui
-    UIRedeem["Merchant /redeem · Scan + Redeem"]:::ui
-    UITx["Merchant /transactions · Cancel expired · Prune"]:::ui
-    UISettings["Merchant /settings · Update config"]:::ui
-    UIPay["Customer /pay · Scan + Pay invoice"]:::ui
-    UIRewards["Customer /rewards · Create voucher"]:::ui
-    UITopup["Customer /topup · Mock-USD faucet"]:::ui
+    UICat["Merchant /catalogue - Create invoice"]:::ui
+    UIRedeem["Merchant /redeem - Scan + Redeem"]:::ui
+    UITx["Merchant /transactions - Cancel expired - Prune"]:::ui
+    UISettings["Merchant /settings - Update config"]:::ui
+    UIPay["Customer /pay - Scan + Pay invoice"]:::ui
+    UIRewards["Customer /rewards - Create voucher"]:::ui
+    UITopup["Customer /topup - Mock-USD faucet"]:::ui
     APISponsor["/api/sponsor (localnet)"]:::api
     APIEnokiS["/api/enoki-sponsor (testnet)"]:::api
     APIEnokiE["/api/enoki-execute (testnet)"]:::api
@@ -285,7 +285,7 @@ flowchart LR
   Mstable_mock --- OStableNS
   Mstable_mock --- OTreasury
 
-  Entry -. "testnet · Enoki wallet" .-> APIEnokiS
+  Entry -. "testnet - Enoki wallet" .-> APIEnokiS
   APIEnokiS -.-> APIEnokiE
   Entry -. "localnet" .-> APISponsor
 ```
@@ -302,7 +302,7 @@ per-user index (an owned-object walk or an off-chain indexer). Storing them
 keyed by originating invoice/voucher id inside the Merchant collapses the
 model: the canonical record is the on-chain **event**, and the Merchant
 tables are the value store the event points into. History reconstruction is
-`events → filter by customer → resolve id via table` - one primitive with
+`events -> filter by customer -> resolve id via table` - one primitive with
 no divergent state.
 
 ### Why hashlock voucher instead of an owned Voucher object

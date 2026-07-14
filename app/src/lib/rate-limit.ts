@@ -64,6 +64,21 @@ interface Check {
  * `retryAfterMs` is the max of the failed buckets' retry-after values.
  */
 export function checkAndBumpAll(checks: Check[]): RateLimitResult {
+  // Fail-fast constraint: `maybeSweepAll` prunes timestamps older than
+  // `CLEANUP_INTERVAL_MS`, so a caller passing a longer window would
+  // silently lose still-live buckets. Enforce here rather than in the
+  // sweep itself so misuse surfaces at the call site, not five minutes
+  // later.
+  for (const { windowMs, key } of checks) {
+    if (windowMs > CLEANUP_INTERVAL_MS) {
+      throw new Error(
+        `checkAndBumpAll: windowMs=${windowMs} on key="${key}" exceeds ` +
+          `CLEANUP_INTERVAL_MS=${CLEANUP_INTERVAL_MS} — the map-wide sweep ` +
+          `would prune still-live timestamps. Raise CLEANUP_INTERVAL_MS or ` +
+          `pass a shorter window.`,
+      );
+    }
+  }
   const now = Date.now();
   // Piggy-back the map-wide sweep on request traffic — Next.js API routes
   // can't hold background timers, so this is the only cleanup path that
@@ -116,14 +131,18 @@ const mutexes = new Map<string, Promise<unknown>>();
 export async function withMutex<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = mutexes.get(key) ?? Promise.resolve();
   const next = prev.then(() => fn(), () => fn());
-  mutexes.set(
-    key,
-    // Whichever settle the chain reaches, clear the slot only if we're
-    // still the tail of the chain — a later `withMutex` call may have
-    // extended it in the meantime.
-    next.finally(() => {
-      if (mutexes.get(key) === next) mutexes.delete(key);
-    }),
-  );
+  // Two subtle requirements for the cleanup slot:
+  //   1. Identity: `chain` must be the SAME reference stored in the map
+  //      AND compared against inside the callback — otherwise the check
+  //      can never succeed and the entry leaks.
+  //   2. Rejection hygiene: if `next` rejects, using `.finally()` would
+  //      propagate the rejection through `chain`, which nobody awaits →
+  //      unhandled-rejection warning. `.then(cleanup, cleanup)` swallows
+  //      both outcomes so `chain` always resolves cleanly.
+  const cleanup = () => {
+    if (mutexes.get(key) === chain) mutexes.delete(key);
+  };
+  const chain: Promise<void> = next.then(cleanup, cleanup);
+  mutexes.set(key, chain);
   return next;
 }

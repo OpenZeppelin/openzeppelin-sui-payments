@@ -79,7 +79,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       { status: 400 },
     );
   }
-  if (body.sender === deployerAddress()) {
+  if (body.sender.toLowerCase() === deployerAddress().toLowerCase()) {
     return NextResponse.json(
       {
         error:

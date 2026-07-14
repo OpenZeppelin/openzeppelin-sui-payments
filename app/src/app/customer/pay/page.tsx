@@ -70,12 +70,18 @@ export default function CustomerPayPage() {
     if (!invoice.data || !invoiceId || !customerPas.data || !merchantPas.data) return;
     const amount = invoice.data.amount;
     const loyalty = invoice.data.loyalty;
-    await pay.mutateAsync({
-      invoiceId,
-      amount,
-      customerAccountId: customerPas.data,
-      merchantAccountId: merchantPas.data,
-    });
+    // See merchant/redeem: silence unhandled-rejection; onError toast is
+    // already emitted by `useSponsoredMutation`.
+    try {
+      await pay.mutateAsync({
+        invoiceId,
+        amount,
+        customerAccountId: customerPas.data,
+        merchantAccountId: merchantPas.data,
+      });
+    } catch {
+      return;
+    }
     toast.success(
       `Paid ${formatAmount(amount, STABLECOIN_DECIMALS)} USD · earned ${loyalty.toString()} LOY`,
     );

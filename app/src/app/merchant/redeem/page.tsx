@@ -58,7 +58,15 @@ export default function RedeemPage() {
 
   async function handleRedeem() {
     if (!voucher.data || !scanned) return;
-    await redeem.mutateAsync(scanned);
+    // `mutateAsync` re-throws on failure so we can gate the post-success
+    // state updates below. Local try/catch silences the unhandled-rejection
+    // that would otherwise reach the dev overlay — the user-facing toast is
+    // already emitted by `useSponsoredMutation`'s onError handler.
+    try {
+      await redeem.mutateAsync(scanned);
+    } catch {
+      return;
+    }
     setDone({ amount: voucher.data.amount, customer: voucher.data.customer });
     setScanned(null);
   }

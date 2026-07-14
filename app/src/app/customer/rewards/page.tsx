@@ -143,11 +143,14 @@ export default function RewardsPage() {
         quantities: lines.map((l) => BigInt(l.quantity)),
         redeemHash,
       });
-    } catch (err) {
+    } catch {
       // Tx failed — no on-chain voucher exists, drop the orphan preimage so
       // localStorage doesn't accumulate entries for never-created vouchers.
+      // Return rather than rethrow: `handleCreate` is invoked as an onClick,
+      // and re-throwing would surface as an unhandled rejection in the dev
+      // overlay. `useSponsoredMutation`'s onError already toasts the user.
       clearPreimage(redeemHash);
-      throw err;
+      return;
     }
 
     // Tx succeeded — clear cart unconditionally so the user can't

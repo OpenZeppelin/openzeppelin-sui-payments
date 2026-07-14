@@ -17,8 +17,8 @@ export interface RateLimitResult {
  *     so a horizontally-scaled deployment (Vercel serverless, multi-node
  *     Kubernetes) will have N independent buckets and the effective rate
  *     is `max × N`. For public deployments swap this for Redis / Vercel KV
- *     / Cloudflare KV / Upstash — the `rateLimit` signature is stable, so
- *     the swap is a body change to this file.
+ *     / Cloudflare KV / Upstash — the `checkAndBumpAll` signature is
+ *     stable, so the swap is a body change to this file.
  *
  *   - **Attacker can spoof the bucket key.** Callers should pair the
  *     natural identity key (e.g. `sender` address) with the request's IP
@@ -28,6 +28,24 @@ export interface RateLimitResult {
 const buckets = new Map<string, number[]>();
 let lastCleanupAtMs = 0;
 const CLEANUP_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * Opportunistic map-wide sweep — called from every `checkAndBumpAll` so
+ * one-off buckets (IPs / recipients hit exactly once) don't accumulate
+ * forever. Uses `CLEANUP_INTERVAL_MS` as the max staleness threshold, so
+ * callers must not pass `windowMs > CLEANUP_INTERVAL_MS` or their still-
+ * live timestamps could get pruned. All current callers use 60s windows;
+ * cap is 5 min.
+ */
+function maybeSweepAll(now: number): void {
+  if (now - lastCleanupAtMs <= CLEANUP_INTERVAL_MS) return;
+  for (const [k, times] of buckets) {
+    const fresh = times.filter((t) => now - t < CLEANUP_INTERVAL_MS);
+    if (fresh.length === 0) buckets.delete(k);
+    else buckets.set(k, fresh);
+  }
+  lastCleanupAtMs = now;
+}
 
 interface Check {
   key: string;
@@ -47,6 +65,12 @@ interface Check {
  */
 export function checkAndBumpAll(checks: Check[]): RateLimitResult {
   const now = Date.now();
+  // Piggy-back the map-wide sweep on request traffic — Next.js API routes
+  // can't hold background timers, so this is the only cleanup path that
+  // actually runs. Bounds memory across long-lived processes for keys
+  // that are hit only once (e.g. a one-off IP).
+  maybeSweepAll(now);
+
   let worstRetry = 0;
   for (const { key, windowMs, max } of checks) {
     const history = (buckets.get(key) ?? []).filter((t) => now - t < windowMs);
@@ -61,36 +85,6 @@ export function checkAndBumpAll(checks: Check[]): RateLimitResult {
     history.push(now);
     buckets.set(key, history);
   }
-  return { ok: true };
-}
-
-/**
- * Sliding-window rate limit. Returns `ok: false` when the bucket for `key`
- * has hit `max` requests within the last `windowMs`; otherwise records the
- * current request and returns `ok: true`.
- */
-export function rateLimit(key: string, windowMs: number, max: number): RateLimitResult {
-  const now = Date.now();
-
-  // Opportunistic sweep — Next.js API routes can't hold background timers,
-  // so we piggy-back cleanup on the first request every `CLEANUP_INTERVAL_MS`
-  // to bound memory across long-lived processes.
-  if (now - lastCleanupAtMs > CLEANUP_INTERVAL_MS) {
-    for (const [k, times] of buckets) {
-      const fresh = times.filter((t) => now - t < windowMs);
-      if (fresh.length === 0) buckets.delete(k);
-      else buckets.set(k, fresh);
-    }
-    lastCleanupAtMs = now;
-  }
-
-  const history = (buckets.get(key) ?? []).filter((t) => now - t < windowMs);
-  if (history.length >= max) {
-    const retryAfterMs = windowMs - (now - history[0]);
-    return { ok: false, retryAfterMs };
-  }
-  history.push(now);
-  buckets.set(key, history);
   return { ok: true };
 }
 
@@ -112,7 +106,7 @@ export function clientIp(req: Request): string {
 /**
  * Serialize concurrent async work by key. Two callers with the same key
  * run sequentially; different keys run in parallel. Same
- * horizontal-scaling caveat as `rateLimit` — a Vercel serverless
+ * horizontal-scaling caveat as `checkAndBumpAll` — a Vercel serverless
  * deployment gets one mutex per worker, so cross-worker races are still
  * possible. Sufficient for the local gas-station race in `/api/sponsor`
  * (two concurrent client requests picking the same deployer gas coin).

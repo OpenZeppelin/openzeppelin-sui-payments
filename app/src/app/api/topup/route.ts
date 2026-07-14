@@ -50,13 +50,18 @@ type TopupResponseBody = {
  * PAS Account. Backed by `stablecoin_mock::faucet`, which requires the holder
  * of `TreasuryCap<STABLECOIN_MOCK>` — owned by the deployer after bootstrap.
  *
- * Dev / testnet only. Since this endpoint has no rate limit and no auth
- * beyond the deployer key sitting in `.env.local`, it's an unauthenticated
- * mint endpoint. That's fine for localnet + a mock-stablecoin testnet demo
- * (fake asset, deliberate faucet UX), but a real mainnet deployment must NOT
- * ship this route — the template pairs with a real stablecoin there and the
- * deployer wouldn't hold that TreasuryCap anyway, but the guard is
- * defense-in-depth.
+ * Dev / testnet only. Unauthenticated (no caller-identity binding), but
+ * gated in three layers:
+ *   1. Kill switch on mainnet (HTTP 410) — a real deployment pairs with a
+ *      production stablecoin whose TreasuryCap the deployer doesn't hold,
+ *      so the route couldn't work there anyway; the guard is
+ *      defense-in-depth.
+ *   2. Input validation: recipientAccountId must be a 32-byte hex id;
+ *      amount must be > 0, <= u64_max, and <= `TOPUP_MAX_AMOUNT`
+ *      (default 1M mock-USD in 6-decimal base units).
+ *   3. Two-bucket sliding-window rate limit (per-recipient + per-IP) via
+ *      `checkAndBumpAll`. Rotating either dimension still trips the
+ *      other's cap. Env-tunable — see `.env.example` for the knobs.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   // Kill switch: refuse to serve on mainnet.

@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -30,23 +29,6 @@ import { STABLECOIN_DECIMALS, formatAmount, formatItems, shortAddr } from "@/lib
 const PRUNE_BATCH_SIZE = 50;
 /** Refresh cadence for events + receipt counts while this page is open. */
 const POLL_MS = 3_000;
-/** Tick cadence for re-evaluating "Expired" badges from the wall clock. */
-const CLOCK_TICK_MS = 5_000;
-
-/**
- * Returns a value that changes every `intervalMs` so any component using it
- * re-renders on a clock-driven cadence. Used to flip "Open" rows to "Expired"
- * the moment `expiresAtMs` passes — pure time-based transitions don't fire
- * events, so polling alone can't catch them.
- */
-function useClockTick(intervalMs: number) {
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), intervalMs);
-    return () => clearInterval(t);
-  }, [intervalMs]);
-  return tick;
-}
 
 type EventName =
   | "InvoiceCreated"
@@ -173,14 +155,22 @@ export default function TransactionsPage() {
       ) : (
         <Card>
           <CardHeader>
+            {/* KPIs sum the last 100 InvoicePaid / VoucherRedeemed events per
+                query (see `limit: 100` above). Labels call this out explicitly
+                so users don't read them as absolute-lifetime totals — once
+                deployment volume exceeds the window, older events silently
+                fall outside. Pair with a proper indexer for real-time totals. */}
             <div className="grid grid-cols-2 gap-6 md:grid-cols-4">
-              <Stat label="Revenue" value={`${formatAmount(revenue, STABLECOIN_DECIMALS)} USD`} />
               <Stat
-                label="Avg. order"
+                label="Revenue (recent)"
+                value={`${formatAmount(revenue, STABLECOIN_DECIMALS)} USD`}
+              />
+              <Stat
+                label="Avg. order (recent)"
                 value={payments > 0 ? `${formatAmount(avgOrder, STABLECOIN_DECIMALS)} USD` : "—"}
               />
-              <Stat label="Payments" value={payments.toString()} />
-              <Stat label="Redemptions" value={redemptions.toString()} />
+              <Stat label="Payments (last 100)" value={payments.toString()} />
+              <Stat label="Redemptions (last 100)" value={redemptions.toString()} />
             </div>
           </CardHeader>
           <CardContent>
@@ -251,14 +241,12 @@ function OpenInvoiceRow({
   timestampMs: bigint;
   terminated: boolean;
 }) {
-  const queryClient = useQueryClient();
   // Skip the network read when we already know the invoice is gone.
   const invoice = useInvoice(terminated ? null : invoiceId);
   const { data: listings = [] } = useListings();
-  // Re-render on the clock tick so the "Expired" badge flips on time even
   // Compare against on-chain Clock; wallclock can drift on localnet (see
   // `useSuiClockMs`). Polling inside that hook also re-renders us when the
-  // TTL elapses, so no separate `useClockTick` needed here.
+  // TTL elapses, so the "Expired" badge flips on time.
   const chainNow = useSuiClockMs().data;
   const expired = Boolean(invoice.data && chainNow && invoice.data.expiresAtMs <= chainNow);
 
@@ -345,7 +333,6 @@ function OpenVoucherRow({
   timestampMs: bigint;
   terminated: boolean;
 }) {
-  const queryClient = useQueryClient();
   const voucher = useVoucher(terminated ? null : voucherId);
   const { data: listings = [] } = useListings();
 
@@ -513,7 +500,6 @@ function FeedRowView({ row, itemsLabel }: { row: FeedRow; itemsLabel?: string | 
  */
 function PruneReceiptsButton() {
   const stored = useStoredReceipts({ pollMs: POLL_MS });
-  const queryClient = useQueryClient();
 
   const prune = useSponsoredMutation<{ invoiceIds: string[]; voucherIds: string[] }>(
     (tx, args) => {

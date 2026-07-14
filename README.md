@@ -11,25 +11,25 @@ access control from [openzeppelin/contracts-sui](https://github.com/OpenZeppelin
 
 A merchant deploys this template to accept stablecoin payments, automatically mint a
 soulbound loyalty currency (`LOYALTY`) on each settlement, and let customers redeem that
-loyalty for goods later — all on-chain, with PAS handling the balance/policy layer.
+loyalty for goods later - all on-chain, with PAS handling the balance/policy layer.
 
 Two settlement flows, mirroring real-world POS. The `Merchant` shared object is the hub:
 it stores open invoices, open vouchers, and settlement receipts in tables and owns both
 flows.
 
-- **Invoice → Pay** — merchant issues an invoice via `merchant::create_invoice` (cap-gated)
+- **Invoice → Pay** - merchant issues an invoice via `merchant::create_invoice` (cap-gated)
   carrying line items and the snapshotted loyalty reward; it's stored in the `Merchant` and
   surfaced by ID (off-chain QR). Customer scans, sends stablecoin via PAS through
   `merchant::pay`, earns LOYALTY balance, and a `Receipt` is recorded in the `Merchant`.
   For open-loop settlement with a plain (non-PAS) `Coin<C>`, `merchant::pay_with_coin`
   transfers the coin directly to the payout address; same loyalty + receipt outcome.
-- **Voucher → Redeem** — customer locks LOYALTY balance in a voucher via
+- **Voucher → Redeem** - customer locks LOYALTY balance in a voucher via
   `merchant::create_voucher` (stored in the `Merchant`, surfaced by ID for the QR);
   merchant scans + `merchant::redeem`s, the balance burns, and a `Receipt` is recorded.
 
 Both invoices and vouchers carry the same `Item` type (variant_id + quantity + snapshot
 unit_price), so the on-chain accounting is symmetric. Receipts use a generic `Receipt<T>`
-with a flow-specific payload — `Receipt<Payment>` and `Receipt<Redemption>` — stored in the
+with a flow-specific payload - `Receipt<Payment>` and `Receipt<Redemption>` - stored in the
 `Merchant` in separate `invoice_receipts` / `voucher_receipts` tables keyed by the settling
 invoice/voucher ID; per-customer history is served off-chain from the `InvoicePaid` /
 `VoucherRedeemed` event stream.
@@ -37,55 +37,55 @@ invoice/voucher ID; per-customer history is served off-chain from the `InvoicePa
 Access control uses a single `AccessControl<MERCHANT>` registry with three operational
 roles:
 
-- **`MerchantRole`** — payout address, mint config, display name
-- **`CatalogManagerRole`** — listings + variants CRUD + active toggle
-- **`CashierRole`** — invoice issuance + voucher redemption
+- **`MerchantRole`** - payout address, mint config, display name
+- **`CatalogManagerRole`** - listings + variants CRUD + active toggle
+- **`CashierRole`** - invoice issuance + voucher redemption
 
 The deployer is the root holder and grants operational roles separately, so
 cold-storage admin keys stay out of daily POS operations.
 
-![OpenZeppelin Sui Payments — merchant catalogue: cart summary at top, per-listing cards (Espresso, Black coffee, Matcha, Chai latte) with per-variant Add buttons, order-ref field, and Create invoice CTA that mints an on-chain `Invoice` under `CashierRole`](docs/images/merchant_catalogue.png)
+![OpenZeppelin Sui Payments - merchant catalogue: cart summary at top, per-listing cards (Espresso, Black coffee, Matcha, Chai latte) with per-variant Add buttons, order-ref field, and Create invoice CTA that mints an on-chain `Invoice` under `CashierRole`](docs/images/merchant_catalogue.png)
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Smart-contract design: PAS
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Smart-contract design: PAS
   custody, dual settlement flows on one `Merchant`, hashlock voucher model,
   access-control roles, on-chain-Clock expiry, and the three-way sponsored-
-  tx branch — plus the PTB-flow Mermaid diagram mapping every UI action to
+  tx branch - plus the PTB-flow Mermaid diagram mapping every UI action to
   its on-chain Move call.
-- [docs/OVERVIEW.md](docs/OVERVIEW.md) — Landing page, role-based auto-
+- [docs/OVERVIEW.md](docs/OVERVIEW.md) - Landing page, role-based auto-
   routing, and the Google / Slush login options.
-- [docs/OVERVIEW_CUSTOMER.md](docs/OVERVIEW_CUSTOMER.md) — Customer-side
+- [docs/OVERVIEW_CUSTOMER.md](docs/OVERVIEW_CUSTOMER.md) - Customer-side
   pages: dashboard, top up, scan to pay, rewards, history.
-- [docs/OVERVIEW_MERCHANT.md](docs/OVERVIEW_MERCHANT.md) — Merchant-side
+- [docs/OVERVIEW_MERCHANT.md](docs/OVERVIEW_MERCHANT.md) - Merchant-side
   pages: catalogue + invoicing, redeem, transactions, settings, balance.
 
 ## Repository Layout
 
 ```text
 contracts/
-├── payments/         # The template (8 modules + 5 test files)
+├── payments/         # The template (8 modules + 5 test suites + 2 test helpers)
 └── stablecoin-mock/  # Testnet/local-only mock PAS stablecoin (for end-to-end tests)
-app/                  # Next.js dApp — reads deployment ids from `.env.local`
+app/                  # Next.js dApp - reads deployment ids from `.env.local`
 ├── src/              # Pages, hooks, PTB builders, API routes
 └── scripts/          # bootstrap.ts (publish + wire), seed.ts (catalog), use.ts (env swap)
 ```
 
-Both Move packages resolve `@pas/pas` and `@openzeppelin-move/*` via MVR — no
+Both Move packages resolve `@pas/pas` and `@openzeppelin-move/*` via MVR - no
 vendored deps. On testnet/mainnet the CLI resolves them to already-published
 canonical addresses; on localnet the tooling test-publishes the deps
 alongside the payments package with `--publish-unpublished-deps`.
 
 ## Prerequisites
 
-- **Sui CLI ≥ 1.55** (recent versions bundle `sui start` for the local
-  network). Older CLIs use `sui-test-validator`, which also works but has
-  a different flag set.
-- **[MVR CLI](https://docs.mvr.app)** — `mvr resolve` is used to find
+- **Sui CLI ≥ 1.74.1** (matches CI). The contracts use `sui::coin_registry`,
+  which was added in 1.74; older CLIs won't build. Recent versions bundle
+  `sui start` for the local network.
+- **[MVR CLI](https://docs.mvr.app)** - `mvr resolve` is used to find
   `@pas/pas` and OpenZeppelin Move packages on testnet/mainnet.
-- **pnpm** and **Node 20+** — the app is a Next.js 15 project.
+- **pnpm** and **Node 20+** - the app is a Next.js 15 project.
 - **Google OAuth client id** (only if you want the Enoki-registered
-  Google login option — Slush works without it). Register at Google
+  Google login option - Slush works without it). Register at Google
   Cloud Console → Web application, then paste it into Enoki's dashboard
   and expose it as `NEXT_PUBLIC_GOOGLE_CLIENT_ID`.
 
@@ -112,8 +112,8 @@ sui client switch --address deployer
 sui client faucet
 
 # 5. Export the deployer private key. It's a bech32 `suiprivkey1...` string.
-#    You'll paste it into bootstrap below, AND — since the deployer holds
-#    all three merchant roles after bootstrap — you can import the same
+#    You'll paste it into bootstrap below, AND - since the deployer holds
+#    all three merchant roles after bootstrap - you can import the same
 #    key into Slush (Slush → Import Wallet → Private Key) to sign as the
 #    deployer in the browser at http://localhost:3000 and land straight on
 #    /merchant/catalogue.
@@ -127,7 +127,7 @@ sui client faucet
 #    the Next.js dev server).
 pnpm bootstrap localnet --deployer-key="<paste the suiprivkey1... from step 5>"
 
-# 7. Seed the catalog. Idempotent by refusal — aborts if the catalog
+# 7. Seed the catalog. Idempotent by refusal - aborts if the catalog
 #    already has entries; delete them from the /merchant/catalogue UI or
 #    re-run against a fresh chain to re-seed.
 pnpm seed
@@ -143,7 +143,7 @@ In the browser:
   `/merchant/catalogue`. Log out and connect a fresh wallet to see the
   `/customer` side.
 - On localnet, Google-via-Enoki won't work (Enoki's prover targets Sui
-  testnet's max-epoch window). Use Slush or another extension wallet —
+  testnet's max-epoch window). Use Slush or another extension wallet -
   the localnet gas station sponsors non-deployer txs so the connected
   wallet doesn't need SUI.
 
@@ -160,7 +160,7 @@ pnpm bootstrap testnet \
 ```
 
 `--deployer-key` and `--enoki-api-key` are only persisted to
-`.env.testnet` when supplied — the default is "no server-side secrets on
+`.env.testnet` when supplied - the default is "no server-side secrets on
 shared chains." Register the app in the [Enoki dashboard](https://portal.enoki.mystenlabs.com)
 first and set its `allowedMoveCallTargets` to the payments-package move
 calls the app issues.
@@ -179,28 +179,28 @@ Restart `pnpm dev` afterward so Next.js picks up the new env.
 
 ## Troubleshooting
 
-- **`sui client has no env alias matching localnet`** — bootstrap couldn't
+- **`sui client has no env alias matching localnet`** - bootstrap couldn't
   find a Sui CLI env for the target network. Add one:
   `sui client new-env --alias localnet --rpc http://127.0.0.1:9000`.
-- **`Insufficient gas` / `no gas coin`** during bootstrap — the active
+- **`Insufficient gas` / `no gas coin`** during bootstrap - the active
   address is unfunded. Run `sui client faucet` (localnet unlimited;
   testnet subject to rate limit).
-- **Fresh voucher / invoice shows as expired in the UI** — the wallclock
+- **Fresh voucher / invoice shows as expired in the UI** - the wallclock
   and on-chain `Clock` at `0x6` have drifted. Localnet clock advances
   only on checkpoints and can lag by minutes if the node was paused;
   the UI already reads the on-chain clock, so a hard refresh + a few
   seconds of chain activity fixes it. See
   [docs/ARCHITECTURE.md § 5](docs/ARCHITECTURE.md#5-time-comes-from-the-on-chain-clock-not-the-wallclock).
-- **`Unexpected status code: 404` on testnet** — Mysten's public
+- **`Unexpected status code: 404` on testnet** - Mysten's public
   `fullnode.testnet.sui.io` is down or degraded. Override the RPC
   without re-bootstrapping:
   `NEXT_PUBLIC_SUI_RPC_URL=https://sui-testnet-rpc.publicnode.com` in
   `.env.local`, restart `pnpm dev`. Suiscan and Blockvision also
   publish testnet RPCs.
-- **Enoki `502 unknown_error`** — Enoki's execution backend is
+- **Enoki `502 unknown_error`** - Enoki's execution backend is
   intermittently unavailable. Correlates with Mysten's testnet fullnode
   outages. Slush signs its own txs and works when Enoki doesn't.
-- **`SPONSOR_PRIVATE_KEY` still in an old `.env.local`** — leftover from
+- **`SPONSOR_PRIVATE_KEY` still in an old `.env.local`** - leftover from
   a pre-refactor bootstrap. Inert now; the app doesn't read it. Delete
   the line to tidy up.
 

@@ -85,55 +85,66 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const keypair = deployerKeypair();
   const client = new SuiClient({ url: networkConfig[NETWORK].url });
 
-  // Find the deployer-owned TreasuryCap<STABLECOIN_MOCK>. Iterate paginated owned
-  // objects so we don't depend on it being on the first page.
-  const wantType = `0x2::coin::TreasuryCap<${STABLECOIN_TYPE}>`;
-  let treasuryCapId: string | null = null;
-  let cursor: string | null = null;
-  do {
-    const page = await client.getOwnedObjects({
-      owner: deployerAddress(),
-      options: { showType: true },
-      cursor: cursor ?? undefined,
-    });
-    const match = page.data.find((o) => o.data?.type === wantType);
-    if (match?.data?.objectId) {
-      treasuryCapId = match.data.objectId;
-      break;
+  // Wrap the RPC-heavy critical section so a bad recipientAccountId or a
+  // transient RPC hiccup returns the same `{ error }` envelope as the
+  // sibling /api/sponsor and /api/enoki-* routes, instead of surfacing as a
+  // raw framework 500.
+  try {
+    // Find the deployer-owned TreasuryCap<STABLECOIN_MOCK>. Iterate paginated owned
+    // objects so we don't depend on it being on the first page.
+    const wantType = `0x2::coin::TreasuryCap<${STABLECOIN_TYPE}>`;
+    let treasuryCapId: string | null = null;
+    let cursor: string | null = null;
+    do {
+      const page = await client.getOwnedObjects({
+        owner: deployerAddress(),
+        options: { showType: true },
+        cursor: cursor ?? undefined,
+      });
+      const match = page.data.find((o) => o.data?.type === wantType);
+      if (match?.data?.objectId) {
+        treasuryCapId = match.data.objectId;
+        break;
+      }
+      cursor = page.hasNextPage ? (page.nextCursor ?? null) : null;
+    } while (cursor);
+    if (!treasuryCapId) {
+      return NextResponse.json(
+        { error: `deployer ${deployerAddress()} does not own a ${wantType}` },
+        { status: 500 },
+      );
     }
-    cursor = page.hasNextPage ? (page.nextCursor ?? null) : null;
-  } while (cursor);
-  if (!treasuryCapId) {
+
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${STABLECOIN_PACKAGE_ID}::stablecoin_mock::faucet`,
+      arguments: [
+        tx.object(treasuryCapId),
+        tx.object(body.recipientAccountId),
+        tx.pure.u64(amount),
+      ],
+    });
+    tx.setGasBudget(100_000_000n);
+
+    const result = await client.signAndExecuteTransaction({
+      transaction: tx,
+      signer: keypair,
+      options: { showEffects: true },
+    });
+    if (result.effects?.status?.status !== "success") {
+      return NextResponse.json(
+        { error: `faucet tx failed: ${JSON.stringify(result.effects)}` },
+        { status: 500 },
+      );
+    }
+    await client.waitForTransaction({ digest: result.digest });
+
+    const response: TopupResponseBody = { digest: result.digest, amount: amount.toString() };
+    return NextResponse.json(response);
+  } catch (err) {
     return NextResponse.json(
-      { error: `deployer ${deployerAddress()} does not own a ${wantType}` },
+      { error: `topup failed: ${err instanceof Error ? err.message : String(err)}` },
       { status: 500 },
     );
   }
-
-  const tx = new Transaction();
-  tx.moveCall({
-    target: `${STABLECOIN_PACKAGE_ID}::stablecoin_mock::faucet`,
-    arguments: [
-      tx.object(treasuryCapId),
-      tx.object(body.recipientAccountId),
-      tx.pure.u64(amount),
-    ],
-  });
-  tx.setGasBudget(100_000_000n);
-
-  const result = await client.signAndExecuteTransaction({
-    transaction: tx,
-    signer: keypair,
-    options: { showEffects: true },
-  });
-  if (result.effects?.status?.status !== "success") {
-    return NextResponse.json(
-      { error: `faucet tx failed: ${JSON.stringify(result.effects)}` },
-      { status: 500 },
-    );
-  }
-  await client.waitForTransaction({ digest: result.digest });
-
-  const response: TopupResponseBody = { digest: result.digest, amount: amount.toString() };
-  return NextResponse.json(response);
 }

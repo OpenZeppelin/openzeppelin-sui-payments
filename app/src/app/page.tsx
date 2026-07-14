@@ -31,7 +31,10 @@ export default function LandingPage() {
     router.replace(roleQuery.data ? "/merchant/catalogue" : "/customer");
   }, [address, roleQuery.data, roleQuery.isLoading, roleQuery.isError, router]);
 
-  const routing = Boolean(address);
+  // Show the "routing…" status box only while the role check is in-flight or
+  // has succeeded (the effect above then handles the redirect). On error we
+  // fall through to the manual cards so the user always has a way forward.
+  const showRoutingStatus = Boolean(address) && !roleQuery.isError;
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-12 px-6 py-12">
@@ -49,13 +52,11 @@ export default function LandingPage() {
         <ConnectButton />
       </header>
 
-      {routing ? (
+      {showRoutingStatus ? (
         <div className="rounded-lg border border-dashed border-[color:var(--color-border)] p-12 text-center text-sm text-[color:var(--color-muted-foreground)]">
           {roleQuery.isLoading
             ? "Checking your access…"
-            : roleQuery.isError
-              ? "Couldn't check role — showing manual entry below."
-              : `Redirecting to ${roleQuery.data ? "the merchant dashboard" : "your customer home"}…`}
+            : `Redirecting to ${roleQuery.data ? "the merchant dashboard" : "your customer home"}…`}
         </div>
       ) : (
         <div className="grid w-full grid-cols-1 gap-6 md:grid-cols-2">

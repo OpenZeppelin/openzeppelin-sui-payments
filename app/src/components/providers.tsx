@@ -25,7 +25,12 @@ function EnokiWalletRegistration() {
 
   useEffect(() => {
     if (!enokiPublicKey) return;
-    if (NETWORK !== "testnet" && NETWORK !== "mainnet" && NETWORK !== "devnet") return;
+    // Enoki's server-side sponsorship only supports testnet + mainnet (see
+    // `enokiNetwork()` in /api/enoki-sponsor). Registering the walletless
+    // Google option on any other network would let users sign in and then
+    // hit a 500 on the first sponsored action. Keep the option hidden on
+    // localnet and devnet — extension wallets still work there.
+    if (NETWORK !== "testnet" && NETWORK !== "mainnet") return;
 
     const { unregister } = registerEnokiWallets({
       // pnpm has hoisted two @mysten/sui versions (dapp-kit + enoki resolved

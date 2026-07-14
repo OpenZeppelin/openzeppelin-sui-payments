@@ -52,8 +52,13 @@ interface SponsorOptions {
  * through `/api/sponsor` would try to self-sponsor and collide with the
  * wallet's own gas-coin picking. When the connected address matches this,
  * we fall through to the wallet-pays path even on localnet.
+ *
+ * Lowercased at module load so the comparison against `account.address` is
+ * case-insensitive (dapp-kit and Sui CLI both emit lowercase today, but a
+ * hand-edited `.env.local` copied from an explorer could ship mixed case
+ * and silently break the equality check).
  */
-const DEPLOYER_ADDRESS = process.env.NEXT_PUBLIC_DEPLOYER_ADDRESS;
+const DEPLOYER_ADDRESS = process.env.NEXT_PUBLIC_DEPLOYER_ADDRESS?.toLowerCase();
 
 /**
  * useMutation wrapper that picks one of three tx submission paths, depending
@@ -93,8 +98,19 @@ export function useSponsoredMutation<TArgs>(
       const tx = new Transaction();
       build(tx, args);
 
+      // Fail fast on localnet if bootstrap wasn't run — without the deployer
+      // address, every localnet tx would route to `/api/sponsor` and get
+      // rejected by the server-side "sender is the deployer address" check
+      // whenever the deployer's own wallet is connected. Surfacing a
+      // pointed error here is friendlier than the opaque 400.
+      if (NETWORK === "localnet" && !DEPLOYER_ADDRESS) {
+        throw new Error(
+          "NEXT_PUBLIC_DEPLOYER_ADDRESS is not set — run " +
+            "`pnpm bootstrap localnet --deployer-key=...` to populate it.",
+        );
+      }
       const useLocalSponsor =
-        NETWORK === "localnet" && senderAddress !== DEPLOYER_ADDRESS;
+        NETWORK === "localnet" && senderAddress.toLowerCase() !== DEPLOYER_ADDRESS;
       const useEnokiSponsor = NETWORK !== "localnet" && enokiConnected;
       let digest: string;
 

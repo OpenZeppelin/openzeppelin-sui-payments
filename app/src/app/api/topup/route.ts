@@ -5,11 +5,31 @@ import { SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 
 import { deployerKeypair, deployerAddress } from "@/lib/deployer-server";
+import { checkAndBumpAll, clientIp } from "@/lib/rate-limit";
 import { NETWORK, networkConfig } from "@/lib/sui-client";
 
 const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID;
 const STABLECOIN_PACKAGE_ID = process.env.NEXT_PUBLIC_STABLECOIN_PACKAGE_ID;
 const STABLECOIN_TYPE = process.env.NEXT_PUBLIC_STABLECOIN_TYPE;
+
+/**
+ * Anti-abuse controls on the mock-USD faucet. The route is disabled on
+ * mainnet at line ~50, but testnet stays open (deliberately unauthenticated
+ * demo faucet). Without these two knobs an anonymous client could:
+ *   1. Drain the deployer's testnet SUI (deployer pays gas for each mint).
+ *   2. Mint unbounded mock-USD by repeating requests.
+ *
+ * Rate limit throttles request volume; the per-request cap bounds any
+ * single mint. Same in-memory backing as `/api/enoki-sponsor` — swap for
+ * shared storage on a public deployment (see `lib/rate-limit.ts`).
+ */
+const RATE_WINDOW_MS = Number(process.env.TOPUP_RATE_WINDOW_MS ?? 60_000);
+const RATE_MAX_RECIPIENT = Number(process.env.TOPUP_RATE_MAX ?? 3);
+const RATE_MAX_IP = Number(process.env.TOPUP_IP_RATE_MAX ?? 10);
+/** Max mock-USD per request in base units (6 decimals). Default: 1,000,000. */
+const MAX_AMOUNT_PER_REQUEST = BigInt(
+  process.env.TOPUP_MAX_AMOUNT ?? "1000000000000",
+);
 
 type TopupRequestBody = {
   /** Recipient's PAS Account id (NOT the wallet address). */
@@ -95,6 +115,34 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const U64_MAX = (1n << 64n) - 1n;
   if (amount > U64_MAX) {
     return NextResponse.json({ error: "amount exceeds u64 max" }, { status: 400 });
+  }
+  // Per-request ceiling — bounds any single mint even if rate-limiting is
+  // ever bypassed. Base units: 1_000_000 = 1 USD (6 decimals).
+  if (amount > MAX_AMOUNT_PER_REQUEST) {
+    return NextResponse.json(
+      { error: `amount exceeds per-request cap (${MAX_AMOUNT_PER_REQUEST.toString()} base units)` },
+      { status: 400 },
+    );
+  }
+
+  // Two independent buckets - per-recipient AND per-IP. Blocks the two
+  // abuses this route enables: draining the deployer's testnet SUI by
+  // spamming the faucet, and minting unbounded mock-USD to any recipient.
+  const ip = clientIp(req);
+  const rl = checkAndBumpAll([
+    {
+      key: `topup:recipient:${body.recipientAccountId}`,
+      windowMs: RATE_WINDOW_MS,
+      max: RATE_MAX_RECIPIENT,
+    },
+    { key: `topup:ip:${ip}`, windowMs: RATE_WINDOW_MS, max: RATE_MAX_IP },
+  ]);
+  if (!rl.ok) {
+    const retryAfterSec = Math.max(1, Math.ceil((rl.retryAfterMs ?? RATE_WINDOW_MS) / 1000));
+    return NextResponse.json(
+      { error: `rate limit exceeded - retry in ${retryAfterSec}s` },
+      { status: 429, headers: { "Retry-After": String(retryAfterSec) } },
+    );
   }
 
   const keypair = deployerKeypair();

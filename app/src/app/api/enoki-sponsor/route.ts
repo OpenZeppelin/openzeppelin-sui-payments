@@ -4,7 +4,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { EnokiClientError } from "@mysten/enoki";
 
 import { enokiClient } from "@/lib/enoki-server";
+import { checkAndBumpAll, clientIp } from "@/lib/rate-limit";
 import { NETWORK } from "@/lib/sui-client";
+
+/**
+ * Two independent buckets — per-sender AND per-IP — checked atomically.
+ * An attacker rotating IPs still trips the sender bucket; an attacker
+ * faking senders still trips the shared IP bucket. Tunable via env; see
+ * `.env.example`. Same in-memory backing caveat as elsewhere — swap for
+ * shared storage on a public deployment.
+ */
+const RATE_WINDOW_MS = Number(process.env.ENOKI_SPONSOR_RATE_WINDOW_MS ?? 60_000);
+const RATE_MAX_SENDER = Number(process.env.ENOKI_SPONSOR_RATE_MAX ?? 10);
+const RATE_MAX_IP = Number(process.env.ENOKI_SPONSOR_IP_RATE_MAX ?? 30);
 
 type SponsorRequestBody = {
   /** Base64 `TransactionKind` bytes (built with `onlyTransactionKind: true`). */
@@ -61,6 +73,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json(
       { error: "txKindBytes and sender are required" },
       { status: 400 },
+    );
+  }
+
+  // Independent per-sender + per-IP buckets, checked atomically. Rotating
+  // one dimension still trips the other's cap.
+  const ip = clientIp(req);
+  const rl = checkAndBumpAll([
+    { key: `enoki-sponsor:sender:${body.sender}`, windowMs: RATE_WINDOW_MS, max: RATE_MAX_SENDER },
+    { key: `enoki-sponsor:ip:${ip}`, windowMs: RATE_WINDOW_MS, max: RATE_MAX_IP },
+  ]);
+  if (!rl.ok) {
+    const retryAfterSec = Math.max(1, Math.ceil((rl.retryAfterMs ?? RATE_WINDOW_MS) / 1000));
+    return NextResponse.json(
+      { error: `rate limit exceeded - retry in ${retryAfterSec}s` },
+      { status: 429, headers: { "Retry-After": String(retryAfterSec) } },
     );
   }
 

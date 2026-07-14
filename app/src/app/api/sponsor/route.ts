@@ -6,7 +6,18 @@ import { Transaction } from "@mysten/sui/transactions";
 import { fromBase64, toBase64 } from "@mysten/sui/utils";
 
 import { deployerAddress, deployerKeypair } from "@/lib/deployer-server";
+import { checkAndBumpAll, clientIp, withMutex } from "@/lib/rate-limit";
 import { NETWORK, networkConfig } from "@/lib/sui-client";
+
+/**
+ * Two independent buckets — per-sender + per-IP. Localnet is throwaway so
+ * budget-drain isn't the concern here; this is defense-in-depth if
+ * `pnpm dev` gets accidentally exposed on the LAN (Next.js dev server
+ * binds 0.0.0.0 by default). Env-tunable.
+ */
+const RATE_WINDOW_MS = Number(process.env.SPONSOR_RATE_WINDOW_MS ?? 60_000);
+const RATE_MAX_SENDER = Number(process.env.SPONSOR_RATE_MAX ?? 30);
+const RATE_MAX_IP = Number(process.env.SPONSOR_IP_RATE_MAX ?? 60);
 
 type SponsorRequestBody = {
   /** Base64-encoded `TransactionKind` bytes (built with `onlyTransactionKind: true`). */
@@ -80,6 +91,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
+  const ip = clientIp(req);
+  const rl = checkAndBumpAll([
+    { key: `sponsor:sender:${body.sender}`, windowMs: RATE_WINDOW_MS, max: RATE_MAX_SENDER },
+    { key: `sponsor:ip:${ip}`, windowMs: RATE_WINDOW_MS, max: RATE_MAX_IP },
+  ]);
+  if (!rl.ok) {
+    const retryAfterSec = Math.max(1, Math.ceil((rl.retryAfterMs ?? RATE_WINDOW_MS) / 1000));
+    return NextResponse.json(
+      { error: `rate limit exceeded - retry in ${retryAfterSec}s` },
+      { status: 429, headers: { "Retry-After": String(retryAfterSec) } },
+    );
+  }
+
   const client = new SuiClient({ url: networkConfig[NETWORK].url });
   const sponsor = deployerKeypair();
 
@@ -97,21 +121,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   tx.setGasOwner(deployerAddress());
   tx.setGasBudget(GAS_BUDGET);
 
-  // Build → returns the full TransactionData bytes that both parties sign.
-  let bytes: Uint8Array;
+  // Serialize gas-coin picking across concurrent requests. Every sponsored
+  // tx builds against the same deployer address, so parallel `tx.build()`
+  // calls can select the same gas coin and equivocate it for the epoch.
+  // Serializing by the deployer address (single sponsor) forces sequential
+  // picking; keyed serialization would matter more if we had multiple
+  // sponsor identities.
+  const sponsorAddr = deployerAddress();
   try {
-    bytes = await tx.build({ client });
+    const bytes = await withMutex(`sponsor-gas:${sponsorAddr}`, async () => {
+      const built = await tx.build({ client });
+      // Sign inside the mutex too — releasing the lock before signing
+      // wouldn't matter (build already picked the coin) but keeps the
+      // "picked + signed as one atomic step" invariant obvious.
+      const { signature } = await sponsor.signTransaction(built);
+      return { built, signature };
+    });
+    const response: SponsorResponseBody = {
+      bytes: toBase64(bytes.built),
+      sponsorSignature: bytes.signature,
+    };
+    return NextResponse.json(response);
   } catch (err) {
     return NextResponse.json(
-      { error: `tx build failed: ${err instanceof Error ? err.message : err}` },
+      { error: `sponsor failed: ${err instanceof Error ? err.message : err}` },
       { status: 500 },
     );
   }
-  const { signature: sponsorSignature } = await sponsor.signTransaction(bytes);
-
-  const response: SponsorResponseBody = {
-    bytes: toBase64(bytes),
-    sponsorSignature,
-  };
-  return NextResponse.json(response);
 }

@@ -784,6 +784,29 @@ async function main() {
   // renamed alias can flip the bootstrap branch silently.
   await assertEnvMatchesChain(client, envAlias);
 
+  // Hard-refuse mainnet. Bootstrap unconditionally publishes
+  // `contracts/stablecoin-mock` and wires it in as the merchant's
+  // `accepted_payment_type` — that mock is freely mintable via
+  // `stablecoin_mock::faucet` and freely transferable via its permissive
+  // TransferApproval (see the WARNING at the top of the .move file).
+  // Settling a real invoice in this currency on mainnet would be
+  // worthless. A production deployment must instantiate `payment::pay<C>`
+  // against a real PAS-issued stablecoin, which the template does not yet
+  // provide. Refuse the bootstrap entirely until that path exists — the
+  // arg parser accepts "mainnet" only so this message can fire; without
+  // this guard the mock would silently publish + link.
+  if (envAlias === "mainnet") {
+    throw new Error(
+      "Bootstrap does not support mainnet: this template publishes " +
+        "`stablecoin-mock` (freely mintable) and wires it as the merchant's " +
+        "accepted payment type. Deploying that on mainnet would let anyone " +
+        "mint the currency your invoices settle in, making them worthless. " +
+        "Wire a real PAS-issued stablecoin first (see the top of " +
+        "`contracts/stablecoin-mock/sources/stablecoin_mock.move` for the " +
+        "constraint that would need lifting), then re-run.",
+    );
+  }
+
   const ephemeral = !isSystemEnv(envAlias);
 
   console.log(`active env: ${envAlias} (${rpcUrl})  ${ephemeral ? "[ephemeral]" : ""}`);

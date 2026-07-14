@@ -165,6 +165,19 @@ shared chains." Register the app in the [Enoki dashboard](https://portal.enoki.m
 first and set its `allowedMoveCallTargets` to the payments-package move
 calls the app issues.
 
+## Mainnet — not supported
+
+`pnpm bootstrap mainnet` is deliberately refused. This template publishes
+`contracts/stablecoin-mock` and wires it in as the merchant's accepted
+payment type — the mock is freely mintable via `stablecoin_mock::faucet`
+and freely transferable, which would make any real invoice settled in
+this currency worthless. Bootstrap throws with a pointed error rather
+than silently deploying that on mainnet.
+
+Shipping to mainnet means swapping in a real PAS-issued stablecoin
+(matching how `payment::pay<C>` is generic over the payment currency).
+That integration path isn't yet in the template.
+
 ## Switching between networks
 
 `.env.<network>` is the per-network source of truth; `.env.local` is a

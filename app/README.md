@@ -68,9 +68,10 @@ app/
    active key. Publish strategy is picked from the network arg:
 
    ```bash
-   # Option A - testnet / mainnet (pas + openzeppelin_access are already
-   # on chain). Bootstrap resolves them via `mvr resolve` and runs
-   # `sui client publish` for payments + stablecoin-mock.
+   # Option A - testnet (pas + openzeppelin_access are already on chain).
+   # Bootstrap resolves them via `mvr resolve` and runs `sui client publish`
+   # for payments + stablecoin-mock. Mainnet is deliberately refused - see
+   # the root README's "Mainnet — not supported" section.
    sui client switch --env testnet
    sui client faucet
    pnpm bootstrap testnet \

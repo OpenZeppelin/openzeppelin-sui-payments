@@ -22,15 +22,18 @@ app/
 ├── src/
 │   ├── app/                # Next.js App Router pages
 │   │   ├── page.tsx        # landing: role-based auto-route on wallet connect
+│   │   ├── error.tsx       # root error boundary (catches landing-page throws)
 │   │   ├── auth/callback/  # Enoki OAuth popup lands here (parent detects hash)
 │   │   ├── api/            # /sponsor (localnet) + /enoki-sponsor + /enoki-execute + /topup
 │   │   ├── merchant/       # catalogue, transactions, balance, redeem, settings
+│   │   │   └── error.tsx   # segment error boundary (sidebar stays intact)
 │   │   └── customer/       # dashboard, pay, rewards, topup, history
+│   │       └── error.tsx   # segment error boundary (header stays intact)
 │   ├── components/
 │   │   ├── ui/             # button, card, dialog primitives (shadcn-style)
 │   │   ├── customer/       # voucher-status-dialog
 │   │   ├── merchant/       # invoice-status-dialog, add-listing + add-variant dialogs
-│   │   ├── shared/         # qr-display, qr-scanner
+│   │   ├── shared/         # qr-display, qr-scanner, error-fallback
 │   │   ├── connect-button.tsx    # custom wallet picker (Enoki-first ordering)
 │   │   └── providers.tsx         # QueryClient + SuiClient + dapp-kit + Enoki
 │   ├── hooks/              # queries, use-sponsored-mutation, use-sui-clock,
@@ -42,6 +45,7 @@ app/
 │   │   ├── deployment.ts   # deployment IDs read lazily from .env.local
 │   │   ├── deployer-server.ts    # server-only deployer keypair (topup + sponsor)
 │   │   ├── enoki-server.ts # server-only EnokiClient
+│   │   ├── rate-limit.ts   # server-only two-bucket limiter + mutex (see .env.example)
 │   │   ├── preimage.ts     # blake2b256 + helpers for the voucher hashlock
 │   │   ├── qr.ts           # invoice / voucher QR encode + decode
 │   │   └── utils.ts        # cn, formatAmount, formatItems, shortAddr

@@ -44,8 +44,10 @@ What you do here:
   (`6 decimals`) and POSTs `/api/topup`; the server signs with the deployer
   key and lands the mint into `recipientAccountId`.
 - The route is disabled on mainnet - the guard returns HTTP 410 with an
-  explanatory message. Testnet keeps it open, deliberately unauthenticated
-  (see [ARCHITECTURE.md § Known limitations](ARCHITECTURE.md#apitopup-is-an-unauthenticated-mock-usd-faucet-on-testnet)).
+  explanatory message. Testnet keeps it open, unauthenticated but
+  throttled: two-bucket rate limit (per-recipient + per-IP) plus a
+  per-request amount cap (see
+  [ARCHITECTURE.md § Known limitations](ARCHITECTURE.md#server-signed-routes-are-throttled-not-authenticated)).
 
 ## /customer/pay - Scan to pay
 

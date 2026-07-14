@@ -366,14 +366,44 @@ customer silently fall outside the walked window - no error, no truncation
 banner, just missing rows. A template deployment intended for real traffic
 should be paired with an indexer that supports customer-scoped queries.
 
-### `/api/topup` is an unauthenticated mock-USD faucet on testnet
+### Server-signed routes are throttled, not authenticated
 
-The route is disabled on mainnet but open on testnet with no auth or
-rate limit - deliberately, because the mock stablecoin is fake-money and the
-faucet UX is the whole point of the demo. A real deployment against a
-production stablecoin doesn't hold `TreasuryCap<C>` and can't call this path
-at all; a public testnet deployment intended to survive spam should strip
-the route or wire in its own gating.
+`/api/topup` (mock-USD faucet), `/api/sponsor` (localnet gas station), and
+`/api/enoki-sponsor` (testnet/mainnet gas station via Enoki) each sign
+transactions server-side against a shared key or paid sponsorship budget.
+None of them require caller authentication. Instead they ship with two
+in-process anti-abuse controls (see `lib/rate-limit.ts`):
+
+- **Two-bucket rate limit** per route: an independent per-identity bucket
+  (sender / recipient address) AND per-IP bucket, both must be under-limit
+  for the request to pass. Rotating either dimension still trips the
+  other's cap. Defaults and env knobs documented in `.env.example`.
+- **Per-request amount cap** on `/api/topup` (default 1M mock-USD in
+  6-decimal base units) so any single mint is bounded even if rate
+  limiting is bypassed (e.g. across horizontally-scaled Vercel workers,
+  see below).
+- **Gas-coin mutex** on `/api/sponsor` — every sponsored tx builds
+  against the same deployer address, so parallel `tx.build()` calls
+  could pick the same gas coin and equivocate it. `withMutex` serializes
+  the pick+sign step.
+
+Two remaining known limitations of the shipped defense:
+
+- **In-memory backing.** `lib/rate-limit.ts` uses a per-process `Map`, so
+  a horizontally-scaled deployment (Vercel serverless, multi-node
+  Kubernetes) gets one bucket per worker and the effective rate scales
+  with the worker count. Swap the backing store for Redis / Vercel KV /
+  Upstash before shipping publicly.
+- **No caller identity binding.** The `sender` field is trusted as
+  self-declared. Pairing it with IP in the bucket key raises the abuse
+  bar (rotating one dimension still trips the other), but doesn't
+  prevent a determined attacker with many IPs from spending the app's
+  budget. `/api/enoki-sponsor` also has Enoki's dashboard-side
+  `allowedMoveCallTargets` + budget cap as the last line of defense.
+
+`/api/topup` also remains disabled on mainnet at the route layer — a
+real deployment pairs with a production stablecoin whose `TreasuryCap`
+the deployer doesn't hold, so the route wouldn't work there anyway.
 
 ### Localnet Enoki path is unsupported
 
@@ -395,6 +425,8 @@ instead; Enoki-based zkLogin only works on testnet/mainnet.
 | Sponsored-mutation dispatch | [app/src/hooks/use-sponsored-mutation.ts](../app/src/hooks/use-sponsored-mutation.ts) |
 | On-chain Clock hook | [app/src/hooks/use-sui-clock.ts](../app/src/hooks/use-sui-clock.ts) |
 | Sponsor + Enoki API routes | [app/src/app/api/sponsor](../app/src/app/api/sponsor), [app/src/app/api/enoki-sponsor](../app/src/app/api/enoki-sponsor), [app/src/app/api/enoki-execute](../app/src/app/api/enoki-execute) |
+| Anti-abuse controls (rate limit + mutex) | [app/src/lib/rate-limit.ts](../app/src/lib/rate-limit.ts) |
+| Route-segment error boundaries | [app/src/app/error.tsx](../app/src/app/error.tsx), [app/src/app/merchant/error.tsx](../app/src/app/merchant/error.tsx), [app/src/app/customer/error.tsx](../app/src/app/customer/error.tsx) — shared UI in [app/src/components/shared/error-fallback.tsx](../app/src/components/shared/error-fallback.tsx) |
 | Bootstrap / seed scripts | [app/scripts/bootstrap.ts](../app/scripts/bootstrap.ts), [app/scripts/seed.ts](../app/scripts/seed.ts) |
 
 ## Where to go next

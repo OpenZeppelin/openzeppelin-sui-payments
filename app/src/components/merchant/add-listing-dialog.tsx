@@ -78,7 +78,10 @@ export function AddListingDialog() {
             e.preventDefault();
             // `type=number` allows "1.5" and "1e3" — both would throw an ugly
             // Cannot-convert error from BigInt() downstream. Reject up front.
-            if (form.loyaltyPrice && !/^\d+$/.test(form.loyaltyPrice.trim())) {
+            // `[1-9]\d*` rejects `0` as well as non-digit input — `0 LOY`
+            // is almost certainly a "meant to leave blank" mistake, and
+            // "0 LOY per redemption" would produce a nonsense free voucher.
+            if (form.loyaltyPrice && !/^[1-9]\d*$/.test(form.loyaltyPrice.trim())) {
               toast.error("Loyalty price must be a positive integer.");
               return;
             }

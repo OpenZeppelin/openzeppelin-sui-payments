@@ -1,6 +1,3 @@
-> [!Warning]
-> This is experimental UN-AUDITED code currently under development
-
 # openzeppelin-sui-payments
 
 Closed-loop **stablecoin payments + loyalty + redemption** template for Sui, built on
@@ -223,3 +220,5 @@ This project is maintained by OpenZeppelin with the goal of providing a secure a
 reliable starter dApp for PoS systems built on top of the Sui ecosystem.
 
 Refer to [SECURITY.md](SECURITY.md) for more details.
+
+Past audits can be found in [`audits/`](./audits).

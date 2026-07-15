@@ -37,9 +37,15 @@ never need SUI in their account to pay for gas. See
 
 On localnet the Google option is **not usable** - Enoki's prover runs on
 Mysten infra with a max-epoch delta of 30, and localnet's epoch is
-disconnected from Mysten's testnet-derived `maxEpoch`. The picker still
-shows the option (it's a runtime property of the registered wallet), but
-signing fails. Use Slush on localnet.
+disconnected from Mysten's testnet-derived `maxEpoch`. The client-side
+`providers.tsx` gate hides the walletless "Continue with Google" option
+on any non-testnet/mainnet network for exactly this reason; use Slush on
+localnet.
+
+For the step-by-step wiring (Google Cloud Console OAuth client, Enoki
+dashboard configuration, env-var placement, and troubleshooting the
+specific errors we've hit like "Invalid client ID" and 502 unknown_error),
+see [docs/SETUP_ENOKI.md](SETUP_ENOKI.md).
 
 ### Slush (and other extension wallets)
 

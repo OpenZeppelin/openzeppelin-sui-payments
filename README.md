@@ -1,6 +1,3 @@
-> [!Warning]
-> This is experimental UN-AUDITED code currently under development
-
 # openzeppelin-sui-payments
 
 Closed-loop **stablecoin payments + loyalty + redemption** template for Sui, built on
@@ -161,9 +158,12 @@ pnpm bootstrap testnet \
 
 `--deployer-key` and `--enoki-api-key` are only persisted to
 `.env.testnet` when supplied - the default is "no server-side secrets on
-shared chains." Register the app in the [Enoki dashboard](https://portal.enoki.mystenlabs.com)
-first and set its `allowedMoveCallTargets` to the payments-package move
-calls the app issues.
+shared chains." For the Enoki-registered "Continue with Google" wallet
+to work, see the step-by-step [docs/SETUP_ENOKI.md](docs/SETUP_ENOKI.md)
+guide - it covers the Google Cloud Console OAuth client, the Enoki
+dashboard configuration (Google provider, allowed move-call targets,
+budget), env-var wiring, and troubleshooting the specific errors we've
+hit. Slush + other extension wallets work without any Enoki setup.
 
 ## Mainnet — not supported
 
@@ -223,3 +223,5 @@ This project is maintained by OpenZeppelin with the goal of providing a secure a
 reliable starter dApp for PoS systems built on top of the Sui ecosystem.
 
 Refer to [SECURITY.md](SECURITY.md) for more details.
+
+Past audits can be found in [`audits/`](./audits).

@@ -247,9 +247,15 @@ function readEnvFile(key: string): string | undefined {
  * (b) uses the default umask (typically 0644 = world-readable). Both
  * matter for `.env.<network>` and `.env.local`, which hold
  * `DEPLOYER_PRIVATE_KEY` + `ENOKI_PRIVATE_API_KEY`.
+ *
+ * Unlink any stale `.tmp` from a prior aborted run first: Node's
+ * `writeFileSync(..., { mode })` only applies the mode when creating a
+ * new file, so a lingering 0644 tmp would keep world-readable
+ * permissions. The `.tmp` name is gitignored regardless.
  */
 function writeSecretFile(absPath: string, contents: string): void {
   const tmp = `${absPath}.tmp`;
+  if (existsSync(tmp)) unlinkSync(tmp);
   writeFileSync(tmp, contents, { encoding: "utf8", mode: 0o600 });
   renameSync(tmp, absPath);
 }
@@ -925,6 +931,13 @@ async function main() {
           `contracts/stablecoin-mock/Published.toml, and clear the NEXT_PUBLIC_* ` +
           `deployment ids in .env.local, then re-run.`,
       );
+      // Mirror the per-network file to `.env.local` before returning. Without
+      // this, `applyNetworkFromArgv` has written `NEXT_PUBLIC_SUI_NETWORK` to
+      // `.env.<network>` but the dev server (reading `.env.local`) still
+      // points at whatever network was previously active — the "reuse"
+      // shortcut would silently leave the FE targeting the wrong chain.
+      writeSecretFile(LOCAL_ENV, readFileSync(TARGET_ENV, "utf8"));
+      console.log(`  mirrored ${TARGET_ENV} -> ${LOCAL_ENV}`);
       return;
     }
 

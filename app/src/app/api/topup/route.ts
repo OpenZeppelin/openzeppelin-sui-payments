@@ -5,7 +5,12 @@ import { SuiClient } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 
 import { deployerKeypair, deployerAddress } from "@/lib/deployer-server";
-import { checkAndBumpAll, clientIp } from "@/lib/rate-limit";
+import {
+  checkAndBumpAll,
+  clientIp,
+  parsePositiveBigInt,
+  parsePositiveInt,
+} from "@/lib/rate-limit";
 import { NETWORK, networkConfig } from "@/lib/sui-client";
 
 const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID;
@@ -23,12 +28,26 @@ const STABLECOIN_TYPE = process.env.NEXT_PUBLIC_STABLECOIN_TYPE;
  * single mint. Same in-memory backing as `/api/enoki-sponsor` — swap for
  * shared storage on a public deployment (see `lib/rate-limit.ts`).
  */
-const RATE_WINDOW_MS = Number(process.env.TOPUP_RATE_WINDOW_MS ?? 60_000);
-const RATE_MAX_RECIPIENT = Number(process.env.TOPUP_RATE_MAX ?? 3);
-const RATE_MAX_IP = Number(process.env.TOPUP_IP_RATE_MAX ?? 10);
+const RATE_WINDOW_MS = parsePositiveInt(
+  "TOPUP_RATE_WINDOW_MS",
+  process.env.TOPUP_RATE_WINDOW_MS,
+  60_000,
+);
+const RATE_MAX_RECIPIENT = parsePositiveInt(
+  "TOPUP_RATE_MAX",
+  process.env.TOPUP_RATE_MAX,
+  3,
+);
+const RATE_MAX_IP = parsePositiveInt(
+  "TOPUP_IP_RATE_MAX",
+  process.env.TOPUP_IP_RATE_MAX,
+  10,
+);
 /** Max mock-USD per request in base units (6 decimals). Default: 1,000,000. */
-const MAX_AMOUNT_PER_REQUEST = BigInt(
-  process.env.TOPUP_MAX_AMOUNT ?? "1000000000000",
+const MAX_AMOUNT_PER_REQUEST = parsePositiveBigInt(
+  "TOPUP_MAX_AMOUNT",
+  process.env.TOPUP_MAX_AMOUNT,
+  1_000_000_000_000n,
 );
 
 type TopupRequestBody = {
@@ -136,7 +155,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const ip = clientIp(req);
   const rl = checkAndBumpAll([
     {
-      key: `topup:recipient:${body.recipientAccountId}`,
+      // Lowercase for the bucket key so mixed-case hex variants share one
+      // throttle - request processing keeps the caller's original casing.
+      key: `topup:recipient:${body.recipientAccountId.toLowerCase()}`,
       windowMs: RATE_WINDOW_MS,
       max: RATE_MAX_RECIPIENT,
     },

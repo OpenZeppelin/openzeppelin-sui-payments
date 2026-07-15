@@ -6,7 +6,7 @@ import { Transaction } from "@mysten/sui/transactions";
 import { fromBase64, toBase64 } from "@mysten/sui/utils";
 
 import { deployerAddress, deployerKeypair } from "@/lib/deployer-server";
-import { checkAndBumpAll, clientIp, withMutex } from "@/lib/rate-limit";
+import { checkAndBumpAll, clientIp, parsePositiveInt, withMutex } from "@/lib/rate-limit";
 import { NETWORK, networkConfig } from "@/lib/sui-client";
 
 /**
@@ -15,9 +15,21 @@ import { NETWORK, networkConfig } from "@/lib/sui-client";
  * `pnpm dev` gets accidentally exposed on the LAN (Next.js dev server
  * binds 0.0.0.0 by default). Env-tunable.
  */
-const RATE_WINDOW_MS = Number(process.env.SPONSOR_RATE_WINDOW_MS ?? 60_000);
-const RATE_MAX_SENDER = Number(process.env.SPONSOR_RATE_MAX ?? 30);
-const RATE_MAX_IP = Number(process.env.SPONSOR_IP_RATE_MAX ?? 60);
+const RATE_WINDOW_MS = parsePositiveInt(
+  "SPONSOR_RATE_WINDOW_MS",
+  process.env.SPONSOR_RATE_WINDOW_MS,
+  60_000,
+);
+const RATE_MAX_SENDER = parsePositiveInt(
+  "SPONSOR_RATE_MAX",
+  process.env.SPONSOR_RATE_MAX,
+  30,
+);
+const RATE_MAX_IP = parsePositiveInt(
+  "SPONSOR_IP_RATE_MAX",
+  process.env.SPONSOR_IP_RATE_MAX,
+  60,
+);
 
 type SponsorRequestBody = {
   /** Base64-encoded `TransactionKind` bytes (built with `onlyTransactionKind: true`). */
@@ -91,9 +103,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
+  // Lowercase for the bucket key so mixed-case hex variants share one
+  // throttle - request processing keeps `body.sender` as-is.
   const ip = clientIp(req);
+  const senderKey = body.sender.toLowerCase();
   const rl = checkAndBumpAll([
-    { key: `sponsor:sender:${body.sender}`, windowMs: RATE_WINDOW_MS, max: RATE_MAX_SENDER },
+    { key: `sponsor:sender:${senderKey}`, windowMs: RATE_WINDOW_MS, max: RATE_MAX_SENDER },
     { key: `sponsor:ip:${ip}`, windowMs: RATE_WINDOW_MS, max: RATE_MAX_IP },
   ]);
   if (!rl.ok) {

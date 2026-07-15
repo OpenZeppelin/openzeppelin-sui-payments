@@ -48,8 +48,12 @@ export default function MerchantLayout({ children }: { children: React.ReactNode
       <div className="flex min-h-screen flex-col">
         <header className="border-b border-[color:var(--color-border)] bg-[color:var(--color-card)]">
           <div className="flex h-14 items-center justify-end gap-4 px-8">
+            {/* Route directly to the customer home; going through `/`
+                would just re-auto-route a connected wallet with staff
+                roles right back here. See customer/layout for the
+                mirror. */}
             <Link
-              href="/"
+              href="/customer"
               className="text-sm text-[color:var(--color-muted-foreground)] hover:underline"
             >
               Switch role

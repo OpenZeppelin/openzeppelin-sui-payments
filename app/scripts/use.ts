@@ -10,7 +10,7 @@
  * currently active — Next.js reads it on dev-server start.
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -47,7 +47,13 @@ function main(): void {
   // and ENOKI_PRIVATE_API_KEY; the default `copyFileSync` inherits the
   // source's mode (typically 0644 = world-readable) and is not atomic — an
   // interrupt mid-copy would truncate the mirror.
+  //
+  // Unlink any stale `.tmp` from a prior aborted run first: Node's
+  // `writeFileSync(..., { mode })` only applies the mode when it creates
+  // the file, so a lingering 0644 tmp would silently keep world-readable
+  // permissions. The `.tmp` name is gitignored regardless (see `.gitignore`).
   const tmp = `${dest}.tmp`;
+  if (existsSync(tmp)) unlinkSync(tmp);
   writeFileSync(tmp, readFileSync(source), { mode: 0o600 });
   renameSync(tmp, dest);
   console.log(`✓ Copied ${source}\n     to ${dest}`);

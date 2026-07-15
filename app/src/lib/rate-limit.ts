@@ -64,12 +64,28 @@ interface Check {
  * `retryAfterMs` is the max of the failed buckets' retry-after values.
  */
 export function checkAndBumpAll(checks: Check[]): RateLimitResult {
-  // Fail-fast constraint: `maybeSweepAll` prunes timestamps older than
-  // `CLEANUP_INTERVAL_MS`, so a caller passing a longer window would
-  // silently lose still-live buckets. Enforce here rather than in the
-  // sweep itself so misuse surfaces at the call site, not five minutes
-  // later.
-  for (const { windowMs, key } of checks) {
+  // Fail-fast validation. Bad inputs (NaN, negative, zero) would either
+  // silently disable throttling (max <= 0 lets everything through since
+  // the peek's `history.length >= max` is trivially true only when max is
+  // finite; NaN comparisons return false → also lets everything through)
+  // or corrupt the sliding window. Callers typically parse these from
+  // env vars via `parsePositiveInt`, but this is the last line of defense.
+  //
+  // The `windowMs > CLEANUP_INTERVAL_MS` check comes second: `maybeSweepAll`
+  // prunes timestamps older than `CLEANUP_INTERVAL_MS`, so a longer window
+  // would silently lose still-live buckets.
+  for (const { windowMs, max, key } of checks) {
+    if (!Number.isFinite(windowMs) || windowMs <= 0) {
+      throw new Error(
+        `checkAndBumpAll: windowMs=${windowMs} on key="${key}" must be a ` +
+          `finite positive number.`,
+      );
+    }
+    if (!Number.isFinite(max) || !Number.isInteger(max) || max <= 0) {
+      throw new Error(
+        `checkAndBumpAll: max=${max} on key="${key}" must be a positive integer.`,
+      );
+    }
     if (windowMs > CLEANUP_INTERVAL_MS) {
       throw new Error(
         `checkAndBumpAll: windowMs=${windowMs} on key="${key}" exceeds ` +
@@ -145,4 +161,55 @@ export async function withMutex<T>(key: string, fn: () => Promise<T>): Promise<T
   const chain: Promise<void> = next.then(cleanup, cleanup);
   mutexes.set(key, chain);
   return next;
+}
+
+/**
+ * Env-var parsing for positive integers. Rejects `undefined`, empty
+ * strings, non-numeric text, `NaN`, `Infinity`, negatives, zero, and
+ * non-integers by falling back to `defaultValue` and emitting a warning.
+ * Route modules use this for rate-limit windows/maxima to prevent an
+ * accidentally malformed env var (e.g. `RATE_MAX=`) from disabling
+ * throttling.
+ */
+export function parsePositiveInt(name: string, raw: string | undefined, defaultValue: number): number {
+  if (raw === undefined || raw === "") return defaultValue;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+    console.warn(
+      `[rate-limit] ${name}=${JSON.stringify(raw)} is not a positive integer; ` +
+        `falling back to ${defaultValue}.`,
+    );
+    return defaultValue;
+  }
+  return n;
+}
+
+/**
+ * Same as `parsePositiveInt` but for `bigint` (used for large u64-shaped
+ * caps like `TOPUP_MAX_AMOUNT`). `BigInt()` throws on unparsable input,
+ * so we catch and fall back instead of exploding at module init.
+ */
+export function parsePositiveBigInt(
+  name: string,
+  raw: string | undefined,
+  defaultValue: bigint,
+): bigint {
+  if (raw === undefined || raw === "") return defaultValue;
+  let n: bigint;
+  try {
+    n = BigInt(raw);
+  } catch {
+    console.warn(
+      `[rate-limit] ${name}=${JSON.stringify(raw)} is not a valid bigint; ` +
+        `falling back to ${defaultValue}.`,
+    );
+    return defaultValue;
+  }
+  if (n <= 0n) {
+    console.warn(
+      `[rate-limit] ${name}=${n} must be positive; falling back to ${defaultValue}.`,
+    );
+    return defaultValue;
+  }
+  return n;
 }

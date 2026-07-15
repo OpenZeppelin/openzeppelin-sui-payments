@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { EnokiClientError } from "@mysten/enoki";
 
 import { enokiClient } from "@/lib/enoki-server";
-import { checkAndBumpAll, clientIp } from "@/lib/rate-limit";
+import { checkAndBumpAll, clientIp, parsePositiveInt } from "@/lib/rate-limit";
 import { NETWORK } from "@/lib/sui-client";
 
 /**
@@ -14,9 +14,21 @@ import { NETWORK } from "@/lib/sui-client";
  * `.env.example`. Same in-memory backing caveat as elsewhere — swap for
  * shared storage on a public deployment.
  */
-const RATE_WINDOW_MS = Number(process.env.ENOKI_SPONSOR_RATE_WINDOW_MS ?? 60_000);
-const RATE_MAX_SENDER = Number(process.env.ENOKI_SPONSOR_RATE_MAX ?? 10);
-const RATE_MAX_IP = Number(process.env.ENOKI_SPONSOR_IP_RATE_MAX ?? 30);
+const RATE_WINDOW_MS = parsePositiveInt(
+  "ENOKI_SPONSOR_RATE_WINDOW_MS",
+  process.env.ENOKI_SPONSOR_RATE_WINDOW_MS,
+  60_000,
+);
+const RATE_MAX_SENDER = parsePositiveInt(
+  "ENOKI_SPONSOR_RATE_MAX",
+  process.env.ENOKI_SPONSOR_RATE_MAX,
+  10,
+);
+const RATE_MAX_IP = parsePositiveInt(
+  "ENOKI_SPONSOR_IP_RATE_MAX",
+  process.env.ENOKI_SPONSOR_IP_RATE_MAX,
+  30,
+);
 
 type SponsorRequestBody = {
   /** Base64 `TransactionKind` bytes (built with `onlyTransactionKind: true`). */
@@ -77,10 +89,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // Independent per-sender + per-IP buckets, checked atomically. Rotating
-  // one dimension still trips the other's cap.
+  // one dimension still trips the other's cap. Sender is lowercased for the
+  // bucket key so mixed-case hex variants (`0xABC…` vs `0xabc…`) share the
+  // same throttle - request processing below keeps the original casing.
   const ip = clientIp(req);
+  const senderKey = body.sender.toLowerCase();
   const rl = checkAndBumpAll([
-    { key: `enoki-sponsor:sender:${body.sender}`, windowMs: RATE_WINDOW_MS, max: RATE_MAX_SENDER },
+    { key: `enoki-sponsor:sender:${senderKey}`, windowMs: RATE_WINDOW_MS, max: RATE_MAX_SENDER },
     { key: `enoki-sponsor:ip:${ip}`, windowMs: RATE_WINDOW_MS, max: RATE_MAX_IP },
   ]);
   if (!rl.ok) {

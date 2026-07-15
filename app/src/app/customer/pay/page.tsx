@@ -91,8 +91,16 @@ export default function CustomerPayPage() {
   // Compare against the on-chain Clock, not wallclock. Sui's `Clock` is what
   // sets `expires_at_ms`, so wallclock drift (particularly on localnet) can
   // otherwise mark a fresh invoice as expired the moment it's issued.
+  //
+  // Fail closed while the chain clock is still loading: without a known
+  // reference, we can't tell whether the invoice is expired, and clicking
+  // Pay on a nominally-active-but-actually-expired invoice would waste gas
+  // on a `EInvoiceExpired` abort. Small UX cost (~1 poll interval on first
+  // paint) for correctness.
   const chainNow = useSuiClockMs().data;
-  const expired = invoice.data && chainNow ? invoice.data.expiresAtMs <= chainNow : false;
+  const clockUnknown = chainNow === undefined;
+  const expired =
+    !clockUnknown && invoice.data ? invoice.data.expiresAtMs <= chainNow : false;
   const merchantAccountReady = merchantPas.data !== null && merchantPas.data !== undefined;
   const customerAccountReady = customerPas.data !== null && customerPas.data !== undefined;
   // Self-payment is a structural dead-end: `account::send_balance(from, .., to, ..)`
@@ -226,6 +234,7 @@ export default function CustomerPayPage() {
               <Button
                 onClick={handlePay}
                 disabled={
+                  clockUnknown ||
                   expired ||
                   isSelfPayment ||
                   pay.isPending ||

@@ -82,8 +82,15 @@ export default function RedeemPage() {
 
   // Compare against the on-chain Clock at 0x6 — wallclock can lag the localnet
   // Clock by many minutes, so `Date.now()` mismarks fresh vouchers as expired.
+  //
+  // Fail closed while the chain clock is still loading: clicking Redeem on
+  // a nominally-active-but-actually-expired voucher would waste gas on
+  // `EVoucherExpired`. Small UX cost (~1 poll interval on first paint).
   const chainNow = useSuiClockMs().data;
-  const expired = Boolean(voucher.data && chainNow && voucher.data.expiresAtMs <= chainNow);
+  const clockUnknown = chainNow === undefined;
+  const expired = Boolean(
+    voucher.data && !clockUnknown && voucher.data.expiresAtMs <= chainNow,
+  );
 
   return (
     <section>
@@ -183,7 +190,7 @@ export default function RedeemPage() {
               </Button>
               <Button
                 onClick={handleRedeem}
-                disabled={expired || redeem.isPending || preimageMatch === false}
+                disabled={clockUnknown || expired || redeem.isPending || preimageMatch === false}
               >
                 {redeem.isPending ? "Redeeming…" : "Redeem"}
               </Button>

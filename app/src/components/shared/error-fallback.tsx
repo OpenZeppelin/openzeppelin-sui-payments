@@ -26,10 +26,15 @@ export function ErrorFallback({
   /** Human label describing what the boundary wraps (e.g. "merchant dashboard"). */
   scope: string;
 }) {
-  // Log the caught error to the console so we don't lose the stack when the
-  // dev overlay is closed. Next.js also reports these via its own overlay
-  // during development.
+  // Development builds get the full stack via console + the rendered pre
+  // block below. Production builds redact the message to a generic string
+  // and only surface the server-assigned `digest` (safe to expose — it's
+  // an opaque identifier meant for support-ticket cross-referencing) so
+  // internal error messages / stack fragments don't leak to users.
+  const isDev = process.env.NODE_ENV !== "production";
   useEffect(() => {
+    // Console log always runs — devs get full detail, prod deploys can
+    // hook this into their own telemetry via a `console.error` override.
     console.error(`[error boundary: ${scope}]`, error);
   }, [error, scope]);
 
@@ -48,7 +53,7 @@ export function ErrorFallback({
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <pre className="max-h-40 overflow-auto rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-muted)] p-3 text-xs">
-            {error.message || String(error)}
+            {isDev ? error.message || String(error) : "An unexpected error occurred."}
             {error.digest ? `\n\n[digest: ${error.digest}]` : ""}
           </pre>
           <div className="flex items-center justify-end gap-2">

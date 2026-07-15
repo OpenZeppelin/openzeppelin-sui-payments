@@ -37,6 +37,15 @@ export function useHasMerchantRole(address: string | null) {
         sender: address!,
         transactionBlock: tx,
       });
+      // Fail the query rather than swallow an error into `false`: without
+      // this, a broken deployment (wrong AccessControl id, misconfigured
+      // package id, ...) would silently look like "not a merchant" and
+      // the landing page would auto-route the deployer to /customer.
+      if (result.effects?.status?.status !== "success") {
+        throw new Error(
+          `has_role dev-inspect failed: ${result.effects?.status?.error ?? "unknown"}`,
+        );
+      }
       // Each moveCall's first return is a bool serialized as a single byte
       // (0 = false, 1 = true). If any of the three came back true, the
       // address holds some merchant-side role.

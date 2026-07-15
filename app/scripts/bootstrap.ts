@@ -30,20 +30,25 @@
  *     • PTB prepends `namespace::setup(&mut ns, &UpgradeCap)` before the
  *       system-env steps to wire pas to its UpgradeCap on this fresh chain.
  *
- * The active address must hold gas. On localnet:
+ * The deployer key is passed explicitly via `--deployer-key=<suiprivkey1...>`
+ * or `DEPLOYER_PRIVATE_KEY` in the shell env — never auto-exported from the
+ * Sui CLI keystore. The derived address must equal `sui client active-address`,
+ * since `sui client publish` signs the initial publish with the CLI's active
+ * key. The active address must also hold gas. On localnet:
  *   sui start --with-faucet --force-regenesis     # in another terminal
- *   sui client switch --env local
+ *   sui client switch --env localnet
  *   sui client faucet
+ *   pnpm bootstrap localnet --deployer-key="$(sui keytool export \
+ *     --key-identity $(sui client active-address) --json | jq -r .exportedPrivateKey)"
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { parseArgs } from "node:util";
 
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { SuiClient } from "@mysten/sui/client";
-import { getFaucetHost, requestSuiFromFaucetV2 } from "@mysten/sui/faucet";
 import { Transaction } from "@mysten/sui/transactions";
 
 type ObjectChange = Record<string, unknown>;
@@ -65,7 +70,19 @@ type PublishResult = {
 };
 
 const REPO_ROOT = resolve(__dirname, "..", "..");
-const APP_ENV = resolve(__dirname, "..", ".env.local");
+const APP_DIR = resolve(__dirname, "..");
+/** The Next.js dev server reads `.env.local`; we keep it as a mirror of
+ *  whichever per-network `.env.<network>` is currently active. */
+const LOCAL_ENV = resolve(APP_DIR, ".env.local");
+/** Per-network source-of-truth file bootstrap reads/writes. Set once the
+ *  active network is known (from the CLI arg or `sui client active-env`);
+ *  `patchEnv` and `readEnvFile` operate against this path exclusively. */
+let TARGET_ENV: string = LOCAL_ENV;
+
+function envFileForNetwork(network: string): string {
+  const normalized = network === "local" ? "localnet" : network;
+  return resolve(APP_DIR, `.env.${normalized}`);
+}
 // Shared pubfile used by every package's test-publish call. Per-package
 // pubfiles would let the second publish miss pas's address from the first.
 const PUBFILE_LOCAL_PATH = resolve(REPO_ROOT, "Pubfile.local.toml");
@@ -206,14 +223,15 @@ function findCreated(r: PublishResult, p: (o: PublishObject) => boolean): string
 }
 
 /**
- * Read a single `KEY=value` line from `.env.local` without loading any dotenv
- * machinery. Used by `resolveCustomerKeypair` so a Slush-imported key pinned in
- * the env file survives a re-bootstrap.
+ * Read a single `KEY=value` line from the active per-network env file without
+ * loading any dotenv machinery. Used for reading secret values populated by
+ * a previous bootstrap (tsx doesn't auto-load `.env.local`, so process.env
+ * is empty here even if the file has a value).
  */
 function readEnvFile(key: string): string | undefined {
   let raw = "";
   try {
-    raw = readFileSync(APP_ENV, "utf8");
+    raw = readFileSync(TARGET_ENV, "utf8");
   } catch {
     return undefined;
   }
@@ -223,10 +241,29 @@ function readEnvFile(key: string): string | undefined {
   return line.slice(prefix.length).trim();
 }
 
+/**
+ * Atomic + owner-only write of a secret-carrying file. `writeFileSync`
+ * alone is (a) not atomic (an interrupt mid-write can truncate) and
+ * (b) uses the default umask (typically 0644 = world-readable). Both
+ * matter for `.env.<network>` and `.env.local`, which hold
+ * `DEPLOYER_PRIVATE_KEY` + `ENOKI_PRIVATE_API_KEY`.
+ *
+ * Unlink any stale `.tmp` from a prior aborted run first: Node's
+ * `writeFileSync(..., { mode })` only applies the mode when creating a
+ * new file, so a lingering 0644 tmp would keep world-readable
+ * permissions. The `.tmp` name is gitignored regardless.
+ */
+function writeSecretFile(absPath: string, contents: string): void {
+  const tmp = `${absPath}.tmp`;
+  if (existsSync(tmp)) unlinkSync(tmp);
+  writeFileSync(tmp, contents, { encoding: "utf8", mode: 0o600 });
+  renameSync(tmp, absPath);
+}
+
 function patchEnv(updates: Record<string, string>) {
   let raw = "";
   try {
-    raw = readFileSync(APP_ENV, "utf8");
+    raw = readFileSync(TARGET_ENV, "utf8");
   } catch {
     /* file may not exist yet */
   }
@@ -237,7 +274,7 @@ function patchEnv(updates: Record<string, string>) {
     if (idx >= 0) lines[idx] = next;
     else lines.push(next);
   }
-  writeFileSync(APP_ENV, lines.join("\n"), "utf8");
+  writeSecretFile(TARGET_ENV, lines.join("\n"));
 }
 
 function getActiveAddress(): string {
@@ -248,9 +285,74 @@ function getActiveEnvAlias(): string {
   return execSync("sui client active-env", { encoding: "utf8" }).trim();
 }
 
+/**
+ * CLI: `pnpm bootstrap <network> [--deployer-key=...] [--enoki-api-key=...]`
+ *
+ * `<network>` accepts `localnet`/`testnet`/`mainnet`; anything else throws.
+ * Omitting it falls back to `sui client active-env`. Side effects when set:
+ *   1. `sui client switch --env <alias>` so the CLI targets the right chain
+ *      (with a `local` fallback since Sui CLI's default localnet alias name
+ *      varies between installs).
+ *   2. `NEXT_PUBLIC_SUI_NETWORK=<network>` written to `.env.<network>` and
+ *      mirrored to `.env.local` so the dev server matches on next start.
+ *
+ * Optional flags export their value into `process.env` under the canonical
+ * `DEPLOYER_PRIVATE_KEY` / `ENOKI_PRIVATE_API_KEY` name so downstream
+ * `process.env.X ?? readEnvFile(X)` readers pick them up transparently, and
+ * the terminal env-write block persists them.
+ */
+function applyNetworkFromArgv(): "localnet" | "testnet" | "mainnet" | null {
+  const { values, positionals } = parseArgs({
+    args: process.argv.slice(2),
+    allowPositionals: true,
+    options: {
+      "deployer-key": { type: "string" },
+      "enoki-api-key": { type: "string" },
+    },
+  });
+
+  // Plumb resolved secrets before the network switch so any downstream reader
+  // (including code paths that fire before the terminal patchEnv) sees them.
+  if (values["deployer-key"]) process.env.DEPLOYER_PRIVATE_KEY = values["deployer-key"];
+  if (values["enoki-api-key"]) process.env.ENOKI_PRIVATE_API_KEY = values["enoki-api-key"];
+
+  const arg = positionals[0];
+  if (!arg) return null;
+  if (arg !== "localnet" && arg !== "testnet" && arg !== "mainnet") {
+    throw new Error(
+      `unknown network arg "${arg}" — expected one of localnet | testnet | mainnet`,
+    );
+  }
+  const tryAliases = arg === "localnet" ? ["localnet", "local"] : [arg];
+  let switched: string | null = null;
+  for (const alias of tryAliases) {
+    try {
+      execSync(`sui client switch --env ${alias}`, { encoding: "utf8", stdio: "pipe" });
+      switched = alias;
+      break;
+    } catch {
+      // try next alias
+    }
+  }
+  if (!switched) {
+    throw new Error(
+      `sui client has no env alias matching ${tryAliases.join(" or ")}. ` +
+        `Add one with \`sui client new-env --alias ${arg} --rpc <url>\` first.`,
+    );
+  }
+  TARGET_ENV = envFileForNetwork(arg);
+  console.log(`→ switched sui client to env "${switched}" (from CLI arg)`);
+  patchEnv({ NEXT_PUBLIC_SUI_NETWORK: arg });
+  console.log(`→ target env file: ${TARGET_ENV}`);
+  return arg;
+}
+
 function getActiveRpcUrl(envAlias: string): string {
   const out = execSync("sui client envs --json", { encoding: "utf8" });
-  const data = JSON.parse(out) as Array<{ alias: string; rpc: string }>[];
+  // Actual shape: `[Array<{alias, rpc, ...}>, "activeAlias"]` — a tuple, not
+  // a 2D array. Type it accurately so [0] is the env list and [1] is the
+  // active-alias string (unused here but part of the shape).
+  const data = JSON.parse(out) as [Array<{ alias: string; rpc: string }>, string];
   const envs = data[0];
   const match = envs.find((e) => e.alias === envAlias);
   if (!match) throw new Error(`could not resolve RPC for env "${envAlias}"`);
@@ -265,8 +367,12 @@ async function discoverPasContextFromMVR(
   client: SuiClient,
   network: string,
 ): Promise<{ packageId: string; namespaceId: string }> {
-  const cachedPkg = process.env.NEXT_PUBLIC_PAS_PACKAGE_ID;
-  const cachedNs = process.env.NEXT_PUBLIC_NAMESPACE_ID;
+  // tsx doesn't auto-load `.env.local` — fall back to reading the file so a
+  // dev who pinned these values there doesn't need to shell-export them too.
+  const cachedPkg =
+    process.env.NEXT_PUBLIC_PAS_PACKAGE_ID ?? readEnvFile("NEXT_PUBLIC_PAS_PACKAGE_ID");
+  const cachedNs =
+    process.env.NEXT_PUBLIC_NAMESPACE_ID ?? readEnvFile("NEXT_PUBLIC_NAMESPACE_ID");
   if (cachedPkg && cachedNs) {
     console.log(`  using cached pas context (pkg ${cachedPkg.slice(0, 10)}…)`);
     return { packageId: cachedPkg, namespaceId: cachedNs };
@@ -277,8 +383,8 @@ async function discoverPasContextFromMVR(
     encoding: "utf8",
     env: { ...process.env, MVR_FALLBACK_NETWORK: network },
   });
-  const mvr = JSON.parse(out) as { package_address: string };
-  const packageId = mvr.package_address;
+  const mvr = JSON.parse(out) as { Resolve: { package_address: string } };
+  const packageId = mvr.Resolve.package_address;
 
   const pkgObj = await client.getObject({
     id: packageId,
@@ -303,7 +409,8 @@ function resolveMVR(name: string, network: string): string {
     encoding: "utf8",
     env: { ...process.env, MVR_FALLBACK_NETWORK: network },
   });
-  return (JSON.parse(out) as { package_address: string }).package_address;
+  return (JSON.parse(out) as { Resolve: { package_address: string } }).Resolve
+    .package_address;
 }
 
 function readPubfilePackageId(pubfileAbsPath: string, sourceSuffix: string): string {
@@ -369,53 +476,29 @@ async function discoverPasContextFromPubfile(
   return { packageId, namespaceId: ns.objectId, upgradeCapId };
 }
 
-function deployerKeypair(address: string): Ed25519Keypair {
-  return Ed25519Keypair.fromSecretKey(deployerPrivateKey(address));
-}
-
-function deployerPrivateKey(address: string): string {
-  const out = execSync(`sui keytool export --key-identity ${address} --json`, {
-    encoding: "utf8",
-  });
-  return (JSON.parse(out) as { exportedPrivateKey: string }).exportedPrivateKey;
-}
-
 /**
- * Resolve a stable customer keypair for local-dev signing. Reuses
- * `NON_SPONSORED_CUSTOMER_PRIVATE_KEY` from `.env.local` when present (so re-bootstrapping
- * the same chain doesn't churn the address); otherwise mints a fresh ed25519
- * key. Caller is responsible for funding it via the faucet on local chains.
+ * Load the deployer's ed25519 keypair from `DEPLOYER_PRIVATE_KEY` (set via
+ * `--deployer-key=<suiprivkey1...>` or exported into the shell before
+ * running bootstrap). Same shape on every network — no keystore auto-
+ * export.
  *
- * Used by `/api/init-account` to sign the `account::create_and_share` tx on
- * behalf of any customer wallet that connects — replaces the old sponsor-keypair
- * path now that customer/merchant Slush wallets pay their own gas.
+ * The keypair's derived address must equal `sui client active-address`
+ * because `sui client publish` signs the initial publish tx with the
+ * CLI's active key; a mismatch would land the publish under a different
+ * address than the one bootstrap wires the merchant / access-control
+ * objects to. `main()` runs that check before this helper is ever called.
  */
-function resolveCustomerKeypair(): { keypair: Ed25519Keypair; privateKey: string } {
-  // tsx doesn't auto-load `.env.local`, so process.env is empty here even if the
-  // file has a value. Read the file directly as a fallback before generating
-  // anything new — this is what lets users pin a Slush-imported key and have
-  // bootstrap fund that exact address.
-  const existing =
-    process.env.NON_SPONSORED_CUSTOMER_PRIVATE_KEY ?? readEnvFile("NON_SPONSORED_CUSTOMER_PRIVATE_KEY");
-  if (existing && existing.length > 0) {
-    const { schema, secretKey } = decodeSuiPrivateKey(existing);
-    if (schema === "ED25519") {
-      const keypair = Ed25519Keypair.fromSecretKey(secretKey);
-      return { keypair, privateKey: existing };
-    }
-    console.warn(
-      `  NON_SPONSORED_CUSTOMER_PRIVATE_KEY schema is "${schema}"; regenerating an ed25519 key.`,
+function deployerKeypair(): Ed25519Keypair {
+  const key = process.env.DEPLOYER_PRIVATE_KEY;
+  if (!key || key.length === 0) {
+    throw new Error(
+      "DEPLOYER_PRIVATE_KEY is required. Pass --deployer-key=<suiprivkey1...> " +
+        "or export DEPLOYER_PRIVATE_KEY in your shell. To reuse the Sui CLI's " +
+        "active keystore key: `sui keytool export --key-identity " +
+        "$(sui client active-address) --json | jq -r .exportedPrivateKey`.",
     );
   }
-  const keypair = new Ed25519Keypair();
-  return { keypair, privateKey: keypair.getSecretKey() };
-}
-
-async function fundFromLocalFaucet(address: string): Promise<void> {
-  await requestSuiFromFaucetV2({
-    host: getFaucetHost("localnet"),
-    recipient: address,
-  });
+  return Ed25519Keypair.fromSecretKey(key);
 }
 
 /**
@@ -568,7 +651,7 @@ async function postPublishPTB({
 }> {
   console.log(`\n→ running post-publish PTB`);
 
-  const keypair = deployerKeypair(deployer);
+  const keypair = deployerKeypair();
   const client = new SuiClient({ url: rpcUrl });
   const tx = new Transaction();
 
@@ -676,15 +759,59 @@ async function postPublishPTB({
 }
 
 async function main() {
+  const fromArg = applyNetworkFromArgv();
   const envAlias = getActiveEnvAlias();
+  // Fallback when no CLI arg was passed: derive the target env file from the
+  // sui client's active env. `local` and `localnet` both map to `.env.localnet`.
+  if (!fromArg) {
+    TARGET_ENV = envFileForNetwork(envAlias);
+  }
   const rpcUrl = getActiveRpcUrl(envAlias);
-  const deployer = getActiveAddress();
+  const deployer = deployerKeypair().toSuiAddress();
+  // `sui client publish` (and `test-publish`) signs the initial publish tx
+  // with the CLI's active address. If that differs from the address derived
+  // from --deployer-key, the publish lands under one identity while every
+  // subsequent PTB signs under another. Refuse rather than silently split.
+  const activeCliAddress = getActiveAddress();
+  if (deployer !== activeCliAddress) {
+    throw new Error(
+      `--deployer-key maps to ${deployer} but \`sui client active-address\` ` +
+        `is ${activeCliAddress}. \`sui client publish\` uses the CLI's active ` +
+        `key, so these must match. If the deployer key is already in your Sui ` +
+        `CLI keystore, run \`sui client switch --address ${deployer}\`. ` +
+        `Otherwise import it first: \`sui keytool import "<suiprivkey1...>" ` +
+        `ed25519\`.`,
+    );
+  }
   const client = new SuiClient({ url: rpcUrl });
 
   // Verify the CLI alias actually points where it claims. `sui client active-env`
   // is a user-defined label, not an identity check — without this guard a
   // renamed alias can flip the bootstrap branch silently.
   await assertEnvMatchesChain(client, envAlias);
+
+  // Hard-refuse mainnet. Bootstrap unconditionally publishes
+  // `contracts/stablecoin-mock` and wires it in as the merchant's
+  // `accepted_payment_type` — that mock is freely mintable via
+  // `stablecoin_mock::faucet` and freely transferable via its permissive
+  // TransferApproval (see the WARNING at the top of the .move file).
+  // Settling a real invoice in this currency on mainnet would be
+  // worthless. A production deployment must instantiate `payment::pay<C>`
+  // against a real PAS-issued stablecoin, which the template does not yet
+  // provide. Refuse the bootstrap entirely until that path exists — the
+  // arg parser accepts "mainnet" only so this message can fire; without
+  // this guard the mock would silently publish + link.
+  if (envAlias === "mainnet") {
+    throw new Error(
+      "Bootstrap does not support mainnet: this template publishes " +
+        "`stablecoin-mock` (freely mintable) and wires it as the merchant's " +
+        "accepted payment type. Deploying that on mainnet would let anyone " +
+        "mint the currency your invoices settle in, making them worthless. " +
+        "Wire a real PAS-issued stablecoin first (see the top of " +
+        "`contracts/stablecoin-mock/sources/stablecoin_mock.move` for the " +
+        "constraint that would need lifting), then re-run.",
+    );
+  }
 
   const ephemeral = !isSystemEnv(envAlias);
 
@@ -754,7 +881,7 @@ async function main() {
     // Templates id (for stablecoin_mock::setup).
     const pasInit = await setupPasOnFreshChain(
       client,
-      deployerKeypair(deployer),
+      deployerKeypair(),
       pasPackageId,
       namespaceId,
       pasUpgradeCapId!,
@@ -769,10 +896,13 @@ async function main() {
     ozAccessPkg = resolveMVR("@openzeppelin-move/access", envAlias);
 
     // pas on canonical networks should already have `Templates` initialized.
-    // We can't easily discover it from the publish tx (Templates is created by
-    // a separate `templates::setup` call, not by pas::init), so for now we
-    // expect it to be supplied via env. TODO: derive via derived_object math.
-    templatesId = process.env.NEXT_PUBLIC_TEMPLATES_ID;
+    // We can't easily discover it from the publish tx (Templates is created
+    // by a separate `templates::setup` call, not by pas::init), so we
+    // require it to be supplied via env. Deriving it from a `derived_object`
+    // scheme would remove that requirement — leave that as follow-up work
+    // if it becomes an operational pain-point.
+    templatesId =
+      process.env.NEXT_PUBLIC_TEMPLATES_ID ?? readEnvFile("NEXT_PUBLIC_TEMPLATES_ID");
     if (!templatesId) {
       throw new Error(
         "NEXT_PUBLIC_TEMPLATES_ID is required on testnet/mainnet — set it to the " +
@@ -780,14 +910,36 @@ async function main() {
       );
     }
 
-    clearFile(
-      resolve(REPO_ROOT, "contracts/payments/Published.toml"),
-      "contracts/payments/Published.toml",
-    );
-    clearFile(
-      resolve(REPO_ROOT, "contracts/stablecoin-mock/Published.toml"),
-      "contracts/stablecoin-mock/Published.toml",
-    );
+    // Reuse an existing deployment when `.env.local` already records one.
+    // Bootstrap wrote `NEXT_PUBLIC_MERCHANT_ID` after the last successful
+    // publish, so its presence is our "already deployed" signal — running
+    // publish again would only orphan the previous packages on chain.
+    //
+    // To force a fresh publish (e.g. after changing a contract), delete the
+    // two Published.toml files and clear the deployment-id NEXT_PUBLIC_* lines
+    // in .env.local. If Published.toml still records a deployment but env is
+    // cleared, `sui client publish` will error clearly on its own with
+    // "already published on this environment — use `sui client upgrade`".
+    const existingMerchant =
+      process.env.NEXT_PUBLIC_MERCHANT_ID ?? readEnvFile("NEXT_PUBLIC_MERCHANT_ID");
+    if (existingMerchant) {
+      console.log(
+        `\n✓ ${envAlias}: reusing existing deployment (merchant ${existingMerchant.slice(0, 10)}…).`,
+      );
+      console.log(
+        `  To force a fresh publish: delete contracts/payments/Published.toml, ` +
+          `contracts/stablecoin-mock/Published.toml, and clear the NEXT_PUBLIC_* ` +
+          `deployment ids in .env.local, then re-run.`,
+      );
+      // Mirror the per-network file to `.env.local` before returning. Without
+      // this, `applyNetworkFromArgv` has written `NEXT_PUBLIC_SUI_NETWORK` to
+      // `.env.<network>` but the dev server (reading `.env.local`) still
+      // points at whatever network was previously active — the "reuse"
+      // shortcut would silently leave the FE targeting the wrong chain.
+      writeSecretFile(LOCAL_ENV, readFileSync(TARGET_ENV, "utf8"));
+      console.log(`  mirrored ${TARGET_ENV} -> ${LOCAL_ENV}`);
+      return;
+    }
 
     payments = publishPackage("contracts/payments");
     if (!payments.packageId) throw new Error("payments publish returned no packageId");
@@ -798,6 +950,54 @@ async function main() {
 
     stable = publishPackage("contracts/stablecoin-mock");
     if (!stable.packageId) throw new Error("stablecoin-mock publish returned no packageId");
+
+    // Merchant payout PAS account. On localnet this is created inside
+    // `setupPasOnFreshChain`; on testnet/mainnet we do it here so the
+    // customer-side `pay` flow can take the payout `&Account` without an
+    // extra manual init hop. Pre-check via dev-inspect so we don't hit the
+    // `EAccountAlreadyExists` abort on re-runs — the derived address is
+    // stable per (namespace, payout_address), so re-bootstraps with the
+    // same deployer land on the same account. Any other failure propagates.
+    const probe = new Transaction();
+    probe.moveCall({
+      target: `${pasPackageId}::namespace::account_exists`,
+      arguments: [probe.object(namespaceId), probe.pure.address(deployer)],
+    });
+    const probeResult = await client.devInspectTransactionBlock({
+      sender: deployer,
+      transactionBlock: probe,
+    });
+    if (probeResult.effects?.status?.status !== "success") {
+      throw new Error(
+        `namespace::account_exists probe failed: ${probeResult.effects?.status?.error ?? "unknown"}`,
+      );
+    }
+    const alreadyExists =
+      probeResult.results?.[0]?.returnValues?.[0]?.[0]?.[0] === 1;
+
+    if (alreadyExists) {
+      console.log(`\n✓ payout PAS account for ${deployer} already exists — reusing.`);
+    } else {
+      console.log(`\n→ creating payout PAS account for ${deployer}`);
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${pasPackageId}::account::create_and_share`,
+        arguments: [tx.object(namespaceId), tx.pure.address(deployer)],
+      });
+      tx.setGasBudget(50_000_000n);
+      const result = await client.signAndExecuteTransaction({
+        transaction: tx,
+        signer: deployerKeypair(),
+        options: { showEffects: true },
+      });
+      if (result.effects?.status?.status !== "success") {
+        throw new Error(
+          `payout account creation failed: ${result.effects?.status?.error ?? "unknown"}`,
+        );
+      }
+      await client.waitForTransaction({ digest: result.digest });
+      console.log(`  payout account created (${result.digest})`);
+    }
   }
 
   console.log(`  pas package    ${pasPackageId}`);
@@ -851,7 +1051,7 @@ async function main() {
   }
   const stablecoinCurrencyId = await finalizeStablecoinCurrency({
     client,
-    keypair: deployerKeypair(deployer),
+    keypair: deployerKeypair(),
     ttoCurrencyId,
     stablecoinType,
   });
@@ -873,19 +1073,12 @@ async function main() {
     deployer,
   });
 
-  // Customer-side gas signer for server-routed flows (currently `/api/init-account`).
-  // Persisted in `.env.local` so subsequent runs reuse the same address; topped up
-  // from the localnet faucet on every bootstrap so a freshly-regenesised chain
-  // doesn't leave the customer key broke.
-  const customer = resolveCustomerKeypair();
-  const customerAddress = customer.keypair.toSuiAddress();
-  if (ephemeral) {
-    console.log(`\n→ funding customer address ${customerAddress}`);
-    await fundFromLocalFaucet(customerAddress);
-  }
-
   // Public deployment IDs — always written; no risk if exposed (they're
   // already on chain, and the FE imports them client-side via NEXT_PUBLIC_*).
+  // NEXT_PUBLIC_DEPLOYER_ADDRESS lets the client detect deployer-signed txs
+  // on localnet and skip `/api/sponsor` for them (the deployer doubles as
+  // the localnet gas sponsor — self-sponsorship collides with wallet gas
+  // selection).
   patchEnv({
     NEXT_PUBLIC_PACKAGE_ID: payments.packageId!,
     NEXT_PUBLIC_MERCHANT_ID: merchantId,
@@ -899,29 +1092,39 @@ async function main() {
     NEXT_PUBLIC_PAS_PACKAGE_ID: pasPackageId,
     NEXT_PUBLIC_OZ_ACCESS_PACKAGE_ID: ozAccessPkg,
     NEXT_PUBLIC_TEMPLATES_ID: templatesId!,
+    NEXT_PUBLIC_DEPLOYER_ADDRESS: deployer,
   });
 
-  // Server-side signing keys — only persist on ephemeral (localnet) chains. On
-  // testnet/mainnet, auto-exporting these would turn the deployed app's
-  // `/api/topup` route into an unauthenticated mint endpoint (deployer holds
-  // `TreasuryCap<STABLECOIN_MOCK>`). Operators who genuinely want the dev
-  // faucet on a shared chain must populate these manually with full awareness.
-  if (ephemeral) {
-    patchEnv({
-      // Used by `/api/topup` to sign the stablecoin faucet mint.
-      DEPLOYER_PRIVATE_KEY: deployerPrivateKey(deployer),
-      // Used by `/api/init-account` + `/api/cancel-*` for permissionless server-routed flows.
-      NON_SPONSORED_CUSTOMER_PRIVATE_KEY: customer.privateKey,
-    });
-  } else {
+  // Server-side signing keys — persist whatever the operator supplied via
+  // `--deployer-key` / `--enoki-api-key`, or already had in the shell env.
+  // DEPLOYER_PRIVATE_KEY is guaranteed set by this point (the earlier
+  // `deployerKeypair()` check would have thrown otherwise). ENOKI is
+  // optional and only relevant on testnet/mainnet.
+  const suppliedSecrets: Record<string, string> = {
+    DEPLOYER_PRIVATE_KEY: process.env.DEPLOYER_PRIVATE_KEY!,
+  };
+  if (process.env.ENOKI_PRIVATE_API_KEY) {
+    suppliedSecrets.ENOKI_PRIVATE_API_KEY = process.env.ENOKI_PRIVATE_API_KEY;
+  }
+  patchEnv(suppliedSecrets);
+  console.log(`  wrote secrets: ${Object.keys(suppliedSecrets).join(", ")}`);
+  if (!ephemeral && !process.env.ENOKI_PRIVATE_API_KEY) {
     console.log(
-      `\n⚠ ${envAlias}: skipping DEPLOYER_PRIVATE_KEY / NON_SPONSORED_CUSTOMER_PRIVATE_KEY ` +
-        `auto-export. /api/topup is gated to localnet at the route layer regardless; ` +
-        `populate these manually only if you understand the implications.`,
+      `\n⚠ ${envAlias}: ENOKI_PRIVATE_API_KEY not written. Pass ` +
+        `--enoki-api-key to enable Enoki-sponsored txs on this network, ` +
+        `or populate it manually in ${TARGET_ENV}.`,
     );
   }
 
-  console.log(`\n✓ Bootstrap complete. .env.local patched.\n`);
+  // Mirror the per-network file to `.env.local` so the Next.js dev server
+  // picks it up. `.env.<network>` remains the source of truth for this
+  // network; `pnpm use <network>` swaps which one gets mirrored.
+  const perNetworkContents = readFileSync(TARGET_ENV, "utf8");
+  writeSecretFile(LOCAL_ENV, perNetworkContents);
+
+  console.log(`\n✓ Bootstrap complete.`);
+  console.log(`  wrote:   ${TARGET_ENV}`);
+  console.log(`  mirror:  ${LOCAL_ENV}\n`);
   console.log(`  pas package          ${pasPackageId}`);
   console.log(`  Namespace            ${namespaceId}`);
   console.log(`  payments package     ${payments.packageId}`);

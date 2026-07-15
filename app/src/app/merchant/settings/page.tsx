@@ -153,13 +153,22 @@ function ConfigCard({ merchant }: { merchant: Merchant }) {
   const [voucherTtlMin, setVoucherTtlMin] = useState(
     (merchant.config.voucherTtlMs / MS_PER_MINUTE).toString(),
   );
+  // Depend on the primitive config fields rather than the container object so
+  // a refetch that returns a new `config` reference with equal contents
+  // doesn't wipe in-progress edits.
   useEffect(() => {
     setPayout(merchant.config.payoutAddress);
     setCoefficient(coefficientToDecimal(merchant.config.loyaltyCoefficient));
     setMaxMint(merchant.config.maxLoyaltyPerPayment.toString());
     setInvoiceTtlMin((merchant.config.invoiceTtlMs / MS_PER_MINUTE).toString());
     setVoucherTtlMin((merchant.config.voucherTtlMs / MS_PER_MINUTE).toString());
-  }, [merchant.config]);
+  }, [
+    merchant.config.payoutAddress,
+    merchant.config.loyaltyCoefficient,
+    merchant.config.maxLoyaltyPerPayment,
+    merchant.config.invoiceTtlMs,
+    merchant.config.voucherTtlMs,
+  ]);
 
   const save = useSponsoredMutation<{
     payoutAddress: string;

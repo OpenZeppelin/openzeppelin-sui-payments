@@ -5,4 +5,3 @@ edition = "2024"
 [dependencies]
 pas = { r.mvr = "@pas/pas" }
 openzeppelin_access = { r.mvr = "@openzeppelin-move/access" }
-openzeppelin_math = { r.mvr = "@openzeppelin-move/integer-math" }

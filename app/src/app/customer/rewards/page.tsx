@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Minus, Plus, Gift, RotateCcw, ScanLine } from "lucide-react";
 import { toast } from "sonner";
 
@@ -13,9 +12,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { qk, useBalances, useListings, useMyOpenVouchers } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
+import { useSuiClockMs } from "@/hooks/use-sui-clock";
 import { deployment } from "@/lib/deployment";
 import { buildAccountNewAuth, buildUnlockBalance } from "@/lib/move/pas";
-import { buildCreateVoucher } from "@/lib/move/redemption";
+import { buildCancelExpiredVoucher, buildCreateVoucher } from "@/lib/move/redemption";
 import {
   blake2b256,
   clearPreimage,
@@ -36,11 +36,11 @@ interface CartLine {
 }
 
 export default function RewardsPage() {
-  const account = useCurrentAccount();
-  const customerPas = usePasAccount(account?.address);
+  const address = useCurrentAccount()?.address ?? null;
+  const customerPas = usePasAccount(address);
   const balances = useBalances(customerPas.data ?? null, [deployment.loyaltyType]);
   const { data: listings = [], isLoading } = useListings();
-  const openVouchers = useMyOpenVouchers(account?.address);
+  const openVouchers = useMyOpenVouchers(address);
   const [cart, setCart] = useState<Map<string, CartLine>>(new Map());
   // `created` carries the preimage in-memory so the just-created dialog never
   // depends on a localStorage round-trip — even if persistence later fails,
@@ -50,13 +50,19 @@ export default function RewardsPage() {
   // its on-chain `redeemHash` (not by voucher id).
   const [showingVoucher, setShowingVoucher] = useState<Voucher | null>(null);
 
-  const redeemable = useMemo(
+  // Group redeemable variants by their parent listing so the UI shows one
+  // card per drink with each size as a selectable sub-row.
+  const redeemableGroups = useMemo(
     () =>
-      listings.flatMap((l) =>
-        l.variants
-          .filter((v) => l.active && v.loyaltyPrice !== null)
-          .map((v) => ({ listing: l, variant: v, loyaltyPrice: v.loyaltyPrice! })),
-      ),
+      listings
+        .filter((l) => l.active)
+        .map((l) => ({
+          listing: l,
+          variants: l.variants
+            .filter((v) => v.loyaltyPrice !== null)
+            .map((v) => ({ variant: v, loyaltyPrice: v.loyaltyPrice! })),
+        }))
+        .filter((g) => g.variants.length > 0),
     [listings],
   );
 
@@ -137,11 +143,14 @@ export default function RewardsPage() {
         quantities: lines.map((l) => BigInt(l.quantity)),
         redeemHash,
       });
-    } catch (err) {
+    } catch {
       // Tx failed — no on-chain voucher exists, drop the orphan preimage so
       // localStorage doesn't accumulate entries for never-created vouchers.
+      // Return rather than rethrow: `handleCreate` is invoked as an onClick,
+      // and re-throwing would surface as an unhandled rejection in the dev
+      // overlay. `useSponsoredMutation`'s onError already toasts the user.
       clearPreimage(redeemHash);
-      throw err;
+      return;
     }
 
     // Tx succeeded — clear cart unconditionally so the user can't
@@ -208,70 +217,78 @@ export default function RewardsPage() {
 
       {isLoading ? (
         <p className="text-sm text-[color:var(--color-muted-foreground)]">Loading listings…</p>
-      ) : redeemable.length === 0 ? (
+      ) : redeemableGroups.length === 0 ? (
         <div className="rounded-lg border border-dashed border-[color:var(--color-border)] p-12 text-center text-sm text-[color:var(--color-muted-foreground)]">
           No redeemable items. The merchant hasn&apos;t set a loyalty price on
           any active variant yet.
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 pb-32 md:grid-cols-2">
-          {redeemable.map(({ listing, variant, loyaltyPrice }) => {
-            const qty = cart.get(variant.id)?.quantity ?? 0;
-            return (
-              <Card key={variant.id}>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <CardTitle>
-                      {listing.name} · {variant.name}
-                    </CardTitle>
-                    <Badge variant="accent">{loyaltyPrice.toString()} LOY</Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="flex items-center justify-end gap-2">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Decrease quantity of ${variant.name}`}
-                    onClick={() =>
-                      adjust(
-                        {
-                          variantId: variant.id,
-                          variantName: variant.name,
-                          listingName: listing.name,
-                          loyaltyPrice,
-                        },
-                        -1,
-                      )
-                    }
-                    disabled={qty === 0}
-                  >
-                    <Minus className="h-4 w-4" />
-                  </Button>
-                  <span className="min-w-[1.5rem] text-center text-sm font-medium">
-                    {qty}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Increase quantity of ${variant.name}`}
-                    onClick={() =>
-                      adjust(
-                        {
-                          variantId: variant.id,
-                          variantName: variant.name,
-                          listingName: listing.name,
-                          loyaltyPrice,
-                        },
-                        1,
-                      )
-                    }
-                  >
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                </CardContent>
-              </Card>
-            );
-          })}
+          {redeemableGroups.map(({ listing, variants }) => (
+            <Card key={listing.id}>
+              <CardHeader>
+                <CardTitle>{listing.name}</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col divide-y divide-[color:var(--color-border)]">
+                {variants.map(({ variant, loyaltyPrice }) => {
+                  const qty = cart.get(variant.id)?.quantity ?? 0;
+                  return (
+                    <div
+                      key={variant.id}
+                      className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-medium">{variant.name}</span>
+                        <Badge variant="accent">{loyaltyPrice.toString()} LOY</Badge>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Decrease quantity of ${listing.name} ${variant.name}`}
+                          onClick={() =>
+                            adjust(
+                              {
+                                variantId: variant.id,
+                                variantName: variant.name,
+                                listingName: listing.name,
+                                loyaltyPrice,
+                              },
+                              -1,
+                            )
+                          }
+                          disabled={qty === 0}
+                        >
+                          <Minus className="h-4 w-4" />
+                        </Button>
+                        <span className="min-w-[1.5rem] text-center text-sm font-medium">
+                          {qty}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Increase quantity of ${listing.name} ${variant.name}`}
+                          onClick={() =>
+                            adjust(
+                              {
+                                variantId: variant.id,
+                                variantName: variant.name,
+                                listingName: listing.name,
+                                loyaltyPrice,
+                              },
+                              1,
+                            )
+                          }
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          ))}
         </div>
       )}
 
@@ -329,40 +346,33 @@ function OpenVoucherRow({
   voucher: Voucher;
   onShow: (voucher: Voucher) => void;
 }) {
-  const queryClient = useQueryClient();
-  const now = BigInt(Date.now());
-  const expired = voucher.expiresAtMs <= now;
+  // Compare against on-chain Clock, not wallclock — same reason as invoices
+  // in `/customer/pay`: `expires_at_ms` is `clock.timestamp_ms() + ttl`.
+  const chainNow = useSuiClockMs().data;
+  const expired = chainNow ? voucher.expiresAtMs <= chainNow : false;
   const when = new Date(Number(voucher.expiresAtMs)).toLocaleString();
 
-  const reclaim = useMutation({
-    mutationFn: async (id: string) => {
-      const resp = await fetch("/api/cancel-voucher", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voucherId: id }),
-      });
-      if (!resp.ok) {
-        const err = (await resp.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(err?.error ?? `reclaim failed (${resp.status})`);
-      }
-      return (await resp.json()) as { digest: string };
+  // Customer signs cancel_expired_voucher themselves (sponsored). The tx needs their
+  // PAS account id to route the unlocked LOY back — look it up by the
+  // voucher's `customer` field.
+  const customerPas = usePasAccount(voucher.customer);
+  const reclaim = useSponsoredMutation<{ voucherId: string; customerLoyaltyAccountId: string }>(
+    (tx, args) =>
+      buildCancelExpiredVoucher(tx, {
+        voucherId: args.voucherId,
+        customerLoyaltyAccountId: args.customerLoyaltyAccountId,
+      }),
+    {
+      // Partial-key invalidation on `["balances"]` catches
+      // `["balances", <accountId>, ...]` regardless of the coinTypes tail.
+      invalidate: [
+        ["my-open-vouchers", voucher.customer],
+        ["balances"],
+        qk.events(`${deployment.packageId}::events::VoucherCanceled`),
+      ],
+      successMessage: `Reclaimed ${voucher.amount.toString()} LOY`,
     },
-    onSuccess: async () => {
-      toast.success(`Reclaimed ${voucher.amount.toString()} LOY`);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["my-open-vouchers", voucher.customer] }),
-        // Partial-key invalidation — catches any `["balances", <accountId>, ...]`
-        // regardless of the coinTypes tail.
-        queryClient.invalidateQueries({ queryKey: ["balances"] }),
-        queryClient.invalidateQueries({
-          queryKey: qk.events(`${deployment.packageId}::events::VoucherCanceled`),
-        }),
-      ]);
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Reclaim failed");
-    },
-  });
+  );
 
   return (
     <div className="flex items-center justify-between gap-4 py-3">
@@ -408,8 +418,13 @@ function OpenVoucherRow({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => reclaim.mutate(voucher.id)}
-            disabled={reclaim.isPending}
+            onClick={() =>
+              reclaim.mutate({
+                voucherId: voucher.id,
+                customerLoyaltyAccountId: customerPas.data!,
+              })
+            }
+            disabled={reclaim.isPending || !customerPas.data}
           >
             <RotateCcw className="h-4 w-4" />
             {reclaim.isPending ? "Reclaiming…" : "Reclaim LOY"}

@@ -12,7 +12,7 @@ use openzeppelin_payments::merchant::{
     MERCHANT,
     CashierRole,
     CatalogManagerRole,
-    MerchantRole
+    MerchantRole,
 };
 use openzeppelin_payments::receipt;
 use openzeppelin_payments::test_helpers::assert_emitted;

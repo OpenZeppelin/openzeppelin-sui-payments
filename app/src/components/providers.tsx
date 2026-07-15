@@ -25,7 +25,12 @@ function EnokiWalletRegistration() {
 
   useEffect(() => {
     if (!enokiPublicKey) return;
-    if (NETWORK !== "testnet" && NETWORK !== "mainnet" && NETWORK !== "devnet") return;
+    // Enoki's server-side sponsorship only supports testnet + mainnet (see
+    // `enokiNetwork()` in /api/enoki-sponsor). Registering the walletless
+    // Google option on any other network would let users sign in and then
+    // hit a 500 on the first sponsored action. Keep the option hidden on
+    // localnet and devnet — extension wallets still work there.
+    if (NETWORK !== "testnet" && NETWORK !== "mainnet") return;
 
     const { unregister } = registerEnokiWallets({
       // pnpm has hoisted two @mysten/sui versions (dapp-kit + enoki resolved
@@ -41,6 +46,12 @@ function EnokiWalletRegistration() {
           clientId:
             process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ??
             "PLACEHOLDER_GOOGLE_CLIENT_ID",
+          // Pin the OAuth redirect to a single stable URL so Google's OAuth
+          // client only needs one entry in Authorized redirect URIs. Without
+          // this, Enoki defaults to the current page URL — meaning every
+          // page a user might click Login from would need its own URI in
+          // Google Cloud Console.
+          redirectUrl: `${window.location.origin}/auth/callback`,
         },
       },
     });
@@ -69,9 +80,20 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <QueryClientProvider client={queryClient}>
       <SuiClientProvider networks={networkConfig} defaultNetwork={NETWORK}>
         <EnokiWalletRegistration />
-        {/* No walletFilter — any wallet-standard wallet (browser extension,
+        {/* Per-tab wallet state: default `storage` is `localStorage`, which
+            leaks across tabs/windows of the same origin (auto-connect fires
+            everywhere the moment one tab connects). Using `sessionStorage`
+            isolates that state per browsing context — you can run two
+            windows side-by-side (e.g. one merchant, one customer) without
+            one flipping the other's connection.
+            No walletFilter — any wallet-standard wallet (browser extension,
             Enoki zkLogin, etc.) shows up in the connect modal. */}
-        <WalletProvider autoConnect>{children}</WalletProvider>
+        <WalletProvider
+          autoConnect
+          storage={typeof window !== "undefined" ? window.sessionStorage : undefined}
+        >
+          {children}
+        </WalletProvider>
       </SuiClientProvider>
     </QueryClientProvider>
   );

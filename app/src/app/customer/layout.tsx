@@ -28,8 +28,12 @@ export default function CustomerLayout({ children }: { children: React.ReactNode
             </Link>
           )}
           <div className="flex items-center gap-4">
+            {/* Route directly to the merchant dashboard; going through `/`
+                would just re-auto-route a connected wallet back here (or to
+                `/merchant/catalogue` if it holds any staff role), so the
+                link has to bypass the landing page's role-check. */}
             <Link
-              href="/"
+              href="/merchant/catalogue"
               className="text-sm text-[color:var(--color-muted-foreground)] hover:underline"
             >
               Switch role

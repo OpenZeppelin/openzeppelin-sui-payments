@@ -1,4 +1,4 @@
-/// WARNING — DEVNET/TESTNET ONLY. Do NOT publish this package to mainnet, and never set a
+/// WARNING — LOCALNET/TESTNET ONLY. Do NOT publish this package to mainnet, and never set a
 /// production `Merchant`'s `accepted_payment_type` to `STABLECOIN_MOCK`. The supply is freely
 /// mintable (`faucet` / `faucet_coin`) and transfers are freely approvable (the permissive
 /// `TransferApproval`), so settling a real invoice in this currency would be worthless.
@@ -45,7 +45,7 @@ fun init(otw: STABLECOIN_MOCK, ctx: &mut TxContext) {
         6,
         b"MOCKUSD".to_string(),
         b"Mock USD".to_string(),
-        b"Mock PAS-managed stablecoin for OpenZeppelin Sui Payments template (devnet only).".to_string(),
+        b"Mock PAS-managed stablecoin for OpenZeppelin Sui Payments template (localnet/testnet only).".to_string(),
         b"".to_string(),
         ctx,
     );
@@ -58,7 +58,7 @@ fun init(otw: STABLECOIN_MOCK, ctx: &mut TxContext) {
 // === Structs ===
 
 /// Permissive transfer approval witness. Anyone can produce one — the mock allows
-/// free transfers (devnet only). A real PAS stablecoin would gate this on KYC,
+/// free transfers (localnet/testnet only). A real PAS stablecoin would gate this on KYC,
 /// allowlist, etc.
 public struct TransferApproval() has drop;
 
@@ -103,7 +103,7 @@ public fun setup(
 /// Account. Requires the holder of `TreasuryCap<STABLECOIN_MOCK>` (owned by
 /// the deployer after `init`) to call; not a permissionless tap. For a real
 /// permissionless faucet, wrap the cap inside a shared object with rate-limiting.
-/// Devnet only.
+/// Localnet/testnet only.
 public fun faucet(
     cap: &mut TreasuryCap<STABLECOIN_MOCK>,
     recipient_account: &Account,
@@ -118,7 +118,7 @@ public fun faucet(
 /// (or `public_transfer`-ed to a customer), not held in a PAS Account. Requires
 /// the holder of `TreasuryCap<STABLECOIN_MOCK>` (owned by the deployer after
 /// `init`) to call; not a permissionless tap. For a real permissionless faucet,
-/// wrap the cap inside a shared object with rate-limiting. Devnet only.
+/// wrap the cap inside a shared object with rate-limiting. Localnet/testnet only.
 public fun faucet_coin(
     cap: &mut TreasuryCap<STABLECOIN_MOCK>,
     amount: u64,

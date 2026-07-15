@@ -11,6 +11,29 @@ export function shortAddr(addr: string, chars = 4): string {
 }
 
 /**
+ * Format receipt line items as a compact "Listing · Variant" list, one entry
+ * per line item, quantity-prefixed if > 1. Variants that have since been
+ * removed from the catalog fall back to their short variant id — receipts
+ * outlive the catalog, so lookup misses are normal. Callers pass the current
+ * `useListings().data` array; a missing/empty catalog collapses to short ids.
+ */
+export function formatItems(
+  items: readonly { variantId: string; quantity: bigint }[],
+  listings: readonly { name: string; variants: readonly { id: string; name: string }[] }[],
+): string {
+  const lookup = new Map<string, { listing: string; variant: string }>();
+  for (const l of listings)
+    for (const v of l.variants) lookup.set(v.id, { listing: l.name, variant: v.name });
+  return items
+    .map((it) => {
+      const qty = it.quantity > 1n ? `${it.quantity}× ` : "";
+      const hit = lookup.get(it.variantId);
+      return hit ? `${qty}${hit.listing} · ${hit.variant}` : `${qty}${shortAddr(it.variantId, 6)}`;
+    })
+    .join(", ");
+}
+
+/**
  * Decimal places used by the mock stablecoin (matches `stablecoin_mock::init`,
  * which calls `new_currency_with_otw(..., 6, ...)`). All UI conversions between
  * human-entered amounts (e.g. "500") and on-chain u64 base units go through

@@ -5,11 +5,23 @@ dist/
 build/
 *.tsbuildinfo
 
-# env
+# env — everything except the template. Per-network files (`.env.localnet`,
+# `.env.testnet`, `.env.mainnet`) hold private keys and Enoki secrets, as
+# does the `.env.local` mirror. `.env.*.local` catches Next.js's per-env
+# local overrides (`.env.development.local`, `.env.production.local`,
+# `.env.test.local`). `*.tmp` variants catch the temp files written by
+# `scripts/use.ts` and `bootstrap.ts` between the write and the rename;
+# an interrupt mid-flight can leave those on disk containing secrets.
 .env
+.env.*.local
 .env.local
-.env.development.local
-.env.production.local
+.env.local.tmp
+.env.localnet
+.env.localnet.tmp
+.env.testnet
+.env.testnet.tmp
+.env.mainnet
+.env.mainnet.tmp
 
 # logs
 npm-debug.log*

@@ -17,8 +17,8 @@ import { STABLECOIN_DECIMALS, formatAmount, shortAddr, toBaseUnits } from "@/lib
 const QUICK_AMOUNTS = ["10", "50", "100"];
 
 export default function TopupPage() {
-  const account = useCurrentAccount();
-  const pas = usePasAccount(account?.address);
+  const address = useCurrentAccount()?.address ?? null;
+  const pas = usePasAccount(address);
   const queryClient = useQueryClient();
   const router = useRouter();
 
@@ -63,7 +63,13 @@ export default function TopupPage() {
       toast.error(err instanceof Error ? err.message : "Invalid amount");
       return;
     }
-    await topup.mutateAsync({ amount: units, recipientAccountId: pas.data });
+    // Silence unhandled-rejection reaching the dev overlay; the mutation's
+    // own onError handler already toasts the user.
+    try {
+      await topup.mutateAsync({ amount: units, recipientAccountId: pas.data });
+    } catch {
+      /* handled */
+    }
   }
 
   const accountReady = pas.data !== null && pas.data !== undefined;

@@ -17,6 +17,8 @@ import {
 } from "@/components/ui/dialog";
 import { qk, useVoucher } from "@/hooks/queries";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
+import { useSuiClockMs } from "@/hooks/use-sui-clock";
+import { useVariantLookup } from "@/hooks/use-variant-lookup";
 import { buildRedeem } from "@/lib/move/redemption";
 import { deployment } from "@/lib/deployment";
 import { blake2b256, bytesEqual } from "@/lib/preimage";
@@ -32,6 +34,8 @@ export default function RedeemPage() {
   const [scanned, setScanned] = useState<ScannedVoucher | null>(null);
   const [done, setDone] = useState<{ amount: bigint; customer: string } | null>(null);
   const voucher = useVoucher(scanned?.voucherId ?? null);
+
+  const variantLookup = useVariantLookup();
 
   const redeem = useSponsoredMutation<ScannedVoucher>(
     (tx, args) => {
@@ -54,7 +58,15 @@ export default function RedeemPage() {
 
   async function handleRedeem() {
     if (!voucher.data || !scanned) return;
-    await redeem.mutateAsync(scanned);
+    // `mutateAsync` re-throws on failure so we can gate the post-success
+    // state updates below. Local try/catch silences the unhandled-rejection
+    // that would otherwise reach the dev overlay — the user-facing toast is
+    // already emitted by `useSponsoredMutation`'s onError handler.
+    try {
+      await redeem.mutateAsync(scanned);
+    } catch {
+      return;
+    }
     setDone({ amount: voucher.data.amount, customer: voucher.data.customer });
     setScanned(null);
   }
@@ -68,8 +80,17 @@ export default function RedeemPage() {
     setScanned(parsed);
   }
 
-  const now = Date.now();
-  const expired = voucher.data ? voucher.data.expiresAtMs <= BigInt(now) : false;
+  // Compare against the on-chain Clock at 0x6 — wallclock can lag the localnet
+  // Clock by many minutes, so `Date.now()` mismarks fresh vouchers as expired.
+  //
+  // Fail closed while the chain clock is still loading: clicking Redeem on
+  // a nominally-active-but-actually-expired voucher would waste gas on
+  // `EVoucherExpired`. Small UX cost (~1 poll interval on first paint).
+  const chainNow = useSuiClockMs().data;
+  const clockUnknown = chainNow === undefined;
+  const expired = Boolean(
+    voucher.data && !clockUnknown && voucher.data.expiresAtMs <= chainNow,
+  );
 
   return (
     <section>
@@ -146,12 +167,14 @@ export default function RedeemPage() {
                 Items
               </div>
               <ul className="mt-1 list-disc pl-5 text-sm">
-                {voucher.data.items.map((it, i) => (
-                  <li key={i}>
-                    {it.quantity.toString()}× variant {shortAddr(it.variantId, 4)} ·{" "}
-                    {it.price.toString()} LOY
-                  </li>
-                ))}
+                {voucher.data.items.map((it, i) => {
+                  const label = variantLookup.get(it.variantId) ?? shortAddr(it.variantId, 6);
+                  return (
+                    <li key={i}>
+                      {it.quantity.toString()}× {label} · {it.price.toString()} LOY
+                    </li>
+                  );
+                })}
               </ul>
             </div>
             {preimageMatch === false ? (
@@ -167,7 +190,7 @@ export default function RedeemPage() {
               </Button>
               <Button
                 onClick={handleRedeem}
-                disabled={expired || redeem.isPending || preimageMatch === false}
+                disabled={clockUnknown || expired || redeem.isPending || preimageMatch === false}
               >
                 {redeem.isPending ? "Redeeming…" : "Redeem"}
               </Button>

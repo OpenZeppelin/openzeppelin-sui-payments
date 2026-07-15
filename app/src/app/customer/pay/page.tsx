@@ -12,6 +12,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { qk, useInvoice } from "@/hooks/queries";
 import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
+import { useSuiClockMs } from "@/hooks/use-sui-clock";
+import { useVariantLookup } from "@/hooks/use-variant-lookup";
 import { deployment } from "@/lib/deployment";
 import {
   buildAccountNewAuth,
@@ -24,12 +26,14 @@ import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
 
 export default function CustomerPayPage() {
   const router = useRouter();
-  const account = useCurrentAccount();
+  const address = useCurrentAccount()?.address ?? null;
   const [invoiceId, setInvoiceId] = useState<string | null>(null);
 
   const invoice = useInvoice(invoiceId);
-  const customerPas = usePasAccount(account?.address);
+  const customerPas = usePasAccount(address);
   const merchantPas = usePasAccount(invoice.data?.payoutAddress ?? null);
+
+  const variantLookup = useVariantLookup();
 
   const pay = useSponsoredMutation<{
     invoiceId: string;
@@ -66,20 +70,37 @@ export default function CustomerPayPage() {
     if (!invoice.data || !invoiceId || !customerPas.data || !merchantPas.data) return;
     const amount = invoice.data.amount;
     const loyalty = invoice.data.loyalty;
-    await pay.mutateAsync({
-      invoiceId,
-      amount,
-      customerAccountId: customerPas.data,
-      merchantAccountId: merchantPas.data,
-    });
+    // See merchant/redeem: silence unhandled-rejection; onError toast is
+    // already emitted by `useSponsoredMutation`.
+    try {
+      await pay.mutateAsync({
+        invoiceId,
+        amount,
+        customerAccountId: customerPas.data,
+        merchantAccountId: merchantPas.data,
+      });
+    } catch {
+      return;
+    }
     toast.success(
       `Paid ${formatAmount(amount, STABLECOIN_DECIMALS)} USD · earned ${loyalty.toString()} LOY`,
     );
     router.push("/customer");
   }
 
-  const now = Date.now();
-  const expired = invoice.data ? invoice.data.expiresAtMs <= BigInt(now) : false;
+  // Compare against the on-chain Clock, not wallclock. Sui's `Clock` is what
+  // sets `expires_at_ms`, so wallclock drift (particularly on localnet) can
+  // otherwise mark a fresh invoice as expired the moment it's issued.
+  //
+  // Fail closed while the chain clock is still loading: without a known
+  // reference, we can't tell whether the invoice is expired, and clicking
+  // Pay on a nominally-active-but-actually-expired invoice would waste gas
+  // on a `EInvoiceExpired` abort. Small UX cost (~1 poll interval on first
+  // paint) for correctness.
+  const chainNow = useSuiClockMs().data;
+  const clockUnknown = chainNow === undefined;
+  const expired =
+    !clockUnknown && invoice.data ? invoice.data.expiresAtMs <= chainNow : false;
   const merchantAccountReady = merchantPas.data !== null && merchantPas.data !== undefined;
   const customerAccountReady = customerPas.data !== null && customerPas.data !== undefined;
   // Self-payment is a structural dead-end: `account::send_balance(from, .., to, ..)`
@@ -88,9 +109,9 @@ export default function CustomerPayPage() {
   // message rather than letting the chain produce a cryptic error.
   const isSelfPayment =
     Boolean(
-      account?.address &&
+      address &&
         invoice.data &&
-        account.address.toLowerCase() === invoice.data.payoutAddress.toLowerCase(),
+        address.toLowerCase() === invoice.data.payoutAddress.toLowerCase(),
     );
 
   return (
@@ -177,12 +198,14 @@ export default function CustomerPayPage() {
                 Items
               </div>
               <ul className="mt-1 list-disc pl-5 text-sm">
-                {invoice.data.items.map((it, i) => (
-                  <li key={i}>
-                    {it.quantity.toString()}× variant {shortAddr(it.variantId, 4)} ·{" "}
-                    {formatAmount(it.price, 6)} USD
-                  </li>
-                ))}
+                {invoice.data.items.map((it, i) => {
+                  const label = variantLookup.get(it.variantId) ?? shortAddr(it.variantId, 6);
+                  return (
+                    <li key={i}>
+                      {it.quantity.toString()}× {label} · {formatAmount(it.price, 6)} USD
+                    </li>
+                  );
+                })}
               </ul>
             </div>
             {!customerAccountReady ? (
@@ -211,6 +234,7 @@ export default function CustomerPayPage() {
               <Button
                 onClick={handlePay}
                 disabled={
+                  clockUnknown ||
                   expired ||
                   isSelfPayment ||
                   pay.isPending ||

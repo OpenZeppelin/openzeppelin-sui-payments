@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { qk, useVoucher, useVoucherReceipt } from "@/hooks/queries";
+import { useVariantLookup } from "@/hooks/use-variant-lookup";
 import { deployment } from "@/lib/deployment";
 import { shortAddr } from "@/lib/utils";
 
@@ -54,6 +55,7 @@ export function VoucherStatusDialog({
   const target = open ? voucherId : null;
   const voucher = useVoucher(target, { pollMs: POLL_MS });
   const receipt = useVoucherReceipt(target, { pollMs: POLL_MS });
+  const variantLookup = useVariantLookup();
 
   useEffect(() => {
     if (!receipt.data && !(voucher.isSuccess && voucher.data === null)) return;
@@ -73,6 +75,9 @@ export function VoucherStatusDialog({
     // Cancellation refunds LOY into the customer's PAS account — invalidate
     // any cached balance for it.
     void queryClient.invalidateQueries({ queryKey: ["balances"] });
+    // History = receipts. Redemption just landed; make sure the customer's
+    // history reflects it on next visit even if they're not currently on it.
+    void queryClient.invalidateQueries({ queryKey: ["receipts"] });
   }, [receipt.data, voucher.isSuccess, voucher.data, voucherId, queryClient]);
 
   const redeemed = receipt.data;
@@ -111,12 +116,14 @@ export function VoucherStatusDialog({
                   Items
                 </div>
                 <ul className="mt-1 list-disc pl-5">
-                  {redeemed.items.map((it, i) => (
-                    <li key={i}>
-                      {it.quantity.toString()}× variant{" "}
-                      {shortAddr(it.variantId, 4)} · {it.price.toString()} LOY
-                    </li>
-                  ))}
+                  {redeemed.items.map((it, i) => {
+                    const label = variantLookup.get(it.variantId) ?? shortAddr(it.variantId, 6);
+                    return (
+                      <li key={i}>
+                        {it.quantity.toString()}× {label} · {it.price.toString()} LOY
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
               <div className="text-xs text-[color:var(--color-muted-foreground)]">

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Plus } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -66,6 +67,15 @@ export function AddVariantDialog({ listingId }: { listingId: string }) {
           className="grid gap-4"
           onSubmit={(e) => {
             e.preventDefault();
+            // `type=number` allows "1.5" and "1e3" — both would throw an ugly
+            // Cannot-convert error from BigInt() downstream. Reject up front.
+            // `[1-9]\d*` rejects `0` as well as non-digit input — `0 LOY`
+            // is almost certainly a "meant to leave blank" mistake, and
+            // "0 LOY per redemption" would produce a nonsense free voucher.
+            if (form.loyaltyPrice && !/^[1-9]\d*$/.test(form.loyaltyPrice.trim())) {
+              toast.error("Loyalty price must be a positive integer.");
+              return;
+            }
             addVariant.mutate(form, {
               onSuccess: () => {
                 setForm(empty);

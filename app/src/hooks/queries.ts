@@ -1,7 +1,7 @@
 "use client";
 
 import { useSuiClient } from "@mysten/dapp-kit";
-import type { SuiClient, SuiEvent, SuiEventFilter } from "@mysten/sui/client";
+import type { SuiClient, SuiEvent } from "@mysten/sui/client";
 import { Transaction } from "@mysten/sui/transactions";
 import { useQuery } from "@tanstack/react-query";
 
@@ -26,14 +26,22 @@ import {
 // ---------------------------------------------------------------------------
 export const qk = {
   merchant: () => ["merchant"] as const,
-  listings: () => ["merchant", "listings"] as const,
+  // Independent root so `qk.merchant()` invalidations (config edits) don't
+  // re-trigger the expensive N+1 listings walk.
+  listings: () => ["listings"] as const,
   invoice: (id: string) => ["invoice", id] as const,
   voucher: (id: string) => ["voucher", id] as const,
   invoiceReceipt: (id: string) => ["invoiceReceipt", id] as const,
   voucherReceipt: (id: string) => ["voucherReceipt", id] as const,
   receipts: (address: string) => ["receipts", address] as const,
   balances: (accountId: string) => ["balances", accountId] as const,
-  events: (type: string) => ["events", type] as const,
+  // `limit` is part of the cache key so two callers with different limits
+  // don't share (and clobber) one cache entry.
+  events: (type: string, limit?: number) =>
+    (limit === undefined ? ["events", type] : ["events", type, limit]) as readonly unknown[],
+  myOpenVouchers: (customerAddress: string) => ["my-open-vouchers", customerAddress] as const,
+  storedReceipts: (invoiceReceiptsTableId: string, voucherReceiptsTableId: string) =>
+    ["stored-receipts", invoiceReceiptsTableId, voucherReceiptsTableId] as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -119,23 +127,30 @@ async function readTableValueByIdKey<T>(
   return parse(key, { fields: content.fields.value.fields });
 }
 
-/** Walk `queryEvents` to exhaustion via `hasNextPage` / `nextCursor`. */
-async function queryAllEvents(
+/**
+ * Fetch up to `maxPages` pages of a single `MoveEventType`, descending. We
+ * scope the walk because customer-history callers filter client-side and a
+ * runaway walk would blow the tab budget. For real deployments an indexer
+ * replaces this call entirely.
+ */
+async function queryEvents(
   client: SuiClient,
-  query: SuiEventFilter,
+  moveEventType: string,
+  maxPages: number,
 ): Promise<SuiEvent[]> {
   const out: SuiEvent[] = [];
   let cursor: Parameters<SuiClient["queryEvents"]>[0]["cursor"] = null;
-  do {
+  for (let i = 0; i < maxPages; i++) {
     const page = await client.queryEvents({
-      query,
+      query: { MoveEventType: moveEventType },
       cursor,
       limit: 200,
       order: "descending",
     });
     out.push(...page.data);
-    cursor = page.hasNextPage ? page.nextCursor : null;
-  } while (cursor);
+    if (!page.hasNextPage || !page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
   return out;
 }
 
@@ -189,7 +204,7 @@ export function useMyOpenVouchers(customerAddress: string | null | undefined) {
   const merchantQuery = useMerchant();
   const vouchersTableId = merchantQuery.data?.vouchersTableId;
   return useQuery({
-    queryKey: ["my-open-vouchers", customerAddress ?? ""],
+    queryKey: qk.myOpenVouchers(customerAddress ?? ""),
     enabled: Boolean(customerAddress) && Boolean(vouchersTableId),
     queryFn: async (): Promise<Voucher[]> => {
       const out: Voucher[] = [];
@@ -233,7 +248,7 @@ export function useStoredReceipts(options: { pollMs?: number } = {}) {
   const inv = merchantQuery.data?.invoiceReceiptsTableId;
   const vou = merchantQuery.data?.voucherReceiptsTableId;
   return useQuery({
-    queryKey: ["stored-receipts", inv ?? "", vou ?? ""],
+    queryKey: qk.storedReceipts(inv ?? "", vou ?? ""),
     enabled: Boolean(inv) && Boolean(vou),
     refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
     queryFn: async (): Promise<{ invoice: string[]; voucher: string[] }> => {
@@ -306,36 +321,45 @@ export function useVoucherReceipt(
 // and resolve each into a full receipt via the merchant tables.
 // ---------------------------------------------------------------------------
 
-export function useReceipts(address: string | null | undefined) {
+export function useReceipts(
+  address: string | null | undefined,
+  options: { pollMs?: number } = {},
+) {
   const client = useSuiClient();
   const merchantQuery = useMerchant();
   return useQuery({
     queryKey: qk.receipts(address ?? ""),
     enabled: Boolean(address) && Boolean(merchantQuery.data),
+    // Redemptions happen on the cashier side (a different tab / device from
+    // the customer), so the customer's history has no cross-client
+    // invalidation path. Poll while the page is open to pick them up.
+    refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
     queryFn: async () => {
       const merchant = merchantQuery.data!;
-      // Server-side filter by customer (MoveEventField + MoveEventType compound)
-      // returns only this customer's events, so we never lose old receipts to a
-      // 200-event global window. Page-walked to exhaustion via hasNextPage.
-      // `All` is typed as `[]` in @mysten/sui — cast via unknown to bypass the
-      // empty-tuple SDK type bug; runtime accepts the array.
+      // Filter by customer client-side. The compound `{ All: [MoveEventType,
+      // MoveEventField] }` filter returns "Invalid params" on public testnet
+      // fullnodes (the RPC parser rejects the compound form entirely), so
+      // server-side filtering by `/customer` is not viable. Fetch by event
+      // type, then filter the parsedJson. Page walk is capped at MAX_PAGES.
+      //
+      // Failure mode at scale: since the cap is global across all customers
+      // (not per-customer), once total on-chain InvoicePaid + VoucherRedeemed
+      // volume exceeds MAX_PAGES * pageSize (~1000 each), older receipts for
+      // any given customer silently fall outside the walked window and vanish
+      // from History with no error or user-visible indication. A template
+      // deployment intended for real traffic should be paired with a proper
+      // indexer that supports customer-scoped queries.
+      const MAX_PAGES = 5;
       const [paid, redeemed] = await Promise.all([
-        queryAllEvents(client, {
-          All: [
-            { MoveEventType: `${deployment.packageId}::events::InvoicePaid` },
-            { MoveEventField: { path: "/customer", value: address } },
-          ],
-        } as unknown as SuiEventFilter),
-        queryAllEvents(client, {
-          All: [
-            { MoveEventType: `${deployment.packageId}::events::VoucherRedeemed` },
-            { MoveEventField: { path: "/customer", value: address } },
-          ],
-        } as unknown as SuiEventFilter),
+        queryEvents(client, `${deployment.packageId}::events::InvoicePaid`, MAX_PAGES),
+        queryEvents(client, `${deployment.packageId}::events::VoucherRedeemed`, MAX_PAGES),
       ]);
 
+      const mine = (e: SuiEvent) =>
+        (e.parsedJson as { customer?: string } | undefined)?.customer === address;
+
       const paymentReceipts = await Promise.all(
-        paid.map((e) =>
+        paid.filter(mine).map((e) =>
           readTableValueByIdKey(
             client,
             merchant.invoiceReceiptsTableId,
@@ -345,7 +369,7 @@ export function useReceipts(address: string | null | undefined) {
         ),
       );
       const redemptionReceipts = await Promise.all(
-        redeemed.map((e) =>
+        redeemed.filter(mine).map((e) =>
           readTableValueByIdKey(
             client,
             merchant.voucherReceiptsTableId,
@@ -399,27 +423,32 @@ export function useBalances(accountId: string | null | undefined, coinTypes: str
 // Events (for the merchant Transactions page)
 // ---------------------------------------------------------------------------
 
-const EVENT_TYPES = {
-  InvoicePaid: `${deployment.packageId}::events::InvoicePaid`,
-  InvoiceCanceled: `${deployment.packageId}::events::InvoiceCanceled`,
-  VoucherRedeemed: `${deployment.packageId}::events::VoucherRedeemed`,
-  VoucherCanceled: `${deployment.packageId}::events::VoucherCanceled`,
-  InvoiceCreated: `${deployment.packageId}::events::InvoiceCreated`,
-  VoucherCreated: `${deployment.packageId}::events::VoucherCreated`,
-} as const;
+// Event-type keys accepted by `useEvents`. The fully-qualified type string
+// is built inside the hook (see below) rather than at module load, so any
+// module importing `queries.ts` doesn't trigger `deployment.packageId`'s
+// throwing getter when `NEXT_PUBLIC_PACKAGE_ID` is unset.
+type EventName =
+  | "InvoicePaid"
+  | "InvoiceCanceled"
+  | "VoucherRedeemed"
+  | "VoucherCanceled"
+  | "InvoiceCreated"
+  | "VoucherCreated";
 
-export function useEvents<T extends keyof typeof EVENT_TYPES>(
+export function useEvents<T extends EventName>(
   name: T,
   options: { limit?: number; pollMs?: number } = {},
 ) {
   const client = useSuiClient();
+  const limit = options.limit ?? 50;
+  const eventType = `${deployment.packageId}::events::${name}`;
   return useQuery({
-    queryKey: qk.events(EVENT_TYPES[name]),
+    queryKey: qk.events(eventType, limit),
     refetchInterval: options.pollMs && options.pollMs > 0 ? options.pollMs : false,
     queryFn: async () => {
       const r = await client.queryEvents({
-        query: { MoveEventType: EVENT_TYPES[name] },
-        limit: options.limit ?? 50,
+        query: { MoveEventType: eventType },
+        limit,
         order: "descending",
       });
       return r.data.map((e) => ({

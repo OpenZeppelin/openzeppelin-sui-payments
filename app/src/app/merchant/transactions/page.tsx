@@ -1,41 +1,34 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { InvoiceQrButton } from "@/components/merchant/invoice-qr-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { qk, useEvents, useInvoice, useStoredReceipts, useVoucher } from "@/hooks/queries";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import {
+  qk,
+  useEvents,
+  useInvoice,
+  useInvoiceReceipt,
+  useListings,
+  useStoredReceipts,
+  useVoucher,
+  useVoucherReceipt,
+} from "@/hooks/queries";
+import { usePasAccount } from "@/hooks/use-pas-account";
 import { useSponsoredMutation } from "@/hooks/use-sponsored-mutation";
+import { useSuiClockMs } from "@/hooks/use-sui-clock";
 import { deployment } from "@/lib/deployment";
-import { buildPruneInvoiceReceipts } from "@/lib/move/payment";
-import { buildPruneVoucherReceipts } from "@/lib/move/redemption";
-import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
+import { buildCancelExpiredInvoice, buildPruneInvoiceReceipts } from "@/lib/move/payment";
+import { buildCancelExpiredVoucher, buildPruneVoucherReceipts } from "@/lib/move/redemption";
+import { STABLECOIN_DECIMALS, formatAmount, formatItems, shortAddr } from "@/lib/utils";
 
 const PRUNE_BATCH_SIZE = 50;
 /** Refresh cadence for events + receipt counts while this page is open. */
 const POLL_MS = 3_000;
-/** Tick cadence for re-evaluating "Expired" badges from the wall clock. */
-const CLOCK_TICK_MS = 5_000;
-
-/**
- * Returns a value that changes every `intervalMs` so any component using it
- * re-renders on a clock-driven cadence. Used to flip "Open" rows to "Expired"
- * the moment `expiresAtMs` passes — pure time-based transitions don't fire
- * events, so polling alone can't catch them.
- */
-function useClockTick(intervalMs: number) {
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), intervalMs);
-    return () => clearInterval(t);
-  }, [intervalMs]);
-  return tick;
-}
 
 type EventName =
   | "InvoiceCreated"
@@ -123,6 +116,24 @@ export default function TransactionsPage() {
     redeemed.isLoading ||
     vouCx.isLoading;
 
+  // Business summary — computed off the InvoicePaid / VoucherRedeemed streams.
+  // Revenue is a bigint sum in stablecoin base units; avg-order divides in the
+  // same base so precision is preserved through `formatAmount`.
+  const { revenue, payments, avgOrder, redemptions } = useMemo(() => {
+    let revenueSum = 0n;
+    for (const e of paid.data ?? []) {
+      revenueSum += BigInt((e.parsed.amount as string | number | undefined) ?? 0);
+    }
+    const paymentCount = paid.data?.length ?? 0;
+    const avg = paymentCount > 0 ? revenueSum / BigInt(paymentCount) : 0n;
+    return {
+      revenue: revenueSum,
+      payments: paymentCount,
+      avgOrder: avg,
+      redemptions: redeemed.data?.length ?? 0,
+    };
+  }, [paid.data, redeemed.data]);
+
   return (
     <section>
       <header className="mb-6 flex items-start justify-between gap-4">
@@ -144,29 +155,69 @@ export default function TransactionsPage() {
       ) : (
         <Card>
           <CardHeader>
-            <CardTitle>{feed.length} events</CardTitle>
+            {/* KPIs sum the last 100 InvoicePaid / VoucherRedeemed events per
+                query (see `limit: 100` above). Labels call this out explicitly
+                so users don't read them as absolute-lifetime totals — once
+                deployment volume exceeds the window, older events silently
+                fall outside. Pair with a proper indexer for real-time totals. */}
+            <div className="grid grid-cols-2 gap-6 md:grid-cols-4">
+              <Stat
+                label="Revenue (recent)"
+                value={`${formatAmount(revenue, STABLECOIN_DECIMALS)} USD`}
+              />
+              <Stat
+                label="Avg. order (recent)"
+                value={payments > 0 ? `${formatAmount(avgOrder, STABLECOIN_DECIMALS)} USD` : "—"}
+              />
+              <Stat label="Payments (last 100)" value={payments.toString()} />
+              <Stat label="Redemptions (last 100)" value={redemptions.toString()} />
+            </div>
           </CardHeader>
           <CardContent>
             <div className="divide-y divide-[color:var(--color-border)]">
-              {feed.map((row) =>
-                row.name === "InvoiceCreated" ? (
-                  <OpenInvoiceRow
-                    key={row.digest}
-                    invoiceId={row.data.invoice_id as string}
-                    timestampMs={row.timestampMs}
-                    terminated={terminatedInvoiceIds.has(row.data.invoice_id as string)}
-                  />
-                ) : row.name === "VoucherCreated" ? (
-                  <OpenVoucherRow
-                    key={row.digest}
-                    voucherId={row.data.voucher_id as string}
-                    timestampMs={row.timestampMs}
-                    terminated={terminatedVoucherIds.has(row.data.voucher_id as string)}
-                  />
-                ) : (
-                  <FeedRowView key={row.digest} row={row} />
-                ),
-              )}
+              {feed.map((row) => {
+                if (row.name === "InvoiceCreated") {
+                  return (
+                    <OpenInvoiceRow
+                      key={row.digest}
+                      invoiceId={row.data.invoice_id as string}
+                      timestampMs={row.timestampMs}
+                      terminated={terminatedInvoiceIds.has(row.data.invoice_id as string)}
+                    />
+                  );
+                }
+                if (row.name === "VoucherCreated") {
+                  return (
+                    <OpenVoucherRow
+                      key={row.digest}
+                      voucherId={row.data.voucher_id as string}
+                      timestampMs={row.timestampMs}
+                      terminated={terminatedVoucherIds.has(row.data.voucher_id as string)}
+                    />
+                  );
+                }
+                if (row.name === "InvoicePaid") {
+                  return (
+                    <PaidRow
+                      key={row.digest}
+                      invoiceId={row.data.invoice_id as string}
+                      row={row}
+                    />
+                  );
+                }
+                if (row.name === "VoucherRedeemed") {
+                  return (
+                    <RedeemedRow
+                      key={row.digest}
+                      voucherId={row.data.voucher_id as string}
+                      row={row}
+                    />
+                  );
+                }
+                // Canceled events: on-chain invoice/voucher removed, no receipt
+                // created — items are unrecoverable, render summary only.
+                return <FeedRowView key={row.digest} row={row} />;
+              })}
             </div>
           </CardContent>
         </Card>
@@ -190,15 +241,14 @@ function OpenInvoiceRow({
   timestampMs: bigint;
   terminated: boolean;
 }) {
-  const queryClient = useQueryClient();
   // Skip the network read when we already know the invoice is gone.
   const invoice = useInvoice(terminated ? null : invoiceId);
-  // Re-render on the clock tick so the "Expired" badge flips on time even
-  // when no chain event has fired (TTL elapsed but nobody canceled yet).
-  useClockTick(CLOCK_TICK_MS);
-
-  const now = BigInt(Date.now());
-  const expired = Boolean(invoice.data && invoice.data.expiresAtMs <= now);
+  const { data: listings = [] } = useListings();
+  // Compare against on-chain Clock; wallclock can drift on localnet (see
+  // `useSuiClockMs`). Polling inside that hook also re-renders us when the
+  // TTL elapses, so the "Expired" badge flips on time.
+  const chainNow = useSuiClockMs().data;
+  const expired = Boolean(invoice.data && chainNow && invoice.data.expiresAtMs <= chainNow);
 
   const status = terminated ? "closed" : expired ? "expired" : "open";
   const badge: { label: string; variant: "outline" | "destructive" | "accent" } =
@@ -208,32 +258,19 @@ function OpenInvoiceRow({
       ? { label: "Expired", variant: "destructive" }
       : { label: "Invoice open", variant: "outline" };
 
-  const remove = useMutation({
-    mutationFn: async (id: string) => {
-      const resp = await fetch("/api/cancel-invoice", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invoiceId: id }),
-      });
-      if (!resp.ok) {
-        const err = (await resp.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(err?.error ?? `remove failed (${resp.status})`);
-      }
-      return (await resp.json()) as { digest: string };
+  // Merchant signs the cancel themselves — permissionless after expiry, so
+  // any signer works. Sponsored (localnet gas station on localnet; Enoki with
+  // an Enoki wallet on testnet; wallet-paid otherwise).
+  const remove = useSponsoredMutation<{ invoiceId: string }>(
+    (tx, args) => buildCancelExpiredInvoice(tx, args.invoiceId),
+    {
+      invalidate: [
+        qk.events(`${deployment.packageId}::events::InvoiceCanceled`),
+        qk.invoice(invoiceId),
+      ],
+      successMessage: "Expired invoice removed",
     },
-    onSuccess: async () => {
-      toast.success("Expired invoice removed");
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: qk.events(`${deployment.packageId}::events::InvoiceCanceled`),
-        }),
-        queryClient.invalidateQueries({ queryKey: qk.invoice(invoiceId) }),
-      ]);
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Remove failed");
-    },
-  });
+  );
 
   const when = timestampMs ? new Date(Number(timestampMs)).toLocaleString() : "—";
 
@@ -249,8 +286,7 @@ function OpenInvoiceRow({
                 {invoice.data.loyalty.toString()} LOY
               </div>
               <div className="text-xs text-[color:var(--color-muted-foreground)]">
-                {invoice.data.items.length} item
-                {invoice.data.items.length === 1 ? "" : "s"} ·{" "}
+                {formatItems(invoice.data.items, listings)} ·{" "}
                 {new TextDecoder().decode(new Uint8Array(invoice.data.orderRef))}
               </div>
             </>
@@ -269,7 +305,7 @@ function OpenInvoiceRow({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => remove.mutate(invoiceId)}
+            onClick={() => remove.mutate({ invoiceId })}
             disabled={remove.isPending}
           >
             <Trash2 className="h-4 w-4" />
@@ -297,12 +333,11 @@ function OpenVoucherRow({
   timestampMs: bigint;
   terminated: boolean;
 }) {
-  const queryClient = useQueryClient();
   const voucher = useVoucher(terminated ? null : voucherId);
-  useClockTick(CLOCK_TICK_MS);
+  const { data: listings = [] } = useListings();
 
-  const now = BigInt(Date.now());
-  const expired = Boolean(voucher.data && voucher.data.expiresAtMs <= now);
+  const chainNow = useSuiClockMs().data;
+  const expired = Boolean(voucher.data && chainNow && voucher.data.expiresAtMs <= chainNow);
 
   const status = terminated ? "closed" : expired ? "expired" : "open";
   const badge: { label: string; variant: "outline" | "destructive" | "accent" } =
@@ -312,32 +347,27 @@ function OpenVoucherRow({
       ? { label: "Expired", variant: "destructive" }
       : { label: "Voucher open", variant: "outline" };
 
-  const remove = useMutation({
-    mutationFn: async (id: string) => {
-      const resp = await fetch("/api/cancel-voucher", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voucherId: id }),
-      });
-      if (!resp.ok) {
-        const err = (await resp.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(err?.error ?? `remove failed (${resp.status})`);
-      }
-      return (await resp.json()) as { digest: string };
+  // Merchant signs cancel_expired_voucher themselves (permissionless after expiry).
+  // Needs the voucher owner's PAS account id to refund unlocked LOY — derived
+  // from `voucher.customer` via the standard `usePasAccount` lookup.
+  const customerPas = usePasAccount(voucher.data?.customer ?? null);
+  const remove = useSponsoredMutation<{
+    voucherId: string;
+    customerLoyaltyAccountId: string;
+  }>(
+    (tx, args) =>
+      buildCancelExpiredVoucher(tx, {
+        voucherId: args.voucherId,
+        customerLoyaltyAccountId: args.customerLoyaltyAccountId,
+      }),
+    {
+      invalidate: [
+        qk.events(`${deployment.packageId}::events::VoucherCanceled`),
+        qk.voucher(voucherId),
+      ],
+      successMessage: "Expired voucher canceled — LOY refunded to customer",
     },
-    onSuccess: async () => {
-      toast.success("Expired voucher canceled — LOY refunded to customer");
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: qk.events(`${deployment.packageId}::events::VoucherCanceled`),
-        }),
-        queryClient.invalidateQueries({ queryKey: qk.voucher(voucherId) }),
-      ]);
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Remove failed");
-    },
-  });
+  );
 
   const when = timestampMs ? new Date(Number(timestampMs)).toLocaleString() : "—";
 
@@ -352,8 +382,7 @@ function OpenVoucherRow({
                 {voucher.data.amount.toString()} LOY locked
               </div>
               <div className="text-xs text-[color:var(--color-muted-foreground)]">
-                {voucher.data.items.length} item
-                {voucher.data.items.length === 1 ? "" : "s"} ·{" "}
+                {formatItems(voucher.data.items, listings)} ·{" "}
                 <span className="font-mono">{shortAddr(voucher.data.customer, 6)}</span>
               </div>
             </>
@@ -371,8 +400,13 @@ function OpenVoucherRow({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => remove.mutate(voucherId)}
-            disabled={remove.isPending}
+            onClick={() =>
+              remove.mutate({
+                voucherId,
+                customerLoyaltyAccountId: customerPas.data!,
+              })
+            }
+            disabled={remove.isPending || !customerPas.data}
           >
             <Trash2 className="h-4 w-4" />
             {remove.isPending ? "Removing…" : "Remove expired"}
@@ -384,8 +418,43 @@ function OpenVoucherRow({
   );
 }
 
+/** Compact KPI tile — uppercase muted label + large value below. */
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wide text-[color:var(--color-muted-foreground)]">
+        {label}
+      </div>
+      <div className="mt-1 text-2xl font-semibold">{value}</div>
+    </div>
+  );
+}
+
+/**
+ * `InvoicePaid` row enriched with items from the stored payment receipt.
+ * Receipts live on `merchant.invoice_receipts` keyed by the settled invoice id.
+ * Items are lost when the receipt is pruned — falls back to the summary
+ * layout while the receipt query is loading or after prune.
+ */
+function PaidRow({ invoiceId, row }: { invoiceId: string; row: FeedRow }) {
+  const receipt = useInvoiceReceipt(invoiceId);
+  const { data: listings = [] } = useListings();
+  return (
+    <FeedRowView row={row} itemsLabel={receipt.data ? formatItems(receipt.data.items, listings) : null} />
+  );
+}
+
+/** Mirror of `PaidRow` for `VoucherRedeemed`. */
+function RedeemedRow({ voucherId, row }: { voucherId: string; row: FeedRow }) {
+  const receipt = useVoucherReceipt(voucherId);
+  const { data: listings = [] } = useListings();
+  return (
+    <FeedRowView row={row} itemsLabel={receipt.data ? formatItems(receipt.data.items, listings) : null} />
+  );
+}
+
 /** Renders any feed row that doesn't need enrichment (events with full payload). */
-function FeedRowView({ row }: { row: FeedRow }) {
+function FeedRowView({ row, itemsLabel }: { row: FeedRow; itemsLabel?: string | null }) {
   const v = variants[row.name];
   const when = row.timestampMs ? new Date(Number(row.timestampMs)).toLocaleString() : "—";
   const amount = row.data.amount as string | undefined;
@@ -413,6 +482,7 @@ function FeedRowView({ row }: { row: FeedRow }) {
             {loyalty ? ` · ${loyalty} LOY` : ""}
           </div>
           <div className="text-xs text-[color:var(--color-muted-foreground)]">
+            {itemsLabel ? `${itemsLabel} · ` : ""}
             {customer ? shortAddr(customer) : "—"}
             {orderRef ? ` · ${orderRef}` : ""}
           </div>
@@ -430,7 +500,6 @@ function FeedRowView({ row }: { row: FeedRow }) {
  */
 function PruneReceiptsButton() {
   const stored = useStoredReceipts({ pollMs: POLL_MS });
-  const queryClient = useQueryClient();
 
   const prune = useSponsoredMutation<{ invoiceIds: string[]; voucherIds: string[] }>(
     (tx, args) => {

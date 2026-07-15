@@ -6,14 +6,19 @@ import { useCurrentAccount } from "@mysten/dapp-kit";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useReceipts } from "@/hooks/queries";
-import { formatAmount, shortAddr } from "@/lib/utils";
+import { useListings, useReceipts } from "@/hooks/queries";
+import { formatAmount, formatItems, shortAddr } from "@/lib/utils";
+import type { Listing } from "@/lib/move/types";
 
 type Tab = "payments" | "redemptions";
 
 export default function HistoryPage() {
-  const account = useCurrentAccount();
-  const receipts = useReceipts(account?.address);
+  const address = useCurrentAccount()?.address ?? null;
+  // Poll while the page is open — the merchant's redeem tx happens in a
+  // different browser session, so cross-client React-Query invalidation
+  // isn't an option.
+  const receipts = useReceipts(address, { pollMs: 5_000 });
+  const { data: listings = [] } = useListings();
   const [tab, setTab] = useState<Tab>("payments");
 
   return (
@@ -41,16 +46,20 @@ export default function HistoryPage() {
         </Button>
       </div>
 
-      {!account ? (
+      {!address ? (
         <p className="text-sm text-[color:var(--color-muted-foreground)]">
-          Connect a wallet to view your history.
+          Log in to view your history.
         </p>
       ) : receipts.isLoading ? (
         <p className="text-sm text-[color:var(--color-muted-foreground)]">Loading…</p>
+      ) : receipts.isError ? (
+        <p className="text-sm text-[color:var(--color-destructive)]">
+          Could not load history: {receipts.error?.message ?? "unknown error"}
+        </p>
       ) : tab === "payments" ? (
-        <PaymentList rows={receipts.data?.payment ?? []} />
+        <PaymentList rows={receipts.data?.payment ?? []} listings={listings} />
       ) : (
-        <RedemptionList rows={receipts.data?.redemption ?? []} />
+        <RedemptionList rows={receipts.data?.redemption ?? []} listings={listings} />
       )}
     </section>
   );
@@ -58,12 +67,14 @@ export default function HistoryPage() {
 
 function PaymentList({
   rows,
+  listings,
 }: {
   rows: ReturnType<typeof useReceipts>["data"] extends infer R
     ? R extends { payment: infer P }
       ? P
       : never
     : never;
+  listings: readonly Listing[];
 }) {
   if (rows.length === 0) {
     return (
@@ -91,7 +102,7 @@ function PaymentList({
                       {formatAmount(r.amount, 6)} USD · {r.loyalty.toString()} LOY earned
                     </div>
                     <div className="text-xs text-[color:var(--color-muted-foreground)]">
-                      {r.items.length} item{r.items.length === 1 ? "" : "s"}
+                      {formatItems(r.items, listings)}
                       {orderRef ? ` · ${orderRef}` : ""} ·{" "}
                       <span className="font-mono">{shortAddr(r.invoiceId, 6)}</span>
                     </div>
@@ -109,12 +120,14 @@ function PaymentList({
 
 function RedemptionList({
   rows,
+  listings,
 }: {
   rows: ReturnType<typeof useReceipts>["data"] extends infer R
     ? R extends { redemption: infer P }
       ? P
       : never
     : never;
+  listings: readonly Listing[];
 }) {
   if (rows.length === 0) {
     return (
@@ -141,7 +154,7 @@ function RedemptionList({
                       {r.amount.toString()} LOY burned
                     </div>
                     <div className="text-xs text-[color:var(--color-muted-foreground)]">
-                      {r.items.length} item{r.items.length === 1 ? "" : "s"} ·{" "}
+                      {formatItems(r.items, listings)} ·{" "}
                       <span className="font-mono">{shortAddr(r.voucherId, 6)}</span>
                     </div>
                   </div>

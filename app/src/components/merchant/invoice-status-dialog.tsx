@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { qk, useInvoice, useInvoiceReceipt } from "@/hooks/queries";
+import { useVariantLookup } from "@/hooks/use-variant-lookup";
 import { deployment } from "@/lib/deployment";
 import { encodeInvoiceQr } from "@/lib/qr";
 import { STABLECOIN_DECIMALS, formatAmount, shortAddr } from "@/lib/utils";
@@ -51,6 +52,7 @@ export function InvoiceStatusDialog({
   const target = open ? invoiceId : null;
   const invoice = useInvoice(target, { pollMs: POLL_MS });
   const receipt = useInvoiceReceipt(target, { pollMs: POLL_MS });
+  const variantLookup = useVariantLookup();
 
   // Cross-page consistency: when terminal state is reached, refresh the
   // transactions feed + per-invoice caches.
@@ -114,6 +116,22 @@ export function InvoiceStatusDialog({
                     {paid.loyalty.toString()} LOY
                   </div>
                 </div>
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-wide text-[color:var(--color-muted-foreground)]">
+                  Items
+                </div>
+                <ul className="mt-1 list-disc pl-5">
+                  {paid.items.map((it, i) => {
+                    const label = variantLookup.get(it.variantId) ?? shortAddr(it.variantId, 6);
+                    return (
+                      <li key={i}>
+                        {it.quantity.toString()}× {label} ·{" "}
+                        {formatAmount(it.price, STABLECOIN_DECIMALS)} USD
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
               <div>
                 <div className="text-xs uppercase tracking-wide text-[color:var(--color-muted-foreground)]">

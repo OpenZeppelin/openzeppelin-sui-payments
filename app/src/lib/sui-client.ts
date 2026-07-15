@@ -24,9 +24,15 @@ if (!networkEnv || !(SUPPORTED_NETWORKS as readonly string[]).includes(networkEn
 
 export const NETWORK: SuiNetwork = networkEnv as SuiNetwork;
 
+// Optional per-deploy override for the active network's fullnode URL. Lets a
+// deployment swap in an alternate provider (Blockvision, PublicNode, Suiscan,
+// etc.) without touching source — useful when the default Mysten fullnode is
+// down or rate-limiting. Applies only to the currently selected NETWORK.
+const rpcOverride = process.env.NEXT_PUBLIC_SUI_RPC_URL;
+
 export const networkConfig = {
-  devnet: { url: getFullnodeUrl("devnet") },
-  testnet: { url: getFullnodeUrl("testnet") },
-  mainnet: { url: getFullnodeUrl("mainnet") },
-  localnet: { url: getFullnodeUrl("localnet") },
+  devnet: { url: NETWORK === "devnet" && rpcOverride ? rpcOverride : getFullnodeUrl("devnet") },
+  testnet: { url: NETWORK === "testnet" && rpcOverride ? rpcOverride : getFullnodeUrl("testnet") },
+  mainnet: { url: NETWORK === "mainnet" && rpcOverride ? rpcOverride : getFullnodeUrl("mainnet") },
+  localnet: { url: NETWORK === "localnet" && rpcOverride ? rpcOverride : getFullnodeUrl("localnet") },
 } as const;

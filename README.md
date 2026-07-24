@@ -1,5 +1,15 @@
 # openzeppelin-sui-payments
 
+> This project has been professionally audited. See the security audit report in
+`audits/`. It is open source (MIT) and provided as a reference implementation / starter
+template, not a hosted or operated service. It is no longer under active
+maintenance: no new features, bug fixes, or updates should be expected. To
+build on it, fork or clone this repository and deploy it under your own
+control, and review (and re-audit) any changes you make before using it in
+production. 
+
+> The reference deployment runs on Sui testnet for demonstration purposes only.
+
 Closed-loop **stablecoin payments + loyalty + redemption** template for Sui, built on
 the [Permissioned Asset Standard (PAS)](https://github.com/MystenLabs/pas) with role-based
 access control from [openzeppelin/contracts-sui](https://github.com/OpenZeppelin/contracts-sui).

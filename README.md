@@ -8,11 +8,10 @@ build on it, fork or clone this repository and deploy it under your own
 control, and review (and re-audit) any changes you make before using it in
 production.
 
-> The reference deployment runs on Sui testnet for demonstration purposes only.
-
 Closed-loop **stablecoin payments + loyalty + redemption** template for Sui, built on
 the [Permissioned Asset Standard (PAS)](https://github.com/MystenLabs/pas) with role-based
 access control from [openzeppelin/contracts-sui](https://github.com/OpenZeppelin/contracts-sui).
+The reference deployment runs on Sui testnet for demonstration purposes only.
 
 ## Overview
 
